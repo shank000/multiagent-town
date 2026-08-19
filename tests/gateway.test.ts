@@ -47,6 +47,13 @@ test('JSON 解析失败自动重试一次', async () => {
   assert.equal(stub.calls, 2);
 });
 
+test('JSON 解析重试耗尽后抛出可读错误', async () => {
+  const stub = new StubProvider([{ content: 'bad' }, { content: 'bad2' }]);
+  const g = new LLMGateway({ provider: stub, retries: 1, backoffMs: 1 });
+  await assert.rejects(() => g.complete(req([ctxUser(mockCtx)])), /JSON 解析失败/);
+  assert.equal(stub.calls, 2);
+});
+
 test('重试耗尽后抛出最后一次错误', async () => {
   const stub = new StubProvider([new Error('x1'), new Error('x2'), new Error('x3')]);
   const g = new LLMGateway({ provider: stub, retries: 2, backoffMs: 1 });

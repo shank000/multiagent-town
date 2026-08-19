@@ -53,7 +53,8 @@ export class LLMGateway {
         if (req.jsonMode && parsed === null) {
           try {
             parsed = JSON.parse(res.content);
-          } catch {
+          } catch (e) {
+            lastErr = e instanceof Error ? new Error(`JSON 解析失败: ${e.message}`) : new Error('JSON 解析失败');
             continue; // JSON 解析失败 → 计入重试次数，下一轮
           }
         }
