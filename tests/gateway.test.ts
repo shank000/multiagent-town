@@ -23,7 +23,7 @@ test('mock provider 按作息输出确定性决策并计量', async () => {
   assert.deepEqual(res.parsed, {
     thought: '现在10:00，按作息安排去「工作」。',
     action: { type: 'interact', target: 'obj:a', verb: '工作' },
-    durationMinutes: 15,
+    duration_minutes: 15,
   });
   const summary = g.metricSummary();
   assert.equal(summary.length, 1);

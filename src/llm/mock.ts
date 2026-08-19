@@ -20,9 +20,10 @@ export class MockProvider implements LLMProvider {
     }
     const ctx = extractContext(req.messages);
     const d = decide(ctx);
+    const wire = { thought: d.thought, action: d.action, duration_minutes: d.durationMinutes };
     return {
-      content: JSON.stringify(d),
-      parsed: d,
+      content: JSON.stringify(wire),
+      parsed: wire,
       usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 },
     };
   }
