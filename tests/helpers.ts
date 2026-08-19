@@ -1,6 +1,7 @@
 // 测试共用工具（仅测试代码引用）
 
 import type { Agent, Persona } from '../src/core/types';
+import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 
 export function persona(over: Partial<Persona> = {}): Persona {
   return {
@@ -21,3 +22,24 @@ export function makeAgent(over: Partial<Agent> = {}): Agent {
 }
 
 export const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+export interface StubItem { content: string; parsed?: unknown }
+
+/** 脚本化 provider：队列里放 Error 抛错，或 {content, parsed?} 作为响应 */
+export class StubProvider implements LLMProvider {
+  name = 'stub';
+  calls = 0;
+  constructor(private queue: (Error | StubItem)[]) {}
+
+  async complete(_req: LLMRequest): Promise<LLMResponse> {
+    this.calls++;
+    const next = this.queue.shift();
+    if (next instanceof Error) throw next;
+    const item = next ?? { content: '{}', parsed: {} };
+    return {
+      content: item.content,
+      parsed: item.parsed ?? null,
+      usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 },
+    };
+  }
+}
