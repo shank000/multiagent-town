@@ -20,6 +20,7 @@ test('buildActionDecisionMessages 含 persona/时钟/JSON 指令/M0_CONTEXT', ()
   });
   const { messages } = buildActionDecisionMessages({
     agent,
+    day: 1,
     minuteOfDay: 480,
     locationName: '家',
     objects: [{ id: 'obj:cafe_counter', name: '咖啡馆吧台' }],
@@ -35,12 +36,23 @@ test('buildActionDecisionMessages 含 persona/时钟/JSON 指令/M0_CONTEXT', ()
   assert.ok(user.includes('<M0_CONTEXT>'));
 });
 
+test('day 字段透传：第 2 天时钟正确', () => {
+  const agent = makeAgent({ persona: persona({ name: '甲' }) });
+  const { messages } = buildActionDecisionMessages({
+    agent, day: 2, minuteOfDay: 480, locationName: '家',
+    objects: [],
+    mockContext: { persona: agent.persona, minuteOfDay: 480, routine: agent.persona.routine },
+  });
+  const sys = messages.find((m) => m.role === 'system')!.content;
+  assert.ok(sys.includes('第2天 08:00'));
+});
+
 test('提示词 → mock 网关端到端产出合法动作', async () => {
   const agent = makeAgent({
     persona: persona({ name: '甲', routine: [{ from: 540, to: 720, type: 'interact', target: 'obj:cafe', verb: '煮咖啡' }] }),
   });
   const { messages } = buildActionDecisionMessages({
-    agent, minuteOfDay: 600, locationName: '家',
+    agent, day: 1, minuteOfDay: 600, locationName: '家',
     objects: [{ id: 'obj:cafe', name: '咖啡馆' }],
     mockContext: { persona: agent.persona, minuteOfDay: 600, routine: agent.persona.routine },
   });

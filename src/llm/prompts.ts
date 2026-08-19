@@ -2,7 +2,7 @@
 
 import type { Agent, Persona, RoutineSlot } from '../core/types';
 import type { ChatMessage } from './types';
-import { TimeEngine } from '../core/time';
+import { TimeEngine, MINUTES_PER_DAY } from '../core/time';
 
 export const ACTION_DECISION_TEMPLATE = 'action_decision';
 
@@ -14,6 +14,7 @@ export interface MockContextPayload {
 
 export interface ActionDecisionInput {
   agent: Agent;
+  day: number;          // 第几天（1 起）
   minuteOfDay: number;
   locationName: string;
   objects: { id: string; name: string }[];
@@ -30,7 +31,7 @@ export function routineToText(p: Persona): string {
 export function buildActionDecisionMessages(input: ActionDecisionInput): { messages: ChatMessage[] } {
   const p = input.agent.persona;
   const personaText = `${p.name}，${p.age} 岁，${p.occupation}。${p.background} 性格：${p.traits.join('、')}。目标：${p.goals.join('；')}。`;
-  const clock = { day: 1, minutesOfDay: input.minuteOfDay, totalMinutes: input.minuteOfDay };
+  const clock = { day: input.day, minutesOfDay: input.minuteOfDay, totalMinutes: (input.day - 1) * MINUTES_PER_DAY + input.minuteOfDay };
   const system = [
     `你是 ${personaText}`,
     `当前时间：${TimeEngine.format(clock)}。你现在在「${input.locationName}」。`,

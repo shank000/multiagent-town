@@ -27,3 +27,8 @@ test('format 输出中文时钟', () => {
 test('minuteOfDay 取当日分钟', () => {
   assert.equal(TimeEngine.minuteOfDay(1440 + 95), 95);
 });
+
+test('gameMinutesPerTick 必须大于 0', () => {
+  assert.throws(() => new TimeEngine(0), /大于 0/);
+  assert.throws(() => new TimeEngine(-1), /大于 0/);
+});

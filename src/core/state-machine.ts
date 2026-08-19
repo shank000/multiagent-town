@@ -3,6 +3,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Agent, Decision, GameEvent } from './types';
+import { MINUTES_PER_DAY } from './time';
 import { validateDecision, type ValidationResult } from '../llm/action-validator';
 import { buildActionDecisionMessages, ACTION_DECISION_TEMPLATE } from '../llm/prompts';
 import type { LLMGateway } from '../llm/gateway';
@@ -56,9 +57,10 @@ export class AgentExecutor {
   private requestDecision(agent: Agent, now: number): void {
     agent.state = 'thinking';
     agent.lastDecisionAt = now;
-    const minuteOfDay = now % 1440;
+    const minuteOfDay = now % MINUTES_PER_DAY;
     const { messages } = buildActionDecisionMessages({
       agent,
+      day: Math.floor(now / MINUTES_PER_DAY) + 1,
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
       objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),

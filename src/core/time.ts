@@ -11,7 +11,9 @@ export const MINUTES_PER_DAY = 1440;
 export class TimeEngine {
   private minutes = 0; // 内部浮点累计
 
-  constructor(public gameMinutesPerTick = 0.5) {}
+  constructor(public gameMinutesPerTick = 0.5) {
+    if (!(gameMinutesPerTick > 0)) throw new Error('gameMinutesPerTick 必须大于 0');
+  }
 
   /** 推进一个 tick，返回本次推进的分钟数 */
   tick(): number {
