@@ -6,7 +6,7 @@
 
 - [x] 调研报告（见 [SESSION.md](./SESSION.md)）
 - [x] 技术方案文档（见 [docs/ai-town-design.md](./docs/ai-town-design.md)）
-- [ ] M0 骨架：世界状态 + 时间引擎 + LLM 网关 + 事件日志（4 agent 命令行观察）
+- [x] M0 骨架：世界状态 + 时间引擎 + LLM 网关 + 事件日志（4 agent 命令行观察）
 - [ ] M1 认知核心：记忆流/检索/反思/规划闭环
 - [ ] M2 空间呈现：Phaser 3 地图 + 心智面板 + 玩家扮演
 - [ ] M3 社交涌现：关系网络 / 信息传播 / 事件广播
@@ -30,3 +30,20 @@ multiagent-town/
 - 时间 60x 加速；对话摘要回写记忆流；结构化输出 + 对象树校验
 
 详细设计见 [docs/ai-town-design.md](./docs/ai-town-design.md)。
+
+## 运行（M0）
+
+```bash
+pnpm install
+pnpm town                        # 60x 实时观察台（mock，离线）
+pnpm town --until-minutes 1440 --speed 60   # 虚拟时钟快速跑 1 游戏日
+pnpm replay --day 1              # 回放第 1 天事件时间线
+pnpm test                        # 全部测试
+pnpm acceptance                  # M0 验收测试
+```
+
+切换真机 DeepSeek（OpenAI 兼容）：
+
+```bash
+LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-xxx pnpm town
+```
