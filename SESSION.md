@@ -146,4 +146,4 @@ score = α_recency · recency + α_importance · importance + α_relevance · re
 
 ## 下一步（待用户决定）
 
-按 `docs/ai-town-design.md` 的 **M0 骨架** 开工：世界状态 + 时间引擎 + LLM 网关 + 事件日志，3 个 agent 命令行观察，验收标准为"3 agent 连续跑 1 游戏日不崩，日志可回放"。
+按 `docs/ai-town-design.md` 的 **M0 骨架** 开工：世界状态 + 时间引擎 + LLM 网关 + 事件日志，4 个 agent 命令行观察，验收标准为"4 agent 连续跑 1 游戏日不崩，日志可回放"。
