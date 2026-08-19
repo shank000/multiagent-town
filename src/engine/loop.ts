@@ -52,6 +52,17 @@ export class WorldLoop {
     while (this.time.state.totalMinutes < totalMinutes) {
       await this.step();
     }
+    // 收尾：结算最后一步仍在进行中的决策，避免 agent 停在 thinking
+    await this.settleDecisions();
+  }
+
+  /** 结算已落定的决策（不推进时钟），供 runUntil 收尾用 */
+  private async settleDecisions(): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    const now = this.time.state.totalMinutes;
+    for (const agent of this.world.allAgents()) {
+      if (agent.state === 'thinking') this.executor.progress(agent, 0, now);
+    }
   }
 
   /** 实时模式：每 0.5s 一个 tick */

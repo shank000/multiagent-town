@@ -137,8 +137,9 @@ export class AgentExecutor {
     } else {
       agent.state = 'acting';
       agent.actionEndsAt = now + d.durationMinutes;
+      this.log.addEvent(this.makeEvent('move', agent, d, now, `到达「${this.targetName(d)}」`));
       this.log.addEvent(
-        this.makeEvent('interact', agent, d, now, `到达「${this.targetName(d)}」，开始「${d.action.verb}」，约 ${d.durationMinutes} 分钟`)
+        this.makeEvent('interact', agent, d, now, `开始「${d.action.verb}」，约 ${d.durationMinutes} 分钟`)
       );
     }
   }
