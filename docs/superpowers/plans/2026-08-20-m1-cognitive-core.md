@@ -69,7 +69,8 @@ test('检索按三因子排序并更新 last_access', () => {
   const { store } = setup();
   store.addMemory({ agentId: 'agent:1', kind: 'observation', content: '在咖啡馆煮咖啡招待客人', importance: 5, createdGameTime: 100 });
   store.addMemory({ agentId: 'agent:1', kind: 'observation', content: '在公园散步看湖', importance: 5, createdGameTime: 200 });
-  store.addMemory({ agentId: 'agent:1', kind: 'plan', content: '筹备湖畔派对邀请大家', importance: 9, createdGameTime: 300 });
+  // 重要度同样为 5：验证关键词相关性而非重要性主导排序
+  store.addMemory({ agentId: 'agent:1', kind: 'plan', content: '筹备湖畔派对邀请大家', importance: 5, createdGameTime: 300 });
   const top = store.retrieve('agent:1', '咖啡馆煮咖啡', 300, 20);
   assert.equal(top.length, 3);
   assert.equal(top[0].content, '在咖啡馆煮咖啡招待客人'); // 关键词相关 + 最近
