@@ -17,7 +17,8 @@ export class Planner {
     const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((m) => ({ content: m.content, importance: m.importance }));
     const insights = this.store.recentInsights(agent.id, 5);
     const res = await this.llm.complete({ tier: 'large', template: DAILY_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512, messages: dailyPlanMessages(agent, day, memories, insights) });
-    const broad = (((res.parsed as { broad_plan?: string } | null)?.broad_plan) ?? '').slice(0, 300) || '自由安排一天。';
+    const raw = (res.parsed as { broad_plan?: unknown } | null)?.broad_plan;
+    const broad = (typeof raw === 'string' ? raw : '').slice(0, 300) || '自由安排一天。';
     this.store.savePlan({ agentId: agent.id, day, broadPlan: broad, hourly: [], status: 'active', createdGameTime: now });
     this.store.addMemory({ agentId: agent.id, kind: 'plan', content: `第${day}天计划：${broad}`, importance: 8, createdGameTime: now });
   }
@@ -26,7 +27,11 @@ export class Planner {
     const plan = this.store.planFor(agent.id, day);
     const broad = plan?.broadPlan ?? '';
     const res = await this.llm.complete({ tier: 'large', template: HOUR_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512, messages: hourPlanMessages(agent, hour, broad) });
-    const agenda = ((res.parsed as { agenda?: AgendaItem[] } | null)?.agenda ?? []).map((h) => ({ time: h.time, action: String(h.action).slice(0, 60), location: String(h.location).slice(0, 40) }));
+    const rawAgenda = (res.parsed as { agenda?: unknown } | null)?.agenda;
+    const agenda = (Array.isArray(rawAgenda) ? rawAgenda : [])
+      .filter((h): h is { time: string; action: string; location?: unknown } =>
+        !!h && typeof (h as { time?: unknown }).time === 'string' && typeof (h as { action?: unknown }).action === 'string')
+      .map((h) => ({ time: h.time, action: h.action.slice(0, 60), location: String(h.location ?? '').slice(0, 40) }));
     const merged = (plan?.hourly ?? []).filter((h) => Math.floor(hhToMin(h.time) / 60) !== hour);
     merged.push(...agenda);
     merged.sort((a, b) => hhToMin(a.time) - hhToMin(b.time));

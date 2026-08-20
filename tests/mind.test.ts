@@ -24,7 +24,11 @@ test('跨 5:00 生成日计划，跨整点生成小时计划', async () => {
     const plan = mind.store.planFor(a.id, 1);
     assert.ok(plan, `${a.name} 应有日计划`);
     assert.ok(plan.broadPlan.length > 5);
+    assert.ok(plan.broadPlan !== '自由安排一天。', `${a.name} 的日计划不应是兜底文本`);
     assert.ok(plan.hourly.length >= 1, `${a.name} 应有小时议程`);
+    const planMem = mind.store.recentMemories(a.id, 500).find((m) => m.kind === 'plan');
+    assert.ok(planMem, `${a.name} 应有 kind=plan 记忆`);
+    assert.equal(planMem.importance, 8);
   }
 });
 

@@ -40,13 +40,19 @@ export class MindEngine {
   tick(world: WorldState, dt: number, now: number): void {
     const day = Math.floor(now / MINUTES_PER_DAY) + 1;
     const minute = now % MINUTES_PER_DAY;
-    if (this.lastMinute < 300 && minute >= 300) {
-      for (const a of world.allAgents()) void this.planner.dailyPlan(a, day, now);
-    }
-    const prevHour = Math.floor(this.lastMinute / 60);
     const hour = Math.floor(minute / 60);
-    if (hour !== prevHour) {
-      for (const a of world.allAgents()) void this.planner.decomposeHour(a, day, hour, now);
+    if (this.lastMinute < 300 && minute >= 300) {
+      // 跨 5:00：先日计划、完成后再小时分解（避免同 tick 竞争覆盖 plans 行）
+      for (const a of world.allAgents()) {
+        void this.planner.dailyPlan(a, day, now)
+          .catch((err) => console.error('[planner] dailyPlan', err))
+          .then(() => this.planner.decomposeHour(a, day, hour, now))
+          .catch((err) => console.error('[planner] decomposeHour', err));
+      }
+    } else if (hour !== Math.floor(this.lastMinute / 60)) {
+      for (const a of world.allAgents()) {
+        void this.planner.decomposeHour(a, day, hour, now).catch((err) => console.error('[planner] decomposeHour', err));
+      }
     }
     this.lastMinute = minute;
     for (const a of world.allAgents()) this.reflection?.tick(a, day, now);
