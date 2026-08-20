@@ -1783,7 +1783,7 @@ git commit -m "feat(engine): 访谈服务与 CLI"
 ### Task 9: 心智面板（mind API + 客户端标签页）
 
 **Files:**
-- Modify: `src/web/server.ts`（TownWebOptions 加 `mind?: MindEngine`；GET /api/agents/:id/mind）、`src/cli/town-web.ts`（构造 mind 并注入 executor/loop/server）、`public/index.html`（面板加标签容器）、`public/style.css`（标签与列表样式）、`src/web/client/main.ts`（面板标签页 + fetch mind）
+- Modify: `src/web/server.ts`（TownWebOptions 加 `mind?: MindEngine`；GET /api/agents/:id/mind）、`src/cli/town-web.ts`（构造 mind 并注入 executor/loop/server）、`src/cli/run.ts`（同样构造 mind 并注入——Task 8 冒烟发现的接线缺口，控制器裁定并入本任务）、`public/index.html`（面板加标签容器）、`public/style.css`（标签与列表样式）、`src/web/client/main.ts`（面板标签页 + fetch mind）
 - Create: `tests/server-mind.test.ts`
 
 **Interfaces:**
@@ -1898,6 +1898,17 @@ import 加：`import type { MindEngine } from '../engine/mind';`
 ```
 
 import 加：`import { MindEngine } from '../engine/mind';`
+
+- [ ] **Step 4b: 修改 src/cli/run.ts（同样注入 mind）**
+
+```ts
+  const mind = new MindEngine({ db, llm: gateway, log });
+  const executor = new AgentExecutor(gateway, world, log, mind);
+  const social = new SocialTicker(log, {}, mind.dialogue);
+  const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
+```
+
+import 加：`import { MindEngine } from '../engine/mind';`、`import { SocialTicker } from '../engine/social';`（若未导入）
 
 - [ ] **Step 5: 修改 public/index.html（面板标签容器）**
 
