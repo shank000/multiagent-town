@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "town": "node --no-warnings --import tsx src/cli/run.ts",
     "replay": "node --no-warnings --import tsx src/cli/replay.ts",
+    "interview": "node --no-warnings --import tsx src/cli/interview.ts",
     "acceptance": "node --no-warnings --import tsx --test tests/acceptance.test.ts",
     "build:web": "esbuild src/web/client/main.ts --bundle --format=iife --target=chrome100 --outfile=public/client.js",
     "town-web": "pnpm build:web && node --no-warnings --import tsx src/cli/town-web.ts"
