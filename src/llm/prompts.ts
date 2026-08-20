@@ -107,7 +107,7 @@ export function dialogueMessages(ctx: { speakerName: string; speakerPool: string
 
 export function dialogueSummaryMessages(lines: string[]): ChatMessage[] {
   return simpleMessages(
-    '总结以上对话（≤100 字，客观，含双方达成的约定/传递的信息）。只输出 JSON：{"summary": "..."}',
+    '总结以上对话（≤100 字，客观，含双方达成的约定/传递的信息），并给出双方关系的渐进变化量。只输出 JSON：{"summary": "...", "affection_delta": <float -0.2~0.2>, "respect_delta": <float -0.2~0.2>}',
     { lines }
   );
 }

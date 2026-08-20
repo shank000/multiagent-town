@@ -5,6 +5,8 @@ import type { Agent, GameEvent } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
 import type { MemoryStore } from '../store/memory';
+import type { RelationshipStore } from '../store/relationships';
+import type { RumorTracker } from './rumors';
 import type { LLMGateway } from '../llm/gateway';
 import { DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE, dialogueMessages, dialogueSummaryMessages } from '../llm/prompts';
 
@@ -26,7 +28,14 @@ export class DialogueEngine {
   private sessions = new Map<string, Session>();
   private pending = new Map<string, Pending>();
 
-  constructor(private llm: LLMGateway, private store: MemoryStore, private log: EventLog, private maxRounds = 12) {}
+  constructor(
+    private llm: LLMGateway,
+    private store: MemoryStore,
+    private log: EventLog,
+    private maxRounds = 12,
+    private rels?: RelationshipStore,
+    private rumors?: RumorTracker
+  ) {}
 
   isActive(aId: string, bId: string): boolean {
     return this.sessions.has(pairKey(aId, bId));
@@ -117,6 +126,11 @@ export class DialogueEngine {
       summary = (((res.parsed as { summary?: string } | null)?.summary) ?? summary).slice(0, 100);
     } catch {
       /* 保留默认摘要 */
+    }
+    if (this.rels) {
+      const parsedDeltas = { affectionDelta: 0.1, respectDelta: 0.05 }; // 默认渐进值；真机由摘要模板输出
+      this.rels.update(s.a, s.b, { affectionDelta: parsedDeltas.affectionDelta, respectDelta: parsedDeltas.respectDelta, knowledge: [summary] }, now);
+      this.rels.update(s.b, s.a, { affectionDelta: parsedDeltas.affectionDelta, respectDelta: parsedDeltas.respectDelta, knowledge: [summary] }, now);
     }
     for (const id of [s.a, s.b]) {
       this.store.addMemory({ agentId: id, kind: 'dialogue_summary', content: `第${Math.floor(now / 1440) + 1}天 对话摘要：${summary}`, importance: 7, createdGameTime: now });

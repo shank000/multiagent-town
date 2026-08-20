@@ -49,7 +49,7 @@ export class MockProvider implements LLMProvider {
       case DIALOGUE_TEMPLATE: out = dialogueTurn(ctx); break;
       case DIALOGUE_SUMMARY_TEMPLATE: {
         const lines = Array.isArray(ctx.lines) ? (ctx.lines as string[]) : [];
-        out = { summary: `聊到了「${(lines[0] ?? '').slice(0, 16)}」等话题，气氛不错。` };
+        out = { summary: `聊到了「${(lines[0] ?? '').slice(0, 16)}」等话题，气氛不错。`, affection_delta: 0.1, respect_delta: 0.05 };
         break;
       }
       case INTERVIEW_TEMPLATE: {
