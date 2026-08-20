@@ -33,7 +33,7 @@
 - Produces（后续任务依赖，签名以此为准）：
   - `SocialConfig { minProximityMinutes?: number; cooldownMinutes?: number }`（默认 3 / 90）
   - `new SocialTicker(log: EventLog, cfg?: SocialConfig)`
-  - `ticker.tick(agents: Agent[], dt: number, now: number): void`（每 tick 调用；相邻=切比雪夫距离 ≤1；分离即清零累计；触发后同对冷却）
+  - `ticker.tick(agents: Agent[], dt: number, now: number): void`（每 tick 调用；相邻=切比雪夫距离 ≤1；分离或触发即清零累计；触发后同对冷却）
   - 闲聊事件：`{ type: 'chat', actorId: a.id, targetIds: [b.id], description: '「A」对「B」说：「台词」', payload: { kind: 'chat', line, fromId, toId } }`
   - Persona 新增可选字段 `greetingPool?: string[]`（缺省用通用台词池）
 
@@ -95,7 +95,7 @@ test('persona 台词池优先，冷却后轮换', () => {
   const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1 });
   const ticker = new SocialTicker(log, { cooldownMinutes: 10 });
   ticker.tick([a, b], 3, 5);
-  ticker.tick([a, b], 1, 16);
+  ticker.tick([a, b], 3, 16); // 冷却已过，再累计 3 分钟触发第二次
   const chats = log.eventsForDay(1).filter((e) => e.type === 'chat');
   assert.equal(chats[0].payload?.line, '你好！');
   assert.equal(chats[1].payload?.line, '再见！');
