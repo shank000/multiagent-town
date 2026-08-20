@@ -1,5 +1,8 @@
 // 像素小镇浏览器客户端：Canvas 2D 像素渲染，零依赖，SSE 实时刷新
 
+import { drawNpc, type Dir } from './sprites';
+import { drawTerrain, drawObjectDetail, applyDayNight, TILE } from './render';
+
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
   x: number; y: number; locationId: string; locationName: string;
@@ -17,7 +20,6 @@ interface TownEvent {
   payload: { kind?: string; line?: string; thought?: string; fromId?: string } | null;
 }
 
-const TILE = 32;
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 let snap: WorldSnapshot | null = null;
@@ -27,14 +29,6 @@ interface Display { x: number; y: number; tx: number; ty: number; lastTileX: num
 const display = new Map<string, Display>();
 const bubbles = new Map<string, { text: string; kind: string; until: number }>();
 const ticker: string[] = [];
-
-const PALETTES = [
-  { hair: '#5b3a29', skin: '#f2c99c', top: '#d97757', bottom: '#6b4f6b', accent: '#f7e8d0' }, // 林晚晴·围裙
-  { hair: '#2f2f2f', skin: '#e8c39a', top: '#4a6fa5', bottom: '#3a3a3a', accent: '#9fb8d8' }, // 陈默·眼镜
-  { hair: '#7a4a2b', skin: '#f5d0a8', top: '#8a2f2f', bottom: '#5a4a3a', accent: '#c9a66b' }, // 沈屿·贝雷帽
-  { hair: '#1f1f1f', skin: '#f2c99c', top: '#b33b3b', bottom: '#4a4a4a', accent: '#2f6b2f' }, // 周岚·邮差帽
-];
-const ROOFS = ['#b35d45', '#8a5a3a', '#5a7a8a', '#6b4f6b', '#8a7a3a', '#4a6a4a'];
 
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
@@ -214,11 +208,11 @@ function loop(): void {
 
 function draw(): void {
   if (!snap) return;
-  ctx.fillStyle = '#7fb069';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawTerrain(ctx, canvas.width, canvas.height);
   drawObjects();
   drawAgents();
   drawBubbles();
+  applyDayNight(ctx, canvas.width, canvas.height, snap.clock.minutesOfDay);
 }
 
 function drawObjects(): void {
@@ -226,141 +220,16 @@ function drawObjects(): void {
   const objs = snap!.objects
     .filter((o) => o.type !== 'town')
     .sort((a, b) => (order[a.type] ?? 0) - (order[b.type] ?? 0));
-  for (const o of objs) {
-    const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
-    if (o.type === 'zone') {
-      if (o.id === 'obj:park') drawPark(px, py, pw, ph);
-      else drawPlaza(px, py, pw, ph);
-    } else if (o.type === 'building') {
-      drawBuilding(o, px, py, pw, ph);
-    } else if (o.type === 'room') {
-      ctx.fillStyle = '#d9b48f';
-      ctx.fillRect(px, py, pw, ph);
-      ctx.strokeStyle = '#a97c50';
-      ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
-    } else {
-      ctx.fillStyle = '#8a6f4d';
-      ctx.fillRect(px + 4, py + 4, pw - 8, ph - 8);
-    }
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.font = '11px monospace';
-    ctx.fillText(o.name, px + 3, py + 13);
-  }
-}
-
-function drawPark(px: number, py: number, pw: number, ph: number): void {
-  ctx.fillStyle = '#6aa84f';
-  ctx.fillRect(px, py, pw, ph);
-  for (const [tx, ty] of [[px + 8, py + 8], [px + pw - 14, py + ph - 14]]) {
-    ctx.fillStyle = '#4a3520';
-    ctx.fillRect(tx, ty, 6, 14);
-    ctx.fillStyle = '#2f7a3a';
-    ctx.fillRect(tx - 6, ty - 8, 18, 12);
-  }
-}
-
-function drawPlaza(px: number, py: number, pw: number, ph: number): void {
-  ctx.fillStyle = '#c9b79c';
-  ctx.fillRect(px, py, pw, ph);
-  ctx.strokeStyle = '#a3937a';
-  for (let x = px + 8; x < px + pw; x += 16) {
-    for (let y = py + 8; y < py + ph; y += 16) {
-      ctx.strokeRect(x, y, 16, 16);
-    }
-  }
-  ctx.fillStyle = '#6b9bd1';
-  ctx.fillRect(px + pw / 2 - 8, py + ph / 2 - 8, 16, 16);
-}
-
-function drawBuilding(o: ObjectView, px: number, py: number, pw: number, ph: number): void {
-  ctx.fillStyle = '#e8d5b7';
-  ctx.fillRect(px, py, pw, ph);
-  const roof = ROOFS[hash(o.id) % ROOFS.length];
-  ctx.fillStyle = roof;
-  ctx.fillRect(px, py, pw, 8);
-  ctx.fillStyle = '#7a5a3a';
-  ctx.fillRect(px + pw / 2 - 5, py + ph - 12, 10, 12);
-  if (o.id === 'obj:post_office') {
-    ctx.fillStyle = '#e3b23c';
-    ctx.fillRect(px + pw - 14, py + 4, 10, 10);
-  }
-}
-
-function hash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
+  for (const o of objs) drawObjectDetail(ctx, o, performance.now());
 }
 
 function drawAgents(): void {
   const sorted = [...snap!.agents].sort((a, b) => a.y - b.y);
   for (const a of sorted) {
     const d = display.get(a.id)!;
-    const frame = d.moving ? Math.floor(performance.now() / 300) % 2 : 0;
-    drawSprite(d.x + TILE / 2, d.y + TILE / 2, a.spriteIndex, frame, d.moving, a.state === 'thinking', a.id === selectedId, a.name);
-  }
-}
-
-function drawSprite(cx: number, cy: number, index: number, frame: number, moving: boolean, thinking: boolean, selected: boolean, name: string): void {
-  const p = PALETTES[index % PALETTES.length];
-  const x = Math.round(cx);
-  const y = Math.round(cy) + (moving ? Math.round(Math.sin(performance.now() / 120)) : 0);
-  // 影子
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(x, cy + 6, 5, 2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // 腿
-  ctx.fillStyle = p.bottom;
-  if (frame === 0) {
-    ctx.fillRect(x - 4, y - 4, 3, 5);
-    ctx.fillRect(x + 1, y - 4, 3, 5);
-  } else {
-    ctx.fillRect(x - 5, y - 4, 3, 4);
-    ctx.fillRect(x + 2, y - 4, 3, 5);
-  }
-  // 身体
-  ctx.fillStyle = p.top;
-  ctx.fillRect(x - 4, y - 9, 8, 6);
-  if (index === 0) {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 2, y - 9, 4, 6);
-  }
-  if (index === 3) {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 4, y - 9, 8, 2);
-  }
-  // 头
-  ctx.fillStyle = p.skin;
-  ctx.fillRect(x - 3, y - 16, 6, 6);
-  // 头发
-  ctx.fillStyle = p.hair;
-  ctx.fillRect(x - 3, y - 18, 6, 3);
-  if (index === 2) {
-    ctx.fillStyle = p.top;
-    ctx.fillRect(x - 4, y - 19, 8, 2);
-  }
-  if (index === 3) {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 4, y - 18, 8, 2);
-  }
-  // 眼镜（陈默）
-  if (index === 1) {
-    ctx.fillStyle = '#111111';
-    ctx.fillRect(x - 3, y - 14, 2, 2);
-    ctx.fillRect(x + 1, y - 14, 2, 2);
-  }
-  if (thinking) {
-    ctx.fillStyle = '#ffe9a8';
-    ctx.font = 'bold 14px monospace';
-    ctx.fillText('…', x - 7, y - 22);
-  }
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.font = '10px monospace';
-  ctx.fillText(name, x - ctx.measureText(name).width / 2, y + 13);
-  if (selected) {
-    ctx.strokeStyle = '#ffd700';
-    ctx.strokeRect(x - 6, y - 21, 12, 29);
+    const dir: Dir = d.tx > d.x ? 'right' : d.tx < d.x ? 'left' : d.ty > d.y ? 'down' : d.ty < d.y ? 'up' : 'down';
+    const frame = (d.moving ? Math.floor(performance.now() / 300) % 2 : 0) as 0 | 1;
+    drawNpc(ctx, d.x + TILE / 2, d.y + TILE / 2, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
   }
 }
 

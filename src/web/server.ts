@@ -35,6 +35,7 @@ const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
 };
 
 export async function createTownServer(opts: TownWebOptions): Promise<TownWebServer> {
@@ -173,6 +174,15 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true }));
         return;
+      }
+      if (url.pathname.startsWith('/assets/') && req.method === 'GET') {
+        const name = url.pathname.slice('/assets/'.length);
+        if (!/^[\w.-]+$/.test(name)) {
+          res.writeHead(404);
+          res.end('not found');
+          return;
+        }
+        return await file(res, resolve(publicDir, 'assets', name));
       }
       if (url.pathname === '/') return await file(res, resolve(publicDir, 'index.html'));
       if (url.pathname === '/client.js' || url.pathname === '/style.css') {
