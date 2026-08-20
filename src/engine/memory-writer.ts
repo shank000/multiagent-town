@@ -11,7 +11,7 @@ export class MemoryWriter {
   constructor(private store: MemoryStore, private llm: LLMGateway) {}
 
   attach(log: EventLog): void {
-    log.subscribe((e) => void this.onEvent(e));
+    log.subscribe((e) => void this.onEvent(e).catch((err) => console.error('[memory-writer]', err)));
   }
 
   async onEvent(e: GameEvent): Promise<void> {
@@ -26,10 +26,10 @@ export class MemoryWriter {
     const payload = e.payload as { fromId?: string; toId?: string } | null;
     if (payload?.fromId) ids.add(payload.fromId);
     if (payload?.toId) ids.add(payload.toId);
+    const content = `第${day}天 ${stamp}${e.description}`.slice(0, 200);
+    const score = await this.score(content); // 同一事件同一内容只打一次分（chat 双方复用）
     for (const id of ids) {
       if (!id.startsWith('agent:')) continue;
-      const content = `第${day}天 ${stamp}${e.description}`.slice(0, 200);
-      const score = await this.score(content);
       this.store.addMemory({ agentId: id, kind: 'observation', content, importance: score, createdGameTime: e.gameTime, sourceEventId: e.id });
     }
   }
