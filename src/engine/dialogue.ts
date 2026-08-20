@@ -122,10 +122,14 @@ export class DialogueEngine {
     });
     this.store.addMessage({ eventId: null, fromAgent: fromId, toAgent: toId, content: u.utterance, gameTime: now });
     if (this.rumors) {
-      const carried = this.rumors.carriedBy(fromId);
-      for (const r of carried) {
-        if (u.utterance.includes(r.content.slice(0, 8))) {
-          this.rumors.spread(fromId, toId, r.id, u.utterance, now);
+      // 引擎侧复核选择性披露（真机不依赖 mock 行为）：关系 ≥0.2 才传播
+      const affection = this.rels ? this.rels.getOrCreate(fromId, toId).affection : 0.2;
+      if (affection >= 0.2) {
+        const carried = this.rumors.carriedBy(fromId);
+        for (const r of carried) {
+          if (u.utterance.includes(r.content.slice(0, 8))) {
+            this.rumors.spread(fromId, toId, r.id, u.utterance, now);
+          }
         }
       }
     }
@@ -136,16 +140,20 @@ export class DialogueEngine {
     s.ended = true;
     const lines = s.turns.map((t) => t.content);
     let summary = '两人简单聊了几句。';
+    let summaryRes: { parsed: unknown } | null = null;
     try {
-      const res = await this.llm.complete({ tier: 'large', template: DIALOGUE_SUMMARY_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueSummaryMessages(lines) });
-      summary = (((res.parsed as { summary?: string } | null)?.summary) ?? summary).slice(0, 100);
+      summaryRes = await this.llm.complete({ tier: 'large', template: DIALOGUE_SUMMARY_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueSummaryMessages(lines) });
+      summary = (((summaryRes.parsed as { summary?: string } | null)?.summary) ?? summary).slice(0, 100);
     } catch {
       /* 保留默认摘要 */
     }
     if (this.rels) {
-      const parsedDeltas = { affectionDelta: 0.1, respectDelta: 0.05 }; // 默认渐进值；真机由摘要模板输出
-      this.rels.update(s.a, s.b, { affectionDelta: parsedDeltas.affectionDelta, respectDelta: parsedDeltas.respectDelta, knowledge: [summary] }, now);
-      this.rels.update(s.b, s.a, { affectionDelta: parsedDeltas.affectionDelta, respectDelta: parsedDeltas.respectDelta, knowledge: [summary] }, now);
+      // 优先消费真机输出的渐进增量（夹紧由 RelationshipStore 负责），缺省 0.1/0.05
+      const parsed = (summaryRes?.parsed) as { affection_delta?: number; respect_delta?: number } | null;
+      const aD = Number(parsed?.affection_delta ?? 0.1);
+      const rD = Number(parsed?.respect_delta ?? 0.05);
+      this.rels.update(s.a, s.b, { affectionDelta: aD, respectDelta: rD, knowledge: [summary] }, now);
+      this.rels.update(s.b, s.a, { affectionDelta: aD, respectDelta: rD, knowledge: [summary] }, now);
     }
     for (const id of [s.a, s.b]) {
       this.store.addMemory({ agentId: id, kind: 'dialogue_summary', content: `第${Math.floor(now / 1440) + 1}天 对话摘要：${summary}`, importance: 7, createdGameTime: now });

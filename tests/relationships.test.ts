@@ -4,7 +4,8 @@ import { openDb } from '../src/store/db';
 import { RelationshipStore } from '../src/store/relationships';
 
 function setup() {
-  return { db: openDb(':memory:'), store: new RelationshipStore(openDb(':memory:')) };
+  const db = openDb(':memory:');
+  return { db, store: new RelationshipStore(db) };
 }
 
 test('有向关系：A→B 与 B→A 分存', () => {
