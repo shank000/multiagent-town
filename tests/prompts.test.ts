@@ -24,13 +24,15 @@ test('buildActionDecisionMessages 含 persona/时钟/JSON 指令/M0_CONTEXT', ()
     minuteOfDay: 480,
     locationName: '家',
     objects: [{ id: 'obj:cafe_counter', name: '咖啡馆吧台' }],
-    mockContext: { persona: agent.persona, minuteOfDay: 480, routine: agent.persona.routine },
+    mockContext: { persona: agent.persona, minuteOfDay: 480, routine: agent.persona.routine, memories: [], insights: [], agenda: null },
   });
   const sys = messages.find((m) => m.role === 'system')!.content;
   assert.ok(sys.includes('林晚晴'));
   assert.ok(sys.includes('咖啡馆老板'));
   assert.ok(sys.includes('第1天 08:00'));
   assert.ok(sys.includes('只输出 JSON'));
+  assert.ok(sys.includes('近期记忆'));
+  assert.ok(sys.includes('自我认知'));
   const user = messages.find((m) => m.role === 'user')!.content;
   assert.ok(user.includes('obj:cafe_counter'));
   assert.ok(user.includes('<M0_CONTEXT>'));
@@ -41,7 +43,7 @@ test('day 字段透传：第 2 天时钟正确', () => {
   const { messages } = buildActionDecisionMessages({
     agent, day: 2, minuteOfDay: 480, locationName: '家',
     objects: [],
-    mockContext: { persona: agent.persona, minuteOfDay: 480, routine: agent.persona.routine },
+    mockContext: { persona: agent.persona, minuteOfDay: 480, routine: agent.persona.routine, memories: [], insights: [], agenda: null },
   });
   const sys = messages.find((m) => m.role === 'system')!.content;
   assert.ok(sys.includes('第2天 08:00'));
@@ -54,7 +56,7 @@ test('提示词 → mock 网关端到端产出合法动作', async () => {
   const { messages } = buildActionDecisionMessages({
     agent, day: 1, minuteOfDay: 600, locationName: '家',
     objects: [{ id: 'obj:cafe', name: '咖啡馆' }],
-    mockContext: { persona: agent.persona, minuteOfDay: 600, routine: agent.persona.routine },
+    mockContext: { persona: agent.persona, minuteOfDay: 600, routine: agent.persona.routine, memories: [], insights: [], agenda: null },
   });
   const g = new LLMGateway({ provider: 'mock' });
   const req: LLMRequest = { tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true, maxTokens: 512 };

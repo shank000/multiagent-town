@@ -64,7 +64,7 @@ export class AgentExecutor {
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
       objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
-      mockContext: { persona: agent.persona, minuteOfDay, routine: agent.persona.routine },
+      mockContext: { persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories: [], insights: [], agenda: null },
     });
     const req: LLMRequest = {
       tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true, maxTokens: 512,
