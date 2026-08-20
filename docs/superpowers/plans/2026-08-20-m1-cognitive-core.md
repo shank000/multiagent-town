@@ -832,7 +832,7 @@ export class MemoryWriter {
   private async score(text: string): Promise<number> {
     const res = await this.llm.complete({ tier: 'small', template: IMPORTANCE_TEMPLATE, jsonMode: true, maxTokens: 64, messages: importanceMessages(text) });
     const n = (res.parsed as { importance?: number } | null)?.importance;
-    return Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 5;
+    return typeof n === 'number' && Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 5;
   }
 }
 ```
