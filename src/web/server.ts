@@ -93,7 +93,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         }
         const standing = computeStanding(opts.rels.allPairs());
         const list = [...standing.entries()]
-          .map(([id, score]) => ({ id, name: world.getAgent(id)?.name ?? id, score }))
+          .map(([id, score]) => ({ id, name: world.allAgents().find((a) => a.id === id)?.name ?? id, score }))
           .sort((a, b) => b.score - a.score);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(list));
