@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LLMGateway } from '../src/llm/gateway';
-import { buildActionDecisionMessages, routineToText, ACTION_DECISION_TEMPLATE } from '../src/llm/prompts';
+import { buildActionDecisionMessages, routineToText, ACTION_DECISION_TEMPLATE, dialogueMessages } from '../src/llm/prompts';
 import { makeAgent, persona } from './helpers';
 import type { LLMRequest } from '../src/llm/types';
 
@@ -65,4 +65,11 @@ test('提示词 → mock 网关端到端产出合法动作', async () => {
   assert.equal(d.action.type, 'interact');
   assert.equal(d.action.target, 'obj:cafe');
   assert.equal(d.action.verb, '煮咖啡');
+});
+
+test('对话提示词允许结束对话（end_dialogue 非写死 false）', () => {
+  const messages = dialogueMessages({ speakerName: '甲', speakerPool: ['你好'], otherName: '乙', goal: '闲聊', turns: 0 });
+  const sys = messages[0].content;
+  assert.ok(sys.includes('end_dialogue": <true|false>'));
+  assert.ok(!sys.includes('"end_dialogue": false"'));
 });
