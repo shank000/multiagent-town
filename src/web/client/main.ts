@@ -47,6 +47,9 @@ const ticker: string[] = [];
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
 let fitScale = 1;
+// 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
+let lastGridW = 0;
+let lastGridH = 0;
 
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
@@ -124,7 +127,11 @@ function applySnapshot(): void {
     }
   }
   updateHud();
-  fitCamera();
+  if (snap.gridW !== lastGridW || snap.gridH !== lastGridH) {
+    lastGridW = snap.gridW;
+    lastGridH = snap.gridH;
+    fitCamera();
+  }
 }
 
 function onEvent(e: TownEvent): void {
@@ -178,7 +185,7 @@ function onWheel(e: WheelEvent): void {
   const ax = (e.clientX - rect.left) * dpr;
   const ay = (e.clientY - rect.top) * dpr;
   const factor = e.deltaY < 0 ? 1.25 : 0.8;
-  const next = zoomScale(camera.scale, factor, fitScale * dpr);
+  const next = zoomScale(camera.scale, factor, fitScale);
   const off = zoomOffsets(ax, ay, camera.scale, next, camera.offX, camera.offY, TILE);
   camera.scale = next;
   camera.offX = off.offX;
@@ -225,8 +232,8 @@ function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: numbe
   const py = (ev.clientY - rect.top) * dpr;
   return {
     px, py,
-    tx: Math.floor((px - camera.offX) / (TILE * camera.scale)),
-    ty: Math.floor((py - camera.offY) / (TILE * camera.scale)),
+    tx: Math.floor((px - camera.offX) / (TILE * camera.scale * dpr)),
+    ty: Math.floor((py - camera.offY) / (TILE * camera.scale * dpr)),
   };
 }
 
