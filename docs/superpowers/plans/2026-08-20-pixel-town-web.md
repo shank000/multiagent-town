@@ -1497,7 +1497,7 @@ test('像素小镇 e2e：一天内快照推进 + NPC 闲聊 + 调速 + SSE', asy
     }
     clearTimeout(timeout);
     assert.ok(sseBuf.includes('event: snapshot'));
-    void sse.body?.cancel();
+    await reader.cancel(); // 流已被 getReader 锁定，用 reader.cancel 释放
 
     // 跑满 1 游戏日（服务端快照推送并行运行）
     await loop.runUntil(1440);
