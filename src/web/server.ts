@@ -83,7 +83,14 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         return;
       }
       if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
-        const id = decodeURIComponent(url.pathname.slice('/api/agents/'.length, -'/mind'.length));
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/agents/'.length, -'/mind'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
         if (!opts.mind) {
           res.writeHead(404);
           res.end('mind 未启用');
@@ -104,7 +111,14 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         return;
       }
       if (url.pathname.startsWith('/api/player/') && url.pathname.endsWith('/act')) {
-        const id = decodeURIComponent(url.pathname.slice('/api/player/'.length, -'/act'.length));
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/player/'.length, -'/act'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
         if (req.method === 'POST') {
           const body = (await readBody(req)) as { instruction?: unknown };
           const instruction = typeof body.instruction === 'string' ? body.instruction.slice(0, 120) : '';
@@ -177,7 +191,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       }
       if (url.pathname.startsWith('/assets/') && req.method === 'GET') {
         const name = url.pathname.slice('/assets/'.length);
-        if (!/^[\w.-]+$/.test(name)) {
+        if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$/.test(name)) {
           res.writeHead(404);
           res.end('not found');
           return;

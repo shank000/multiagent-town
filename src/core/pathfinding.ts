@@ -13,7 +13,7 @@ const h = (a: Tile, b: Tile) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 /** 返回含起点终点的路径；起点或终点不可通行 → null */
 export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null {
   if (!world.inBounds(from) || !world.inBounds(to)) return null;
-  if (!world.walkable(to.x, to.y)) return null;
+  if (!world.walkable(from.x, from.y) || !world.walkable(to.x, to.y)) return null;
   const startKey = key(from);
   const goalKey = key(to);
   if (startKey === goalKey) return [from];

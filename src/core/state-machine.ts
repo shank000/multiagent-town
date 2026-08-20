@@ -24,6 +24,7 @@ interface PendingDecision {
 
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
+  private blockCount = new Map<string, number>();
 
   constructor(
     private llm: LLMGateway,
@@ -160,7 +161,21 @@ export class AgentExecutor {
     const occupied = this.world.allAgents().some(
       (other) => other.id !== agent.id && other.x === nextTile.x && other.y === nextTile.y && (other.state === 'moving' || other.state === 'acting')
     );
-    if (occupied) return;
+    if (occupied) {
+      const blocked = (this.blockCount.get(agent.id) ?? 0) + 1;
+      if (blocked >= 4) {
+        // 连续受阻：判定死锁，放弃本次移动，休息后再决策
+        this.blockCount.delete(agent.id);
+        this.log.addEvent(this.makeEvent('system', agent, agent.action!, now, '被堵住了，先休息一下。'));
+        agent.state = 'idle';
+        agent.action = null;
+        agent.lastDecisionAt = now;
+        return;
+      }
+      this.blockCount.set(agent.id, blocked);
+      return;
+    }
+    this.blockCount.delete(agent.id);
     agent.pathProgress = nextProgress;
     const idx = Math.min(Math.floor(agent.pathProgress), agent.path.length - 1);
     const tile = agent.path[idx];
