@@ -82,6 +82,26 @@ test('控制接口：调速与暂停', async () => {
   }
 });
 
+test('SSE 客户端断开后服务不崩（写守卫）', async () => {
+  const { server, base, log } = await setup();
+  try {
+    const res = await fetch(`${base}/events`);
+    const reader = res.body!.getReader();
+    await reader.read();
+    await reader.cancel(); // 模拟浏览器标签页关闭
+    await new Promise((r) => setTimeout(r, 100)); // 让服务端感知断开
+    log.addEvent({
+      id: 'e9', type: 'system', actorId: null, targetIds: [], description: '断开后事件',
+      location: null, gameTime: 2, payload: null,
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const snap = (await (await fetch(`${base}/api/state`)).json()) as { agents: unknown[] };
+    assert.equal(snap.agents.length, 2);
+  } finally {
+    await server.close();
+  }
+});
+
 test('SSE：首帧快照 + 事件即时推送', async () => {
   const { server, base, log, world } = await setup();
   try {

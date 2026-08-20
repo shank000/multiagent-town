@@ -44,12 +44,16 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     return buildSnapshot(world, time, paused, ++seq);
   }
   function send(res: ServerResponse, event: string, data: unknown): void {
+    if (res.writableEnded || res.destroyed) {
+      clients.delete(res);
+      return;
+    }
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
   function broadcast(event: string, data: unknown): void {
     for (const c of clients) send(c, event, data);
   }
-  log.subscribe((e: GameEvent) => broadcast('event', e));
+  const unsubLog = log.subscribe((e: GameEvent) => broadcast('event', e));
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -64,6 +68,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         clients.add(res);
         send(res, 'snapshot', currentSnapshot());
         req.on('close', () => clients.delete(res));
+        res.on('error', () => clients.delete(res));
         return;
       }
       if (url.pathname === '/api/state') {
@@ -126,7 +131,10 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   const port = (server.address() as AddressInfo).port;
   const interval = setInterval(() => broadcast('snapshot', currentSnapshot()), snapshotMs);
   const heartbeat = setInterval(() => {
-    for (const c of clients) c.write(': ping\n\n');
+    for (const c of clients) {
+      if (c.writableEnded || c.destroyed) clients.delete(c);
+      else c.write(': ping\n\n');
+    }
   }, 15_000);
 
   return {
@@ -134,6 +142,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     close: () =>
       new Promise<void>((r) => {
         loop.stop(); // 服务停止时一并停掉世界循环（调速/恢复可能由本服务启动过 loop）
+        unsubLog();  // 解除事件订阅，防止 close 后订阅泄漏
         clearInterval(interval);
         clearInterval(heartbeat);
         for (const c of clients) c.end();
