@@ -96,6 +96,63 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
   ctx.fillText(o.name, px + 3, py + 24);
 }
 
+// 家具像素样式：按名称区分床/沙发/咖啡桌/柜台
+export function drawFurniture(ctx: CanvasRenderingContext2D, o: ObjectView): void {
+  const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
+  if (o.name === '床') {
+    // 床头板 + 床单 + 枕头
+    ctx.fillStyle = '#8a5a3a';
+    ctx.fillRect(px, py, pw, 6);
+    ctx.fillStyle = '#e8e0f0';
+    ctx.fillRect(px, py + 6, pw, ph - 6);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(px, py + 6, 10, 8);
+  } else if (o.name === '沙发') {
+    ctx.fillStyle = '#b35d45';
+    ctx.fillRect(px, py, pw, 6); // 靠背
+    ctx.fillStyle = '#d98a6a';
+    ctx.fillRect(px, py + 6, pw, ph - 6);
+    ctx.fillStyle = '#b35d45';
+    ctx.fillRect(px, py + ph - 6, pw, 6);
+  } else if (o.name === '咖啡桌') {
+    ctx.fillStyle = '#6b4a2f';
+    ctx.fillRect(px + 8, py + 8, pw - 16, ph - 16); // 桌面
+    ctx.fillStyle = '#4a3520';
+    ctx.fillRect(px + 10, py + 20, 4, 8);
+    ctx.fillRect(px + pw - 14, py + 20, 4, 8);
+  } else {
+    // 柜台/吧台类
+    ctx.fillStyle = '#a97c50';
+    ctx.fillRect(px, py, pw, ph);
+    ctx.fillStyle = '#e3b23c';
+    ctx.fillRect(px + 4, py + 4, pw - 8, 4); // 台面高光
+  }
+}
+
+// 建筑内饰：浅木色地板 + 木纹点 + 内部家具 + 墙边框
+export function drawInterior(
+  ctx: CanvasRenderingContext2D,
+  building: ObjectView,
+  children: ObjectView[],
+  nowMs: number
+): void {
+  const px = building.x * TILE, py = building.y * TILE, pw = building.w * TILE, ph = building.h * TILE;
+  ctx.fillStyle = '#d9b48f';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.fillStyle = '#c9a06a';
+  for (let x = px + 4; x < px + pw; x += 8) {
+    for (let y = py + 4; y < py + ph; y += 8) ctx.fillRect(x, y, 3, 3); // 木纹点
+  }
+  for (const c of children) {
+    if (c.type === 'furniture' || c.type === 'room') drawFurniture(ctx, c);
+  }
+  // 墙边框
+  ctx.strokeStyle = '#7a5a3a';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(px + 2, py + 2, pw - 4, ph - 4);
+  void nowMs;
+}
+
 export function applyDayNight(ctx: CanvasRenderingContext2D, w: number, h: number, minuteOfDay: number): void {
   let color = '';
   let alpha = 0;

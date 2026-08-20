@@ -1,7 +1,7 @@
 // 像素小镇浏览器客户端：Canvas 2D 像素渲染，零依赖，SSE 实时刷新
 
 import { drawNpc, type Dir } from './sprites';
-import { drawTerrain, drawObjectDetail, applyDayNight, TILE } from './render';
+import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
@@ -43,13 +43,31 @@ const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
 
+// —— 摄像机 ——
+const VIEW_W = 15; // 视口瓦片数
+const VIEW_H = 10;
+const camera = { x: 0, y: 0, zoom: 1 as 1 | 2 };
+
+// —— 拖拽平移（pointer）——
+let pointerDown = false;
+let lastX = 0;
+let lastY = 0;
+let startX = 0;
+let startY = 0;
+let dragged = false;
+
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
   initCanvas();
   for (const a of snap.agents) initDisplay(a);
-  canvas.addEventListener('click', onClick);
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerCancel);
+  canvas.addEventListener('pointerleave', onPointerCancel);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => { tooltip = null; });
+  canvas.addEventListener('wheel', onWheel);
   bindControls();
   bindPlayBar();
   document.querySelectorAll('#panel-tabs .tab').forEach((tab) => {
@@ -70,9 +88,23 @@ async function main(): Promise<void> {
 }
 
 function initCanvas(): void {
-  if (!snap) return;
-  canvas.width = snap.gridW * TILE;
-  canvas.height = snap.gridH * TILE;
+  canvas.width = VIEW_W * TILE;
+  canvas.height = VIEW_H * TILE;
+}
+
+function clampCam(): void {
+  const maxX = (snap ? snap.gridW : 40) - VIEW_W / camera.zoom;
+  const maxY = (snap ? snap.gridH : 40) - VIEW_H / camera.zoom;
+  camera.x = Math.max(0, Math.min(maxX, camera.x));
+  camera.y = Math.max(0, Math.min(maxY, camera.y));
+}
+
+function applyCamera(): void {
+  ctx.setTransform(camera.zoom, 0, 0, camera.zoom, -camera.x * TILE * camera.zoom, -camera.y * TILE * camera.zoom);
+}
+
+function resetCamera(): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 function initDisplay(a: AgentView): void {
   display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false });
@@ -140,6 +172,52 @@ function bindControls(): void {
   });
 }
 
+// —— 拖拽/缩放：pointerdown/move/up 区分点击与拖拽（位移 <4px 视为点击）——
+function onPointerDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
+  pointerDown = true;
+  dragged = false;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  startX = e.clientX;
+  startY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+}
+
+function onPointerMove(e: PointerEvent): void {
+  if (!pointerDown) return;
+  // CSS 缩放系数：CSS 尺寸被放大（如 960px），换算回画布像素（480px）
+  const s = canvas.width / canvas.getBoundingClientRect().width;
+  // 累计本次按压位移：超过 4px 阈值才开始平移，未超阈值保持点击语义（不移动相机）
+  if (dragged || Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) {
+    dragged = true;
+    camera.x -= (e.clientX - lastX) / camera.zoom * s / TILE;
+    camera.y -= (e.clientY - lastY) / camera.zoom * s / TILE;
+    clampCam();
+  }
+  lastX = e.clientX;
+  lastY = e.clientY;
+}
+
+function onPointerUp(e: PointerEvent): void {
+  pointerDown = false;
+  if (!dragged) onClick(e);
+}
+
+// pointercancel/leave：画布外松手时复位，防止幻影平移
+function onPointerCancel(): void {
+  pointerDown = false;
+  lastX = Number.NaN;
+  lastY = Number.NaN;
+}
+
+// 滚轮切换缩放：上滚放大视野（zoom=1），下滚贴近（zoom=2）
+function onWheel(e: WheelEvent): void {
+  if (e.deltaY < 0) camera.zoom = 1;
+  else if (e.deltaY > 0) camera.zoom = 2;
+  clampCam();
+}
+
 function onClick(ev: MouseEvent): void {
   if (!snap) return;
   const { tx, ty } = tileAt(ev);
@@ -151,7 +229,7 @@ function onClick(ev: MouseEvent): void {
     return;
   }
   // 未命中 NPC → 命中对象则显示建筑信息卡
-  const obj = findObjectAt(tx, ty);
+  const obj = findObjectAtTile(tx, ty);
   selectedId = null;
   selectedObjectId = obj?.id ?? null;
   updatePanel();
@@ -165,7 +243,7 @@ function onMouseMove(ev: MouseEvent): void {
     tooltip = { text: `${a.name}（${STATE_NAME[a.state] ?? a.state}）`, x: px, y: py };
     return;
   }
-  const o = findObjectAt(tx, ty);
+  const o = findObjectAtTile(tx, ty);
   if (o) {
     tooltip = { text: `${o.name}（${TYPE_NAME[o.type] ?? o.type}）`, x: px, y: py };
     return;
@@ -177,12 +255,24 @@ function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: numbe
   const rect = canvas.getBoundingClientRect();
   const px = (ev.clientX - rect.left) * (canvas.width / rect.width);
   const py = (ev.clientY - rect.top) * (canvas.height / rect.height);
-  return { px, py, tx: Math.floor(px / TILE), ty: Math.floor(py / TILE) };
+  // 逆变换：屏幕像素 → 世界瓦片（含缩放与摄像机偏移）
+  return {
+    px, py,
+    tx: Math.floor(px / (TILE * camera.zoom) + camera.x),
+    ty: Math.floor(py / (TILE * camera.zoom) + camera.y),
+  };
 }
 
-function findObjectAt(tx: number, ty: number): ObjectView | null {
+// 客户端版 objectAt：返回包含该瓦片且面积最小的对象（与服务器 world.objectAt 一致）
+function findObjectAtTile(tx: number, ty: number): ObjectView | null {
   if (!snap) return null;
-  return snap.objects.find((o) => o.type !== 'town' && tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h) ?? null;
+  let best: ObjectView | null = null;
+  for (const o of snap.objects) {
+    if (o.type === 'town') continue;
+    const contains = tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h;
+    if (contains && (!best || o.w * o.h < best.w * best.h)) best = o;
+  }
+  return best;
 }
 
 let activeTab = 'detail';
@@ -344,27 +434,82 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
+  // —— 跟随：选中 NPC 时摄像机平滑 lerp 至其瓦片中心 ——
+  if (selectedId) {
+    const d = display.get(selectedId);
+    if (d) {
+      camera.x += (d.x / TILE - VIEW_W / (2 * camera.zoom) - camera.x) * 0.08;
+      camera.y += (d.y / TILE - VIEW_H / (2 * camera.zoom) - camera.y) * 0.08;
+      clampCam();
+    }
+  }
   draw();
   requestAnimationFrame(loop);
 }
 
 function draw(): void {
   if (!snap) return;
-  drawTerrain(ctx, canvas.width, canvas.height);
+  const worldW = snap.gridW * TILE;
+  const worldH = snap.gridH * TILE;
+  // 世界层：应用摄像机变换后绘制（地形/对象/agent/气泡）
+  applyCamera();
+  drawTerrain(ctx, worldW, worldH);
   drawObjects();
   drawAgents();
   drawBubbles();
-  applyDayNight(ctx, canvas.width, canvas.height, snap.clock.minutesOfDay);
+  applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
+  // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner）
+  resetCamera();
   drawTooltip();
   drawBanner();
 }
 
+// —— 屋顶剖切：含 NPC 的建筑改画内饰 ——
+
+/** 返回包含该瓦片的建筑（若有） */
+function buildingAt(tx: number, ty: number): ObjectView | null {
+  if (!snap) return null;
+  return snap.objects.find((o) => o.type === 'building' &&
+    tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h) ?? null;
+}
+
+/** 建筑的子对象（room/furniture）：几何上完整落在建筑矩形内（等价于 parentId 归属） */
+function childrenOf(building: ObjectView): ObjectView[] {
+  if (!snap) return [];
+  return snap.objects.filter((o) =>
+    (o.type === 'room' || o.type === 'furniture') &&
+    o.x >= building.x && o.y >= building.y &&
+    o.x + o.w <= building.x + building.w && o.y + o.h <= building.y + building.h);
+}
+
+/** 对象是否落在某建筑内部（建筑子对象）：屋顶未剖切时应被遮挡、不单独绘制 */
+function isBuildingChild(o: ObjectView): boolean {
+  if (!snap) return false;
+  return snap.objects.some((b) => b.type === 'building' &&
+    o.x >= b.x && o.y >= b.y && o.x + o.w <= b.x + b.w && o.y + o.h <= b.y + b.h);
+}
+
 function drawObjects(): void {
+  const now = performance.now();
+  // 每帧计算含 NPC 的建筑集合
+  const inside = new Set<string>();
+  for (const a of snap!.agents) {
+    const b = buildingAt(a.x, a.y);
+    if (b) inside.add(b.id);
+  }
   const order: Record<string, number> = { zone: 0, building: 1, room: 2, furniture: 2 };
+  // 建筑子对象不单独绘制：未剖切时被屋顶遮挡，剖切时由 drawInterior 统一绘制
   const objs = snap!.objects
     .filter((o) => o.type !== 'town')
+    .filter((o) => !(o.type === 'room' || o.type === 'furniture') || !isBuildingChild(o))
     .sort((a, b) => (order[a.type] ?? 0) - (order[b.type] ?? 0));
-  for (const o of objs) drawObjectDetail(ctx, o, performance.now());
+  for (const o of objs) {
+    if (o.type === 'building' && inside.has(o.id)) {
+      drawInterior(ctx, o, childrenOf(o), now);
+    } else {
+      drawObjectDetail(ctx, o, now);
+    }
+  }
 }
 
 function drawAgents(): void {
