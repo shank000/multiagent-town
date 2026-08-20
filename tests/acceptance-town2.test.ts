@@ -57,6 +57,13 @@ test('小镇2.0阶段A：大图全 routine 可达、NPC 行动、家具对象就
     assert.notEqual(a.state, 'thinking', `${a.name} 卡在 thinking`);
   }
 
+  // ⑤ 家具作息：每个 agent 至少一次睡自己的床
+  for (const a of world.allAgents()) {
+    const bed = events.filter((e) =>
+      e.actorId === a.id && e.type === 'interact' && e.targetIds.some((t) => t.startsWith('obj:bed_')));
+    assert.ok(bed.length > 0, `${a.name} 从未睡床`);
+  }
+
   // ④ 门模型在大图上成立：咖啡馆门开口、顶角是墙
   const cafe = world.getObject('obj:cafe')!;
   assert.equal(world.walkable(cafe.x + Math.floor(cafe.w / 2), cafe.y + cafe.h - 1), true);

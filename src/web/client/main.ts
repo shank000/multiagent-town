@@ -3,6 +3,7 @@
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
 import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
+import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter } from './effects';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
@@ -47,6 +48,12 @@ interface Bubble { kind: 'chat' | 'thought' | 'chat_summary'; speaker: string; t
 const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
+const fx = new ParticleSystem();
+const poses = new Map<string, { scaleY: number }>(); // agentId -> 姿态缩放（1 站 / 0.78 坐 / 0.5 躺）
+const lastActionKey = new Map<string, string>();     // agentId -> "targetName:verb"
+const zzzLast = new Map<string, number>();
+const steamLast = new Map<string, number>();
+let lastFx = performance.now();
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
@@ -431,6 +438,38 @@ function loop(): void {
       d.y = d.ty;
     }
   }
+  const dt = now - lastFx;
+  lastFx = now;
+  for (const a of snap!.agents) {
+    const p = poses.get(a.id) ?? { scaleY: 1 };
+    poses.set(a.id, p);
+    const target = a.state === 'acting' && a.targetName
+      ? (a.targetName === '床' ? 0.5 : /沙发|咖啡桌|椅/.test(a.targetName) ? 0.78 : 1)
+      : 1;
+    p.scaleY += (target - p.scaleY) * 0.3; // 0.3s 级缓动
+    if (Math.abs(target - p.scaleY) < 0.02) p.scaleY = target;
+    const d = display.get(a.id);
+    if (!d) continue;
+    const key = `${a.targetName}:${a.verb}`;
+    if (a.state === 'acting' && a.targetName && lastActionKey.get(a.id) !== key) {
+      lastActionKey.set(a.id, key);
+      const cx = d.x + TILE / 2;
+      if (a.targetName === '床') fx.spawn(zzzPuff(cx, d.y - 12));
+      else if (/沙发|咖啡桌|椅/.test(a.targetName)) fx.spawn(sitDust(cx, d.y + TILE));
+      if (/煮|咖啡|泡/.test(a.verb)) fx.spawn(steamPuff(cx, d.y - 6));
+      if (/写生|画|速写/.test(a.verb)) fx.spawn(sparkleBurst(cx, d.y - 8, '#ffd700'));
+      if (/信|分拣|送/.test(a.verb)) fx.spawn(paperFlutter(cx, d.y - 12));
+    }
+    if (a.state === 'acting' && a.targetName === '床' && now - (zzzLast.get(a.id) ?? 0) > 900) {
+      zzzLast.set(a.id, now);
+      fx.spawn(zzzPuff(d.x + TILE / 2, d.y - 12));
+    }
+    if (a.state === 'acting' && /煮|泡/.test(a.verb) && now - (steamLast.get(a.id) ?? 0) > 1200) {
+      steamLast.set(a.id, now);
+      fx.spawn(steamPuff(d.x + TILE / 2, d.y - 8));
+    }
+  }
+  fx.update(dt);
   for (const [id, b] of bubbles) {
     if (now > b.until) bubbles.delete(id);
   }
@@ -441,6 +480,7 @@ function loop(): void {
 
 function draw(): void {
   if (!snap) return;
+  const nowMs = performance.now();
   const worldW = snap.gridW * TILE;
   const worldH = snap.gridH * TILE;
   // 世界层：应用摄像机变换后绘制（地形/对象/agent/气泡）
@@ -448,6 +488,7 @@ function draw(): void {
   drawTerrain(ctx, worldW, worldH);
   drawObjects();
   drawAgents();
+  fx.draw(ctx, nowMs);
   drawBubbles();
   applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
   // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner）
@@ -510,11 +551,28 @@ function drawAgents(): void {
     const d = display.get(a.id)!;
     const dir: Dir = d.tx > d.x ? 'right' : d.tx < d.x ? 'left' : d.ty > d.y ? 'down' : d.ty < d.y ? 'up' : 'down';
     const frame = (d.moving ? Math.floor(performance.now() / 300) % 2 : 0) as 0 | 1;
-    drawNpc(ctx, d.x + TILE / 2, d.y + TILE / 2, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
+    const p = poses.get(a.id) ?? { scaleY: 1 };
+    const cx = d.x + TILE / 2;
+    const cy = d.y + TILE / 2;
+    ctx.save();
+    if (p.scaleY < 0.999) {
+      ctx.translate(cx, cy + 8);
+      ctx.scale(1, p.scaleY);
+      ctx.translate(-cx, -cy - 8);
+    }
+    drawNpc(ctx, cx, cy, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
+    ctx.restore();
+    // 躺床盖被
+    if (p.scaleY < 0.6 && a.targetName === '床') {
+      ctx.fillStyle = '#e8e0f0';
+      ctx.fillRect(cx - 8, cy - 2, 16, 6);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(cx - 6, cy - 8, 7, 5);
+    }
     // 正在被玩家扮演的 NPC：名字旁补 🎮 徽标
     if (playing.has(a.id)) {
       ctx.font = '10px monospace';
-      ctx.fillText('🎮', d.x + TILE / 2 + ctx.measureText(a.name).width / 2 + 2, d.y + TILE / 2 + 19);
+      ctx.fillText('🎮', cx + ctx.measureText(a.name).width / 2 + 2, cy + 19);
     }
   }
 }
