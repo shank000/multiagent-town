@@ -8,6 +8,8 @@ import { EventLog } from '../store/events';
 import { LLMGateway } from '../llm/gateway';
 import { AgentExecutor } from '../core/state-machine';
 import { WorldLoop } from '../engine/loop';
+import { SocialTicker } from '../engine/social';
+import { MindEngine } from '../engine/mind';
 import type { WorldState } from '../core/world';
 
 export interface RunArgs {
@@ -44,10 +46,12 @@ function main(): void {
   const log = new EventLog(db);
   const world = buildTown();
   const time = new TimeEngine(args.speed * 0.5); // tick 0.5 现实秒
-  const executor = new AgentExecutor(gateway, world, log);
+  const mind = new MindEngine({ db, llm: gateway, log });
+  const executor = new AgentExecutor(gateway, world, log, mind);
+  const social = new SocialTicker(log, {}, mind.dialogue);
   const loop = new WorldLoop(time, world, executor, log, db, {
     onTick: (clock) => printBoard(clock, world, log, gateway),
-  });
+  }, social, mind);
 
   console.log(`[multiagent-town M0] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   if (args.untilMinutes !== null) {

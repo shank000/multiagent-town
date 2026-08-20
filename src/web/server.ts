@@ -9,6 +9,7 @@ import type { WorldState } from '../core/world';
 import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
 import type { GameEvent } from '../core/types';
+import type { MindEngine } from '../engine/mind';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -16,6 +17,7 @@ export interface TownWebOptions {
   time: TimeEngine;
   loop: WorldLoop;
   log: EventLog;
+  mind?: MindEngine;    // M1 认知核心（心智面板数据源）
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   port?: number;        // 默认 0 = 系统随机端口
@@ -74,6 +76,27 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       if (url.pathname === '/api/state') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(currentSnapshot()));
+        return;
+      }
+      if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
+        const id = decodeURIComponent(url.pathname.slice('/api/agents/'.length, -'/mind'.length));
+        if (!opts.mind) {
+          res.writeHead(404);
+          res.end('mind 未启用');
+          return;
+        }
+        const body: { memories: unknown[]; reflections: unknown[]; plans: unknown[]; dialogues: unknown[] } = {
+          memories: opts.mind.store.recentMemories(id, 50),
+          reflections: opts.mind.store.reflectionsFor(id),
+          plans: [], // 计划列表：取当天与前一天
+          dialogues: opts.mind.store.messagesFor(id, 50),
+        };
+        for (let day = Math.floor(time.state.totalMinutes / 1440) + 1; day >= 1 && body.plans.length < 4; day--) {
+          const p = opts.mind.store.planFor(id, day);
+          if (p) body.plans.push(p);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(body));
         return;
       }
       if (url.pathname === '/api/world/control' && req.method === 'POST') {

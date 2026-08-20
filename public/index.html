@@ -18,7 +18,15 @@
   <main>
     <canvas id="game" width="384" height="256"></canvas>
     <aside id="side">
-      <div id="panel"><p id="panel-empty">点击小镇里的角色查看详情</p></div>
+      <div id="panel">
+        <div id="panel-tabs">
+          <button data-tab="detail" class="tab active">详情</button>
+          <button data-tab="memory" class="tab">记忆</button>
+          <button data-tab="reflection" class="tab">反思</button>
+          <button data-tab="dialogue" class="tab">对话</button>
+        </div>
+        <div id="panel-body"><p id="panel-empty">点击小镇里的角色查看详情</p></div>
+      </div>
     </aside>
   </main>
   <div id="ticker"><p id="ticker-empty">事件流：等待小镇苏醒……</p></div>
