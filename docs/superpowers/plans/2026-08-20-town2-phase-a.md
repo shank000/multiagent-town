@@ -21,7 +21,7 @@
 
 ---
 
-### Task A1: 40×40 地图数据（seed 重布局 + GRID 常量 + 家具对象 + 测试同步）
+### Task 1: 40×40 地图数据（seed 重布局 + GRID 常量 + 家具对象 + 测试同步）
 
 **Files:**
 - Modify: `src/core/world.ts`（GRID_W=40、GRID_H=40）、`src/engine/seed.ts`（TOWN_OBJECTS 全量替换为新布局 + 家具）、`tests/snapshot.test.ts`（gridW 12→40）、`tests/acceptance-m2.test.ts`（墙/门断言改为对象派生）
@@ -123,7 +123,7 @@ git commit -m "feat(world): 40×40 大地图与家具对象"
 
 ---
 
-### Task A2: 摄像机系统（拖拽/缩放/跟随）
+### Task 2: 摄像机系统（拖拽/缩放/跟随）
 
 **Files:**
 - Modify: `src/web/client/main.ts`（camera 状态 + setTransform 渲染 + 拖拽/滚轮/跟随 + tileAt 逆变换 + 画布 480×320）、`public/style.css`（画布 CSS 960×640）
@@ -203,7 +203,7 @@ git commit -m "feat(web): 摄像机（拖拽/缩放/跟随）与视口渲染"
 
 ---
 
-### Task A3: 屋顶剖切与内饰/家具绘制
+### Task 3: 屋顶剖切与内饰/家具绘制
 
 **Files:**
 - Modify: `src/web/client/render.ts`（drawObjectDetail 支持 4×4 建筑细节 + 家具样式 sofa/bed/table/counter；新增 drawInterior）、`src/web/client/main.ts`（每帧计算含 NPC 的建筑集合；对含 NPC 的建筑改画内饰）
@@ -300,7 +300,7 @@ git commit -m "feat(web): 屋顶剖切与内饰家具绘制"
 
 ---
 
-### Task A4: 大图运行验收 + 终审
+### Task 4: 大图运行验收 + 终审
 
 **Files:**
 - Create: `tests/acceptance-town2.test.ts`
