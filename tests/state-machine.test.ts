@@ -6,6 +6,7 @@ import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
 import { LLMGateway } from '../src/llm/gateway';
 import { MindEngine } from '../src/engine/mind';
+import type { ChatMessage, LLMProvider } from '../src/llm/types';
 import { makeAgent, flush, StubProvider } from './helpers';
 import type { WorldObject } from '../src/core/types';
 
@@ -100,15 +101,30 @@ test('注入 mind 后决策提示词包含记忆与议程', async () => {
   const log = new EventLog(db);
   const agent = makeAgent({ id: 'agent:1', name: '甲', x: 0, y: 0, locationId: 'obj:home' });
   const world = new WorldState(TEST_OBJECTS, [agent]);
-  const gateway = new LLMGateway({ provider: 'mock' });
+  const captured: ChatMessage[][] = [];
+  const spy: LLMProvider = {
+    name: 'spy',
+    async complete(req) {
+      captured.push(req.messages);
+      const parsed = { thought: '', action: { type: 'idle', target: null, verb: '休息' }, duration_minutes: 10 };
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({ provider: spy });
   const mind = new MindEngine({ db, llm: gateway, log });
   mind.store.addMemory({ agentId: 'agent:1', kind: 'observation', content: '在咖啡馆煮咖啡招待客人', importance: 6, createdGameTime: 1 });
+  mind.store.savePlan({ agentId: 'agent:1', day: 1, broadPlan: '照常经营咖啡馆', hourly: [{ time: '00:10', action: '测试议程动作', location: '咖啡馆' }], status: 'active', createdGameTime: 5 });
   const executor = new AgentExecutor(gateway, world, log, mind);
   executor.progress(agent, 0, 10);
   await flush();
   executor.progress(agent, 0, 10);
   assert.equal(agent.state, 'acting'); // mock 无作息槽 → idle 行动
-  const mems = mind.store.recentMemories('agent:1', 5);
-  assert.ok(mems.some((m) => m.content.includes('煮咖啡')));
-  assert.equal(mems[0].lastAccessGameTime, 10); // 检索更新了 last_access
+  assert.ok(captured.length >= 1);
+  const text = captured[0].map((m) => m.content).join('\n');
+  assert.ok(text.includes('煮咖啡'), '提示词应包含记忆内容');
+  assert.ok(text.includes('测试议程动作'), '提示词应包含当前议程');
+  assert.ok(text.includes('近期记忆'));
+  // 检索副作用：目标记忆的 last_access 被刷新
+  const mem = mind.store.recentMemories('agent:1', 20).find((m) => m.content.includes('煮咖啡'))!;
+  assert.equal(mem.lastAccessGameTime, 10);
 });
