@@ -195,6 +195,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           return;
         }
         const id = opts.rumors.seed(sourceId, text, time.state.totalMinutes);
+        // 源头确定性高重要度记忆（不依赖 LLM 打分）
+        opts.mind?.store.addMemory({ agentId: sourceId, kind: 'observation', content: `第${Math.floor(time.state.totalMinutes / 1440) + 1}天 我知道了一个秘密：${text}`, importance: 9, createdGameTime: time.state.totalMinutes });
         log.addEvent({
           id: randomUUID(), type: 'system', actorId: sourceId, targetIds: [],
           description: `「${world.getAgent(sourceId)?.name ?? sourceId}」听说了一个秘密：${text}`, location: null,
