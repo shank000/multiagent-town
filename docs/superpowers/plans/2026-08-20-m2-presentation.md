@@ -533,7 +533,7 @@ async function setup() {
 }
 
 test('玩家指令 API：act 设置、delete 清除', async () => {
-  const { player, server, base, world } = await setup();
+  const { player, server, base, world, dir } = await setup();
   try {
     const r = await fetch(`${base}/api/player/${encodeURIComponent('agent:1')}/act`, {
       method: 'POST',
