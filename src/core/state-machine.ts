@@ -12,6 +12,7 @@ import type { LLMRequest } from '../llm/types';
 import type { WorldState } from './world';
 import type { EventLog } from '../store/events';
 import type { MindEngine } from '../engine/mind';
+import type { PlayerDirector } from '../engine/player';
 
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
@@ -28,7 +29,8 @@ export class AgentExecutor {
     private llm: LLMGateway,
     private world: WorldState,
     private log: EventLog,
-    private mind?: MindEngine
+    private mind?: MindEngine,
+    private player?: PlayerDirector
   ) {}
 
   /** 每 tick 对每个 agent 调用一次；dt = 本次 tick 推进的游戏分钟数 */
@@ -82,7 +84,12 @@ export class AgentExecutor {
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
       objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
-      mockContext: { persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights, agenda },
+      playerInstruction: this.player?.current(agent.id, now) ?? null,
+      mockContext: {
+        persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights, agenda,
+        playerInstruction: this.player?.current(agent.id, now) ?? null,
+        objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
+      },
     });
     const req: LLMRequest = {
       tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true, maxTokens: 512,
@@ -146,7 +153,15 @@ export class AgentExecutor {
   }
 
   private stepMove(agent: Agent, dt: number, now: number): void {
-    agent.pathProgress += dt * MOVE_SPEED_TILES_PER_MIN;
+    const nextProgress = agent.pathProgress + dt * MOVE_SPEED_TILES_PER_MIN;
+    const nextIdx = Math.min(Math.floor(nextProgress), agent.path.length - 1);
+    const nextTile = agent.path[nextIdx];
+    // 排队让行：下一格被 moving/acting 的他人占用则本 tick 等待（idle 者不阻塞，防死锁）
+    const occupied = this.world.allAgents().some(
+      (other) => other.id !== agent.id && other.x === nextTile.x && other.y === nextTile.y && (other.state === 'moving' || other.state === 'acting')
+    );
+    if (occupied) return;
+    agent.pathProgress = nextProgress;
     const idx = Math.min(Math.floor(agent.pathProgress), agent.path.length - 1);
     const tile = agent.path[idx];
     agent.x = tile.x;
