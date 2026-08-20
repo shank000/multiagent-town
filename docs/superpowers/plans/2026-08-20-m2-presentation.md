@@ -84,6 +84,15 @@ test('findPath 目标为墙 → null；邻居四方向', () => {
   assert.equal(w.findPath({ x: 4, y: 4 }, { x: 2, y: 2 }), null); // (2,2) 是墙
   assert.deepEqual(w.neighbors({ x: 0, y: 0 }), [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }]);
 });
+
+test('地图边角建筑也有出口（防死角）', () => {
+  const OBJS2: WorldObject[] = [
+    { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
+    { id: 'obj:home', name: '家', type: 'building', parentId: 'obj:town', x: 10, y: 6, w: 2, h: 2 },
+  ];
+  const w = new WorldState(OBJS2, []);
+  assert.ok(w.findPath({ x: 11, y: 7 }, { x: 11, y: 5 }), '边角建筑必须能出门');
+});
 ```
 
 - [ ] **Step 2: 运行并确认失败**
@@ -160,24 +169,43 @@ export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null
 ```ts
   private blocked = new Set<string>();
 
-  /** 建筑边界（除门）为墙；门 = 底边中点；房间/家具所在瓦片始终可通行（活动目标点） */
+  /** 建筑边界为墙；房间/家具瓦片永远开口；每建筑至少保证一个开口瓦片有出口（防死角） */
   private computeWalkable(): void {
-    for (const o of this.objects.values()) {
-      if (o.type !== 'building') continue;
-      const door = `${o.x + Math.floor(o.w / 2)},${o.y + o.h - 1}`;
+    const key = (t: Tile) => `${t.x},${t.y}`;
+    const buildings = [...this.objects.values()].filter((o) => o.type === 'building');
+    // 1) 全部边界标记为墙
+    for (const o of buildings) {
       for (let x = o.x; x < o.x + o.w; x++) {
         for (let y = o.y; y < o.y + o.h; y++) {
           const border = x === o.x || x === o.x + o.w - 1 || y === o.y || y === o.y + o.h - 1;
-          if (border) this.blocked.add(`${x},${y}`);
+          if (border) this.blocked.add(key({ x, y }));
         }
       }
-      this.blocked.delete(door); // 门开口
     }
-    // 房间/家具瓦片开口（2×2 小建筑无室内，吧台/柜台等活动点必须可达）
+    // 2) 房间/家具瓦片开口（活动目标点必须可达）
     for (const r of this.objects.values()) {
       if (r.type !== 'room' && r.type !== 'furniture') continue;
       for (let x = r.x; x < r.x + r.w; x++) {
-        for (let y = r.y; y < r.y + r.h; y++) this.blocked.delete(`${x},${y}`);
+        for (let y = r.y; y < r.y + r.h; y++) this.blocked.delete(key({ x, y }));
+      }
+    }
+    // 3) 门：底边中点优先；开口后若无出口，依次开放其余边界瓦片直至有出口
+    const inside = (o: WorldObject, t: Tile) => t.x >= o.x && t.x < o.x + o.w && t.y >= o.y && t.y < o.y + o.h;
+    const hasExit = (o: WorldObject, t: Tile) =>
+      this.neighbors(t).some((nb) => !inside(o, nb) && this.inBounds(nb) && !this.blocked.has(key(nb)));
+    for (const o of buildings) {
+      const door: Tile = { x: o.x + Math.floor(o.w / 2), y: o.y + o.h - 1 };
+      const borders: Tile[] = [];
+      for (let x = o.x; x < o.x + o.w; x++) {
+        for (let y = o.y; y < o.y + o.h; y++) {
+          const border = x === o.x || x === o.x + o.w - 1 || y === o.y || y === o.y + o.h - 1;
+          if (border) borders.push({ x, y });
+        }
+      }
+      const ordered = [door, ...borders.filter((t) => !(t.x === door.x && t.y === door.y))];
+      for (const t of ordered) {
+        this.blocked.delete(key(t));
+        if (hasExit(o, t)) break;
       }
     }
   }
