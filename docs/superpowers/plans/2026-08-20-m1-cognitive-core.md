@@ -1295,7 +1295,7 @@ export class ReflectionEngine {
       this.store.resetAccumulator(agent.id);
       this.inFlight.add(agent.id);
       this.dayCount.set(agent.id, { day, count: count + 1 });
-      void this.run(agent, day, now);
+      void this.run(agent, day, now).catch((err) => console.error('[reflection]', err));
     }
   }
 
