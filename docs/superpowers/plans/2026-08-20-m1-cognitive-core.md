@@ -530,14 +530,14 @@ export function dailyPlanMessages(agent: Agent, day: number, memories: MemoryBri
 
 export function hourPlanMessages(agent: Agent, hour: number, broadPlan: string): ChatMessage[] {
   return simpleMessages(
-    `你是 ${personaText(agent.persona)}。现在是第 ${hour} 点。当天大计划：${broadPlan || '（暂无）'}\n把接下来 1 小时拆成 5~15 分钟的具体动作清单。只输出 JSON：{"agenda": [{"time": "HH:MM", "action": "...", "location": "<对象名>"}]}`,
+    `你是 ${personaText(agent.persona)}。现在是第 ${hour} 点。当天大计划：${broadPlan || '（暂无）'}\n把接下来 1 小时拆成 5~15 分钟的具体动作清单。只输出 JSON：{"agenda": [{"time": "HH:MM", "action": "...", "location": "<对象 id 或名字>"}]}`,
     { persona: agent.persona, hour, broadPlan }
   );
 }
 
 export function dialogueMessages(ctx: { speakerName: string; speakerPool: string[]; otherName: string; goal: string; turns: number }): ChatMessage[] {
   return simpleMessages(
-    `你是小镇居民「${ctx.speakerName}」。你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}\n规则：每次只说 1~3 句；不要替对方说话。只输出 JSON：{"utterance": "...", "end_dialogue": false}`,
+    `你是小镇居民「${ctx.speakerName}」。你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}\n规则：每次只说 1~3 句；不要替对方说话；若已聊了 3 句以上或话头已尽，把 end_dialogue 设为 true。只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}`,
     ctx
   );
 }
