@@ -33,6 +33,7 @@ export const LIN_PERSONA: Persona = {
     { from: 1020, to: 1080, type: 'interact', target: 'obj:park', verb: '在公园散步' },
   ],
   greetingPool: ['今天的咖啡特别香，要来一杯吗？', '你看起来气色不错。', '常来坐坐呀，小镇最近可热闹了。'],
+  personality: { extraversion: 0.7, empathy: 0.9, honesty: 0.8, curiosity: 0.6, patience: 0.7 },
 };
 
 export const CHEN_PERSONA: Persona = {
@@ -47,6 +48,7 @@ export const CHEN_PERSONA: Persona = {
     { from: 1140, to: 1200, type: 'interact', target: 'obj:plaza', verb: '到广场散步' },
   ],
   greetingPool: ['最近在读什么书？', '……嗯，好久不见。', '书店到了批新书，有空来看看。'],
+  personality: { extraversion: 0.3, empathy: 0.7, honesty: 0.9, curiosity: 0.7, patience: 0.9 },
 };
 
 export const SHEN_PERSONA: Persona = {
@@ -60,6 +62,7 @@ export const SHEN_PERSONA: Persona = {
     { from: 900, to: 1020, type: 'interact', target: 'obj:cafe', verb: '在咖啡馆喝咖啡画速写' },
   ],
   greetingPool: ['今天的阳光是柠檬黄色的。', '我在画一张很特别的速写。', '要不要来公园看我的画？'],
+  personality: { extraversion: 0.8, empathy: 0.6, honesty: 0.5, curiosity: 0.9, patience: 0.5 },
 };
 
 export const ZHOU_PERSONA: Persona = {
@@ -75,6 +78,7 @@ export const ZHOU_PERSONA: Persona = {
     { from: 900, to: 960, type: 'interact', target: 'obj:bookstore', verb: '到书店送信' },
   ],
   greetingPool: ['有你的信吗？我帮你留意！', '早啊！今天也要加油。', '听说湖边傍晚特别好看。'],
+  personality: { extraversion: 0.9, empathy: 0.8, honesty: 0.4, curiosity: 0.7, patience: 0.6 },
 };
 
 const HOME_BY_NAME: Record<string, string> = {

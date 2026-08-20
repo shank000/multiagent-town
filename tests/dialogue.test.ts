@@ -5,6 +5,7 @@ import { EventLog } from '../src/store/events';
 import { MemoryStore } from '../src/store/memory';
 import { LLMGateway } from '../src/llm/gateway';
 import { DialogueEngine } from '../src/engine/dialogue';
+import { RelationshipStore } from '../src/store/relationships';
 import { WorldState } from '../src/core/world';
 import { makeAgent, persona, flush } from './helpers';
 import type { WorldObject } from '../src/core/types';
@@ -46,4 +47,19 @@ test('摘要写入双方记忆流', async () => {
   const sa = store.recentMemories('agent:a', 20).filter((m) => m.kind === 'dialogue_summary');
   const sb = store.recentMemories('agent:b', 20).filter((m) => m.kind === 'dialogue_summary');
   assert.ok(sa.length >= 1 && sb.length >= 1);
+});
+
+test('对话结束双向更新关系（渐进 + knowledge）', async () => {
+  const { store, world, dialogue, a, b } = setup();
+  const rels = new RelationshipStore(openDb(':memory:'));
+  const d2 = new DialogueEngine(new LLMGateway({ provider: 'mock' }), store, new EventLog(openDb(':memory:')), 12, rels);
+  d2.start(a, b, 10);
+  await flush();
+  for (let now = 12; now <= 40; now += 2) { d2.tick(world, 2, now); await flush(); }
+  const ab = rels.getOrCreate('agent:a', 'agent:b');
+  const ba = rels.getOrCreate('agent:b', 'agent:a');
+  assert.ok(ab.affection > 0);
+  assert.ok(ba.affection > 0);
+  assert.ok(ab.knowledge.length >= 1);
+  assert.ok(ab.affection <= 0.2); // 渐进上限
 });

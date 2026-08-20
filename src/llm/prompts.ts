@@ -98,16 +98,22 @@ export function hourPlanMessages(agent: Agent, hour: number, broadPlan: string):
   );
 }
 
-export function dialogueMessages(ctx: { speakerName: string; speakerPool: string[]; otherName: string; goal: string; turns: number }): ChatMessage[] {
+export function dialogueMessages(ctx: {
+  speakerName: string; speakerPool: string[]; otherName: string; goal: string; turns: number;
+  rumors: { id: string; content: string }[]; affection: number; honesty: number;
+}): ChatMessage[] {
+  const rumorLines = ctx.rumors.length
+    ? `\n你可能听说了这些传闻（关系足够近才适合提起）：\n${ctx.rumors.map((r) => `- ${r.content}`).join('\n')}`
+    : '';
   return simpleMessages(
-    `你是小镇居民「${ctx.speakerName}」。你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}\n规则：每次只说 1~3 句；不要替对方说话；若已聊了 3 句以上或话头已尽，把 end_dialogue 设为 true。只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}`,
+    `你是小镇居民「${ctx.speakerName}」。你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}${rumorLines}\n规则：每次只说 1~3 句；不要替对方说话；若已聊了 3 句以上或话头已尽，把 end_dialogue 设为 true。只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}`,
     ctx
   );
 }
 
 export function dialogueSummaryMessages(lines: string[]): ChatMessage[] {
   return simpleMessages(
-    '总结以上对话（≤100 字，客观，含双方达成的约定/传递的信息）。只输出 JSON：{"summary": "..."}',
+    '总结以上对话（≤100 字，客观，含双方达成的约定/传递的信息），并给出双方关系的渐进变化量。只输出 JSON：{"summary": "...", "affection_delta": <float -0.2~0.2>, "respect_delta": <float -0.2~0.2>}',
     { lines }
   );
 }

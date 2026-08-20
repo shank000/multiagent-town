@@ -19,7 +19,7 @@ const DAILY_PLANS: Record<string, string> = {
 };
 
 export function mockImportance(text: string): number {
-  if (/派对|秘密|约定|邀请|结婚|事故|宝藏/.test(text)) return 9;
+  if (/派对|读书会|集市|秘密|约定|邀请|结婚|事故|宝藏/.test(text)) return 9;
   if (/计划|反思|重要|决定|喜欢|讨厌/.test(text)) return 8;
   if (/说|闲聊|休息|散步|心想/.test(text)) return 4;
   return 6;
@@ -49,7 +49,7 @@ export class MockProvider implements LLMProvider {
       case DIALOGUE_TEMPLATE: out = dialogueTurn(ctx); break;
       case DIALOGUE_SUMMARY_TEMPLATE: {
         const lines = Array.isArray(ctx.lines) ? (ctx.lines as string[]) : [];
-        out = { summary: `聊到了「${(lines[0] ?? '').slice(0, 16)}」等话题，气氛不错。` };
+        out = { summary: `聊到了「${(lines[0] ?? '').slice(0, 16)}」等话题，气氛不错。`, affection_delta: 0.1, respect_delta: 0.05 };
         break;
       }
       case INTERVIEW_TEMPLATE: {
@@ -112,6 +112,14 @@ function hourAgenda(routine: RoutineSlot[], hour: number): { time: string; actio
 }
 
 function dialogueTurn(ctx: Record<string, unknown>): { utterance: string; end_dialogue: boolean } {
+  const rumors = Array.isArray(ctx.rumors) ? (ctx.rumors as { id: string; content: string }[]) : [];
+  const affection = Number(ctx.affection ?? 0);
+  const honesty = Number(ctx.honesty ?? 0.5);
+  if (rumors.length && affection >= 0.2) {
+    const rumor = rumors[0];
+    const text = honesty >= 0.6 ? rumor.content : `听说${rumor.content}（转述）`;
+    return { utterance: text, end_dialogue: Number(ctx.turns ?? 0) >= 2 };
+  }
   const pool = Array.isArray(ctx.speakerPool) && (ctx.speakerPool as string[]).length ? (ctx.speakerPool as string[]) : ['你好呀！', '今天天气真不错。'];
   const turns = Number(ctx.turns ?? 0);
   return { utterance: pool[turns % pool.length], end_dialogue: turns >= 3 };

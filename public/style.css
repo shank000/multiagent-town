@@ -59,3 +59,8 @@ canvas {
   background: #2a3547; color: #e8e2d4; cursor: pointer; font-size: 13px;
 }
 #play-toggle:hover { background: #3b4a63; }
+.bar { position: relative; height: 14px; background: #1a2230; border: 1px solid #3a4657; border-radius: 3px; margin: 2px 0; overflow: hidden; }
+.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; }
+.bar-fill.love { background: #e07a9a; }
+.bar-fill.resp { background: #6b9bd1; }
+.bar span { position: relative; z-index: 1; font-size: 10px; line-height: 14px; padding-left: 4px; }

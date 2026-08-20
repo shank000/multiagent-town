@@ -5,8 +5,11 @@ import type { Agent, GameEvent } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
 import type { MemoryStore } from '../store/memory';
+import type { RelationshipStore } from '../store/relationships';
+import type { RumorTracker } from './rumors';
 import type { LLMGateway } from '../llm/gateway';
 import { DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE, dialogueMessages, dialogueSummaryMessages } from '../llm/prompts';
+import { personalityOf } from './town-model';
 
 interface Session {
   a: string; aName: string; b: string; bName: string;
@@ -26,7 +29,14 @@ export class DialogueEngine {
   private sessions = new Map<string, Session>();
   private pending = new Map<string, Pending>();
 
-  constructor(private llm: LLMGateway, private store: MemoryStore, private log: EventLog, private maxRounds = 12) {}
+  constructor(
+    private llm: LLMGateway,
+    private store: MemoryStore,
+    private log: EventLog,
+    private maxRounds = 12,
+    private rels?: RelationshipStore,
+    private rumors?: RumorTracker
+  ) {}
 
   isActive(aId: string, bId: string): boolean {
     return this.sessions.has(pairKey(aId, bId));
@@ -73,12 +83,18 @@ export class DialogueEngine {
     this.pending.set(key, entry);
     void (async () => {
       try {
+        const carried = this.rumors ? this.rumors.carriedBy(speaker.id).map((r) => ({ id: r.id, content: r.content })) : [];
+        const affection = this.rels ? this.rels.getOrCreate(speaker.id, other.id).affection : 0;
+        const honesty = personalityOf(speaker.persona).honesty;
         const ctx = {
           speakerName: speaker.name,
           speakerPool: speaker.persona.greetingPool ?? [],
           otherName: other.name,
           goal: speaker.persona.goals[0] ?? '',
           turns: s.turns.length,
+          rumors: carried,
+          affection,
+          honesty,
         };
         const res = await this.llm.complete({ tier: 'large', template: DIALOGUE_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueMessages(ctx) });
         const parsed = res.parsed as { utterance?: string; end_dialogue?: boolean } | null;
@@ -105,6 +121,18 @@ export class DialogueEngine {
       payload: { kind: 'chat', line: u.utterance, fromId, toId, conversationId: s.conversationId },
     });
     this.store.addMessage({ eventId: null, fromAgent: fromId, toAgent: toId, content: u.utterance, gameTime: now });
+    if (this.rumors) {
+      // 引擎侧复核选择性披露（真机不依赖 mock 行为）：关系 ≥0.2 才传播
+      const affection = this.rels ? this.rels.getOrCreate(fromId, toId).affection : 0.2;
+      if (affection >= 0.2) {
+        const carried = this.rumors.carriedBy(fromId);
+        for (const r of carried) {
+          if (u.utterance.includes(r.content.slice(0, 8))) {
+            this.rumors.spread(fromId, toId, r.id, u.utterance, now);
+          }
+        }
+      }
+    }
     if (u.end) void this.finish(s, now);
   }
 
@@ -112,11 +140,20 @@ export class DialogueEngine {
     s.ended = true;
     const lines = s.turns.map((t) => t.content);
     let summary = '两人简单聊了几句。';
+    let summaryRes: { parsed: unknown } | null = null;
     try {
-      const res = await this.llm.complete({ tier: 'large', template: DIALOGUE_SUMMARY_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueSummaryMessages(lines) });
-      summary = (((res.parsed as { summary?: string } | null)?.summary) ?? summary).slice(0, 100);
+      summaryRes = await this.llm.complete({ tier: 'large', template: DIALOGUE_SUMMARY_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueSummaryMessages(lines) });
+      summary = (((summaryRes.parsed as { summary?: string } | null)?.summary) ?? summary).slice(0, 100);
     } catch {
       /* 保留默认摘要 */
+    }
+    if (this.rels) {
+      // 优先消费真机输出的渐进增量（夹紧由 RelationshipStore 负责），缺省 0.1/0.05
+      const parsed = (summaryRes?.parsed) as { affection_delta?: number; respect_delta?: number } | null;
+      const aD = Number(parsed?.affection_delta ?? 0.1);
+      const rD = Number(parsed?.respect_delta ?? 0.05);
+      this.rels.update(s.a, s.b, { affectionDelta: aD, respectDelta: rD, knowledge: [summary] }, now);
+      this.rels.update(s.b, s.a, { affectionDelta: aD, respectDelta: rD, knowledge: [summary] }, now);
     }
     for (const id of [s.a, s.b]) {
       this.store.addMemory({ agentId: id, kind: 'dialogue_summary', content: `第${Math.floor(now / 1440) + 1}天 对话摘要：${summary}`, importance: 7, createdGameTime: now });

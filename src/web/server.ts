@@ -9,9 +9,12 @@ import type { TimeEngine } from '../core/time';
 import type { WorldState } from '../core/world';
 import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
+import type { RelationshipStore } from '../store/relationships';
+import type { RumorTracker } from '../engine/rumors';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
+import { computeStanding } from '../engine/status';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -21,6 +24,8 @@ export interface TownWebOptions {
   log: EventLog;
   mind?: MindEngine;    // M1 认知核心（心智面板数据源）
   player?: PlayerDirector;    // 玩家扮演
+  rels?: RelationshipStore;  // M3 关系存储（声望/关系 API 数据源）
+  rumors?: RumorTracker;  // M3 谣言追踪（种子 API 数据源）
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   port?: number;        // 默认 0 = 系统随机端口
@@ -80,6 +85,48 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       if (url.pathname === '/api/state') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(currentSnapshot()));
+        return;
+      }
+      if (url.pathname === '/api/status' && req.method === 'GET') {
+        if (!opts.rels) {
+          res.writeHead(404);
+          res.end('关系未启用');
+          return;
+        }
+        const standing = computeStanding(opts.rels.allPairs());
+        const list = [...standing.entries()]
+          .map(([id, score]) => ({ id, name: world.allAgents().find((a) => a.id === id)?.name ?? id, score }))
+          .sort((a, b) => b.score - a.score);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(list));
+        return;
+      }
+      if (url.pathname.startsWith('/api/relationships/') && req.method === 'GET') {
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/relationships/'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
+        if (!opts.rels) {
+          res.writeHead(404);
+          res.end('关系未启用');
+          return;
+        }
+        const relations = opts.rels.allFor(id).map((r) => ({
+          otherId: r.agentB,
+          otherName: world.allAgents().find((a) => a.id === r.agentB)?.name ?? r.agentB,
+          affection: r.affection,
+          respect: r.respect,
+          knowledgeCount: r.knowledge.length,
+        }));
+        const standings = [...computeStanding(opts.rels.allPairs()).entries()]
+          .map(([sid, score]) => ({ id: sid, name: world.allAgents().find((a) => a.id === sid)?.name ?? sid, score }))
+          .sort((a, b) => b.score - a.score);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ relations, standings }));
         return;
       }
       if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
@@ -164,6 +211,27 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (url.pathname === '/api/rumor' && req.method === 'POST') {
+        const body = (await readBody(req)) as { text?: unknown; sourceId?: unknown };
+        const text = typeof body.text === 'string' ? body.text.slice(0, 120) : '';
+        const sourceId = typeof body.sourceId === 'string' ? body.sourceId : world.allAgents()[0]?.id;
+        if (!text || !sourceId || !opts.rumors) {
+          res.writeHead(400);
+          res.end('谣言内容/来源无效');
+          return;
+        }
+        const id = opts.rumors.seed(sourceId, text, time.state.totalMinutes);
+        // 源头确定性高重要度记忆（不依赖 LLM 打分）
+        opts.mind?.store.addMemory({ agentId: sourceId, kind: 'observation', content: `第${Math.floor(time.state.totalMinutes / 1440) + 1}天 我知道了一个秘密：${text}`, importance: 9, createdGameTime: time.state.totalMinutes });
+        log.addEvent({
+          id: randomUUID(), type: 'system', actorId: sourceId, targetIds: [],
+          description: `「${world.getAgent(sourceId)?.name ?? sourceId}」听说了一个秘密：${text}`, location: null,
+          gameTime: time.state.totalMinutes, payload: { kind: 'rumor_seed', rumorId: id, text },
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, id }));
         return;
       }
       if (url.pathname === '/api/world/control' && req.method === 'POST') {
