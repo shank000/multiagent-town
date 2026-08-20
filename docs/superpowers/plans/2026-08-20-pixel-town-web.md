@@ -431,7 +431,7 @@ git commit -m "feat(web): 世界快照序列化"
 
 **Interfaces:**
 - Produces：
-  - `TownWebOptions { world; time; loop; log; publicDir?; snapshotMs? }`（publicDir 默认 `<cwd>/public`；snapshotMs 默认 200）
+  - `TownWebOptions { world; time; loop; log; publicDir?; snapshotMs?; port? }`（publicDir 默认 `<cwd>/public`；snapshotMs 默认 200；port 默认 0=随机端口）
   - `createTownServer(opts): Promise<TownWebServer>`，`TownWebServer { port: number; close(): Promise<void> }`（监听 127.0.0.1 随机端口）
   - 路由：`GET /`（index.html）、`GET /client.js|/style.css`（静态）、`GET /api/state`（快照 JSON）、`POST /api/world/control`（`{action:'pause'|'resume'|'speed', value?}`，speed.value = 游戏分钟/现实秒）、`GET /events`（SSE：连接即发一帧 `event: snapshot`，此后 200ms 一帧；新事件即时 `event: event`；15s 心跳注释）
 
@@ -584,6 +584,7 @@ export interface TownWebOptions {
   log: EventLog;
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
+  port?: number;        // 默认 0 = 系统随机端口
 }
 
 export interface TownWebServer {
@@ -687,7 +688,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     }
   }
 
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(opts.port ?? 0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
   const interval = setInterval(() => broadcast('snapshot', currentSnapshot()), snapshotMs);
   const heartbeat = setInterval(() => {
@@ -937,7 +938,7 @@ async function main(): Promise<void> {
   const executor = new AgentExecutor(gateway, world, log);
   const social = new SocialTicker(log);
   const loop = new WorldLoop(time, world, executor, log, db, {}, social);
-  const server = await createTownServer({ world, time, loop, log });
+  const server = await createTownServer({ world, time, loop, log, port: args.port });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   loop.start();
