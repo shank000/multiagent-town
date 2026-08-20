@@ -172,9 +172,9 @@ function resetCamera(): void {
 ```
 
 - initCanvas：`canvas.width = VIEW_W * TILE; canvas.height = VIEW_H * TILE;`（480×320）
-- 每帧 loop：若有 selectedId → `camera.x += ((target.x - VIEW_W/2) - camera.x) * 0.08`（target = 该 NPC 插值瓦片坐标），y 同理，clampCam()
+- 每帧 loop：若有 selectedId → `camera.x += ((target.x - VIEW_W/(2*camera.zoom)) - camera.x) * 0.08`（target = 该 NPC 插值瓦片坐标；**中心随 zoom 缩放**），y 同理，clampCam()
 - draw()：`applyCamera()` → 画世界（地形/对象/agent/气泡）→ `resetCamera()` → 画 HUD 层（tooltip/banner 已用 reset 坐标）
-- 指针事件：pointerdown 记录 lastX/lastY 与 moved=false；pointermove 若按下：dx=(e.clientX-lastX)/zoom → `camera.x -= dx/TILE; camera.y -= dy/TILE; clampCam();`，moved 位移>4 置 true，更新 last；pointerup 若 !moved → 视为 click（走原 onClick 命中，用 tileAt）
+- 指针事件：pointerdown **仅左键**（`e.button !== 0` 直接返回）记录 lastX/lastY；pointermove 若按下：累计位移，**超过 4px 阈值后才开始平移**（`camera.x -= (e.clientX-lastX)/zoom * (canvas.width/rect.width) / TILE`，y 同理，clampCam），未超阈值保持点击语义；pointerup 若未拖拽 → 视为 click（用 tileAt）
 - wheel：deltaY<0 → zoom=1，>0 → zoom=2（clampCam）
 - tileAt(ev)：`const rect = canvas.getBoundingClientRect(); const mx = (ev.clientX - rect.left) * (canvas.width / rect.width); const my = (ev.clientY - rect.top) * (canvas.height / rect.height); return { tx: Math.floor(mx / (TILE * camera.zoom) + camera.x), ty: Math.floor(my / (TILE * camera.zoom) + camera.y) };`
 - onClick 与 mousemove 命中改用 tileAt（原换算替换）
