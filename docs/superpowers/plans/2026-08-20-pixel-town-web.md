@@ -979,6 +979,7 @@ git commit -m "feat(web): town-web CLI、社交集成与客户端构建脚本"
 - Consumes: `/api/state` 快照、`/events` SSE（snapshot/event）、`POST /api/world/control`
 - Produces: 浏览器像素小镇页面（canvas 12×8 瓦片 × 32px、CSS 2x 像素化；4 套 NPC 配色与走路 2 帧；快照插值平滑移动；💭/💬 气泡 7 秒；时钟 + 暂停/1x/60x/360x + 事件滚动条 + 点击 NPC 状态面板）
 - 客户端为浏览器 TS，无单元测试（由 tsc 类型检查 + esbuild 构建 + Task 6 e2e 覆盖）；本任务验证 = 构建成功 + 服务器可服务 + 页面含 canvas
+- 前置：`tsconfig.json` 的 `lib` 为 `["ES2023", "DOM"]`（客户端需要 DOM 全局类型；skipLibCheck 已开，与 node 类型共存无冲突）
 
 - [ ] **Step 1: 写 public/index.html**
 
