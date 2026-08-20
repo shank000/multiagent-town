@@ -117,7 +117,7 @@ export function reflectionQuestionsMessages(memories: string[]): ChatMessage[] {
 
 export function reflectionInsightsMessages(question: string, evidence: string[]): ChatMessage[] {
   return simpleMessages(
-    `问题：${question}\n证据（只能使用以下内容，禁止编造）：\n${evidence.map((e) => `- ${e}`).join('\n')}\n基于证据给出 5 条对自己的洞察，每条 ≤ 1 句，用「我」开头。只输出 JSON：{"insights": ["...", ...]}`,
+    `问题：${question}\n证据（只能使用以下内容，禁止编造）：\n${evidence.map((e) => `- ${e}`).join('\n')}\n基于证据给出最多 5 条对自己的洞察，每条 ≤ 1 句，用「我」开头。只输出 JSON：{"insights": ["...", ...]}`,
     { question, evidence }
   );
 }

@@ -46,6 +46,17 @@ test('importance 经 mock 打分（派对→9）', async () => {
   assert.equal(store.recentMemories('agent:林晚晴', 1)[0].importance, 9);
 });
 
+test('reflection 事件与非 agent 事件不写库', async () => {
+  const { log, store } = setup();
+  // 反思已由引擎直接写入 insight，事件不再重复入库
+  log.addEvent(ev('e1', 900, '林晚晴 反思自己。', 'system', 'agent:林晚晴', { kind: 'reflection', insights: ['我最近常去咖啡馆。'] }));
+  // 非 agent：obj:cafe 无 agent 参与，不打分不写库
+  log.addEvent(ev('e2', 901, '咖啡馆 开始营业。', 'system', 'obj:cafe'));
+  await flush();
+  assert.equal(store.countFor('agent:林晚晴'), 0);
+  assert.equal(store.recentMemories('agent:林晚晴', 10).length, 0);
+});
+
 function ev(id: string, gameTime: number, description: string, type: GameEvent['type'], actorId: string | null, payload: Record<string, unknown> | null = null): GameEvent {
   return { id, type, actorId, targetIds: [], description, location: 'obj:cafe', gameTime, payload };
 }
