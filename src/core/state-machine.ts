@@ -114,8 +114,16 @@ export class AgentExecutor {
     const here = { x: agent.x, y: agent.y };
     const isHere = !tile || (tile.x === here.x && tile.y === here.y);
     if ((d.action.type === 'move_to' || d.action.type === 'interact') && !isHere) {
+      const path = this.world.findPath(here, tile!);
+      if (!path) {
+        this.log.addEvent(this.makeEvent('system', agent, d, now, `找不到通往「${this.targetName(d)}」的路，先休息一下。`));
+        agent.state = 'idle';
+        agent.action = null;
+        agent.lastDecisionAt = now;
+        return;
+      }
       agent.state = 'moving';
-      agent.path = this.world.manhattanPath(here, tile!);
+      agent.path = path;
       agent.pathProgress = 0;
       return;
     }

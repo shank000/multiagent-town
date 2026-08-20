@@ -1,6 +1,7 @@
 // 世界状态：agent 集合 + 对象树 + 12×8 网格
 
 import type { Agent, Tile, WorldObject } from './types';
+import { findPath } from './pathfinding';
 
 export const GRID_W = 12;
 export const GRID_H = 8;
@@ -8,10 +9,51 @@ export const GRID_H = 8;
 export class WorldState {
   private agents = new Map<string, Agent>();
   private objects = new Map<string, WorldObject>();
+  private blocked = new Set<string>();
 
   constructor(objects: WorldObject[], agents: Agent[]) {
     for (const o of objects) this.objects.set(o.id, o);
     for (const a of agents) this.agents.set(a.id, a);
+    this.computeWalkable();
+  }
+
+  /** 建筑边界（除门）为墙；门 = 底边中点；房间/家具所在瓦片始终可通行（活动目标点） */
+  private computeWalkable(): void {
+    for (const o of this.objects.values()) {
+      if (o.type !== 'building') continue;
+      const door = `${o.x + Math.floor(o.w / 2)},${o.y + o.h - 1}`;
+      for (let x = o.x; x < o.x + o.w; x++) {
+        for (let y = o.y; y < o.y + o.h; y++) {
+          const border = x === o.x || x === o.x + o.w - 1 || y === o.y || y === o.y + o.h - 1;
+          if (border) this.blocked.add(`${x},${y}`);
+        }
+      }
+      this.blocked.delete(door); // 门开口
+    }
+    // 房间/家具瓦片开口（2×2 小建筑无室内，吧台/柜台等活动点必须可达）
+    for (const r of this.objects.values()) {
+      if (r.type !== 'room' && r.type !== 'furniture') continue;
+      for (let x = r.x; x < r.x + r.w; x++) {
+        for (let y = r.y; y < r.y + r.h; y++) this.blocked.delete(`${x},${y}`);
+      }
+    }
+  }
+
+  walkable(x: number, y: number): boolean {
+    return this.inBounds({ x, y }) && !this.blocked.has(`${x},${y}`);
+  }
+
+  neighbors(t: Tile): Tile[] {
+    return [
+      { x: t.x, y: t.y - 1 },
+      { x: t.x, y: t.y + 1 },
+      { x: t.x - 1, y: t.y },
+      { x: t.x + 1, y: t.y },
+    ];
+  }
+
+  findPath(from: Tile, to: Tile): Tile[] | null {
+    return findPath(this, from, to);
   }
 
   getObject(id: string | null): WorldObject | null {
@@ -43,19 +85,6 @@ export class WorldState {
 
   inBounds(t: Tile): boolean {
     return t.x >= 0 && t.x < GRID_W && t.y >= 0 && t.y < GRID_H;
-  }
-
-  /** 曼哈顿步进路径：从 from 到 to（含起点与终点） */
-  manhattanPath(from: Tile, to: Tile): Tile[] {
-    const path: Tile[] = [];
-    let { x, y } = from;
-    path.push({ x, y });
-    while (x !== to.x || y !== to.y) {
-      if (x !== to.x) x += Math.sign(to.x - x);
-      else y += Math.sign(to.y - y);
-      path.push({ x, y });
-    }
-    return path;
   }
 
   /** 所在瓦片上的对象：取包含该瓦片且面积最小的对象；无则返回 town */

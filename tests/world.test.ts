@@ -15,10 +15,10 @@ test('centerOf 计算对象中心瓦片', () => {
   assert.deepEqual(world().centerOf(OBJS[1]), { x: 3, y: 2 });
 });
 
-test('manhattanPath 生成轴对齐路径（含起点终点）', () => {
-  assert.deepEqual(world().manhattanPath({ x: 0, y: 0 }, { x: 2, y: 1 }), [
-    { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 },
-  ]);
+test('findPath 与 walkable 经 world 暴露', () => {
+  const w = world();
+  assert.ok(w.findPath({ x: 0, y: 0 }, { x: 11, y: 7 }) !== null);
+  assert.equal(w.walkable(0, 0), true);
 });
 
 test('objectAt 取面积最小的包含对象', () => {
