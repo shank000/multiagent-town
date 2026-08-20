@@ -1505,7 +1505,7 @@ export class DialogueEngine {
         this.deliver(s, p.resolved, now);
         continue;
       }
-      if (now - s.lastUtterAt >= 2) {
+      if (!p && now - s.lastUtterAt >= 2) {
         const speaker = world.getAgent(s.turns.length % 2 === 0 ? s.a : s.b);
         const other = world.getAgent(speaker.id === s.a ? s.b : s.a);
         this.speak(speaker, other, s, now);
