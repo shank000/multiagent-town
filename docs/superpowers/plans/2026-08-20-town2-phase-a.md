@@ -132,7 +132,7 @@ git commit -m "feat(world): 40×40 大地图与家具对象"
 - Produces（浏览器 TS，构建+typecheck 验证）：
   - `camera { x: number; y: number; zoom: 1 | 2 }`（瓦片坐标；视口 15×10）
   - 渲染：`ctx.setTransform(zoom, 0, 0, zoom, -cam.x * TILE * zoom, -cam.y * TILE * zoom)` 后正常画世界；HUD 气泡等用重置 transform
-  - 拖拽平移（pointerdown/move/up，区分点击与拖拽：位移 <4px 视为点击）；滚轮 zoom 切换；跟随：选中 NPC 时 camera 平滑 lerp 至其瓦片中心（clamp 到 [0, 40-15]/[0, 40-10]）
+  - 拖拽平移（pointerdown/move/up + **setPointerCapture 与 pointercancel/leave 复位**；位移按 CSS 缩放系数换算 `(e.clientX-lastX)/zoom * (canvas.width/rect.width) / TILE`；位移 <4px 视为点击）；滚轮 zoom 切换；跟随：选中 NPC 时 camera 平滑 lerp 至其瓦片中心（clamp 边界**随 zoom**：`[0, gridW - VIEW_W/zoom]`）
   - `tileAt(mouseX, mouseY)` 逆变换：`(mx - rect.left) / rect.width * canvas.width / (TILE*zoom) + cam.x`
 
 - [ ] **Step 1: 修改 public/style.css（画布尺寸）**
