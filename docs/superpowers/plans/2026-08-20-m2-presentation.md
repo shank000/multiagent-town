@@ -189,10 +189,22 @@ export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null
         for (let y = r.y; y < r.y + r.h; y++) this.blocked.delete(key({ x, y }));
       }
     }
-    // 3) 门：底边中点优先；开口后若无出口，依次开放其余边界瓦片直至有出口
+    // 3) 门：底边中点优先；开口后若门无法通到建筑外，依次开放其余边界瓦片直至可达（防死角）
     const inside = (o: WorldObject, t: Tile) => t.x >= o.x && t.x < o.x + o.w && t.y >= o.y && t.y < o.y + o.h;
-    const hasExit = (o: WorldObject, t: Tile) =>
-      this.neighbors(t).some((nb) => !inside(o, nb) && this.inBounds(nb) && !this.blocked.has(key(nb)));
+    const reachesOutside = (o: WorldObject, start: Tile): boolean => {
+      const seen = new Set<string>([key(start)]);
+      const queue: Tile[] = [start];
+      while (queue.length) {
+        const cur = queue.shift()!;
+        for (const nb of this.neighbors(cur)) {
+          if (!this.inBounds(nb) || this.blocked.has(key(nb))) continue;
+          if (!inside(o, nb)) return true;
+          const nk = key(nb);
+          if (!seen.has(nk)) { seen.add(nk); queue.push(nb); }
+        }
+      }
+      return false;
+    };
     for (const o of buildings) {
       const door: Tile = { x: o.x + Math.floor(o.w / 2), y: o.y + o.h - 1 };
       const borders: Tile[] = [];
@@ -205,7 +217,7 @@ export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null
       const ordered = [door, ...borders.filter((t) => !(t.x === door.x && t.y === door.y))];
       for (const t of ordered) {
         this.blocked.delete(key(t));
-        if (hasExit(o, t)) break;
+        if (reachesOutside(o, door)) break;
       }
     }
   }
