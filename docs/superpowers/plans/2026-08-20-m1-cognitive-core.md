@@ -608,10 +608,15 @@ export class MockProvider implements LLMProvider {
     const ctx = extract(req.messages) as Record<string, unknown>;
     let out: unknown;
     switch (req.template) {
-      case ACTION_DECISION_TEMPLATE: out = decideAction(ctx); break;
+      case ACTION_DECISION_TEMPLATE: {
+        const d = decideAction(ctx);
+        // wire 格式与真机一致（duration_minutes），校验器同契约
+        out = { thought: d.thought, action: d.action, duration_minutes: d.durationMinutes };
+        break;
+      }
       case IMPORTANCE_TEMPLATE: out = { importance: mockImportance(String(ctx.text ?? '')) }; break;
       case DAILY_PLAN_TEMPLATE: out = { broad_plan: DAILY_PLANS[(ctx.persona as { name?: string } | undefined)?.name ?? ''] ?? '今天照常在小镇里度过，做点喜欢的事。' }; break;
-      case HOUR_PLAN_TEMPLATE: out = { agenda: hourAgenda((ctx.routine as RoutineSlot[]) ?? [], Number(ctx.hour ?? 0)) }; break;
+      case HOUR_PLAN_TEMPLATE: out = { agenda: hourAgenda(((ctx.persona as { routine?: RoutineSlot[] } | undefined)?.routine) ?? [], Number(ctx.hour ?? 0)) }; break;
       case REFLECTION_QUESTIONS_TEMPLATE: out = { questions: ['我最近反复在做什么？', '我和谁走得近？', '我在为什么事分心？'] }; break;
       case REFLECTION_INSIGHTS_TEMPLATE: {
         const ev = Array.isArray(ctx.evidence) ? (ctx.evidence as string[]) : [];
@@ -681,7 +686,7 @@ function dialogueTurn(ctx: Record<string, unknown>): { utterance: string; end_di
 }
 ```
 
-- [ ] **Step 5: 更新 tests/prompts.test.ts（mockContext 增字段）**
+- [ ] **Step 5: 更新 tests/prompts.test.ts（mockContext 增字段）与 state-machine.ts（临时空字段）**
 
 三处 `buildActionDecisionMessages` 调用的 `mockContext` 改为：
 
@@ -690,6 +695,8 @@ function dialogueTurn(ctx: Record<string, unknown>): { utterance: string; end_di
 ```
 
 （各自保持原有 minuteOfDay 数值。）另在第 2 个测试加两条断言：`assert.ok(sys.includes('近期记忆')); assert.ok(sys.includes('自我认知'));`
+
+同时 `src/core/state-machine.ts` 的 requestDecision 中 mockContext 对象临时补 `memories: [], insights: [], agenda: null`（满足新的必填类型；Task 5 会替换为真实记忆/洞察/议程）。
 
 - [ ] **Step 6: 运行确认通过 + 全量 + 类型检查**
 
