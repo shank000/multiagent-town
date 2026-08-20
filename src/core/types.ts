@@ -24,6 +24,14 @@ export interface RoutineSlot {
   verb: string;
 }
 
+export interface Personality {
+  extraversion: number; // 0..1
+  empathy: number;
+  honesty: number;
+  curiosity: number;
+  patience: number;
+}
+
 export interface Persona {
   name: string;
   age: number;
@@ -36,6 +44,8 @@ export interface Persona {
   routine: RoutineSlot[];
   /** 相邻闲聊的台词池（M2-lite 社交气泡用；缺省用通用台词） */
   greetingPool?: string[];
+  /** 性格五维（M3；缺省 0.5） */
+  personality?: Personality;
 }
 
 export interface Agent {

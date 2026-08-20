@@ -7,10 +7,13 @@ import type { DbHandle } from '../store/db';
 import type { EventLog } from '../store/events';
 import type { LLMGateway } from '../llm/gateway';
 import { MemoryStore } from '../store/memory';
+import { RelationshipStore } from '../store/relationships';
 import { Planner } from '../llm/planner';
 import { MemoryWriter } from './memory-writer';
 import { ReflectionEngine } from './reflection';
 import { DialogueEngine } from './dialogue';
+import { RumorTracker } from './rumors';
+import { TownModel } from './town-model';
 
 export interface MindEngineOptions {
   db: DbHandle;
@@ -23,6 +26,9 @@ export class MindEngine {
   readonly planner: Planner;
   readonly reflection: ReflectionEngine;
   readonly dialogue: DialogueEngine;
+  readonly rels: RelationshipStore;
+  readonly rumors: RumorTracker;
+  readonly townModel: TownModel;
   private writer: MemoryWriter;
   private lastMinute = 0;
 
@@ -30,9 +36,12 @@ export class MindEngine {
     this.store = new MemoryStore(opts.db);
     this.planner = new Planner(opts.llm, this.store);
     this.reflection = new ReflectionEngine(opts.llm, this.store, opts.log);
-    this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log);
     this.writer = new MemoryWriter(this.store, opts.llm);
     this.writer.attach(opts.log);
+    this.rels = new RelationshipStore(opts.db);
+    this.rumors = new RumorTracker(opts.db);
+    this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 12, this.rels, this.rumors);
+    this.townModel = new TownModel(opts.log, this.rels);
   }
 
   tick(world: WorldState, dt: number, now: number): void {
@@ -55,5 +64,6 @@ export class MindEngine {
     this.lastMinute = minute;
     for (const a of world.allAgents()) this.reflection?.tick(a, day, now);
     this.dialogue?.tick(world, dt, now);
+    this.townModel.tick(world, dt, now);
   }
 }

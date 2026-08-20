@@ -19,7 +19,7 @@ const DAILY_PLANS: Record<string, string> = {
 };
 
 export function mockImportance(text: string): number {
-  if (/派对|秘密|约定|邀请|结婚|事故|宝藏/.test(text)) return 9;
+  if (/派对|读书会|集市|秘密|约定|邀请|结婚|事故|宝藏/.test(text)) return 9;
   if (/计划|反思|重要|决定|喜欢|讨厌/.test(text)) return 8;
   if (/说|闲聊|休息|散步|心想/.test(text)) return 4;
   return 6;
