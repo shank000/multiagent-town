@@ -50,8 +50,13 @@ export const TOWN_OBJECTS: WorldObject[] = [
 ];
 
 export const LIN_PERSONA: Persona = {
-  name: '林晚晴', age: 32, occupation: '咖啡馆老板',
-  background: '五年前从大城市回到小镇开了间咖啡馆，喜欢观察客人。',
+  name: '林晚晴', age: 32, occupation: '咖啡馆老板', gender: '女',
+  appearance: { hairStyle: '齐肩短发', hairColor: '深棕色', skinTone: '浅麦色', outfit: '米色围裙配深蓝衬衫' },
+  hobbies: ['手冲咖啡', '观察路人', '写小说'],
+  skills: { 手冲咖啡: 9, 倾听: 8, 写作: 7, 烘焙: 6 },
+  values: ['咖啡馆是小镇的客厅', '真诚待人', '慢生活'],
+  motivation: '把咖啡馆经营成小镇最温暖的公共空间，并写下小镇人物的故事。',
+  background: '五年前从大城市回到小镇，在中央大街开了「林间咖啡馆」。她记得每一位常客的口味，也悄悄在笔记本里记下小镇人物的故事。陈默是她学生时代的老同学，这些年两人因为书店与咖啡馆的生意往来重新走近，却又总隔着一层没说出口的话。她想把咖啡馆经营成小镇的公共客厅，也盼着自己写的那本小说有一天能出版。',
   traits: ['温和', '健谈', '有点理想主义'],
   goals: ['把咖啡馆经营成小镇的公共客厅', '写一本关于小镇人物的小说'],
   speechStyle: '语气轻柔，爱用比喻',
@@ -66,8 +71,13 @@ export const LIN_PERSONA: Persona = {
 };
 
 export const CHEN_PERSONA: Persona = {
-  name: '陈默', age: 33, occupation: '书店老板',
-  background: '林晚晴的老同学，沉默寡言，熟悉小镇每一个人的阅读口味。',
+  name: '陈默', age: 33, occupation: '书店老板', gender: '男',
+  appearance: { hairStyle: '利落短发', hairColor: '黑色', skinTone: '偏白', outfit: '深灰开衫配白衬衫' },
+  hobbies: ['读书', '整理书单', '下棋'],
+  skills: { 选书推荐: 9, 记忆力: 8, 下棋: 6, 聊天: 4 },
+  values: ['书是安静的陪伴', '少说多做', '诚信经营'],
+  motivation: '让书店成为小镇的精神角落，修复与林晚晴逐渐疏远的旧谊。',
+  background: '林晚晴的老同学，沉默寡言，却熟悉小镇每一个人的阅读口味。他把「默语书店」经营成小镇的沙龙，新书到货时总会在门口的小黑板上写一句推荐语。对林晚晴，他嘴上不说，却总在她来翻书时悄悄留一壶热水。最近他反复想着学生时代没送出去的那封信，犹豫要不要把当年的心意补上。',
   traits: ['内敛', '细心', '爱书成癖'],
   goals: ['把书店办成小镇的沙龙', '修复与林晚晴逐渐疏远的关系'],
   speechStyle: '话不多，但句句实在',
@@ -81,8 +91,13 @@ export const CHEN_PERSONA: Persona = {
 };
 
 export const SHEN_PERSONA: Persona = {
-  name: '沈屿', age: 35, occupation: '画家',
-  background: '旅居小镇的画家，每天在公园写生，常去咖啡馆喝咖啡。',
+  name: '沈屿', age: 35, occupation: '画家', gender: '男',
+  appearance: { hairStyle: '微卷长发', hairColor: '栗色', skinTone: '浅麦色', outfit: '白色衬衫配旧围巾' },
+  hobbies: ['油画写生', '收集明信片', '弹吉他'],
+  skills: { 油画: 9, 观察力: 8, 吉他: 6, 社交: 7 },
+  values: ['自由比稳定重要', '记录小镇的美', '真诚的表达'],
+  motivation: '完成小镇系列画展，画出林晚晴开咖啡馆的样子。',
+  background: '旅居小镇的画家，每天清晨在公园支起画架写生，午后到咖啡馆喝咖啡画速写。他喜欢把小镇的光线画成柠檬黄色，也悄悄给咖啡馆老板娘林晚晴画过许多张侧影。他计划在入冬前办一场小镇系列画展，最想展出的一幅，是林晚晴站在吧台后擦杯子的样子。',
   traits: ['浪漫', '随性', '观察力强'],
   goals: ['完成小镇系列画展', '画出林晚晴开咖啡馆的样子'],
   speechStyle: '热情洋溢，喜欢描述颜色',
@@ -95,8 +110,13 @@ export const SHEN_PERSONA: Persona = {
 };
 
 export const ZHOU_PERSONA: Persona = {
-  name: '周岚', age: 28, occupation: '邮差',
-  background: '小镇唯一的邮差，骑自行车穿行每条街巷，是小镇消息最灵通的人。',
+  name: '周岚', age: 28, occupation: '邮差', gender: '女',
+  appearance: { hairStyle: '高马尾', hairColor: '黑色', skinTone: '小麦色', outfit: '邮差绿制服配红围巾' },
+  hobbies: ['骑自行车', '打听消息', '集邮'],
+  skills: { 骑行: 9, 认路: 9, 集邮: 8, 保密: 3 },
+  values: ['每一封信都要送到', '消息灵通是责任', '朋友的事就是我的事'],
+  motivation: '把每一封信准时送到，并撮合沈屿与林晚晴。',
+  background: '小镇唯一的邮差，骑着一辆绿色自行车穿行每一条街巷，是小镇消息最灵通的人。她收藏邮票也收藏故事，谁家的事都瞒不过她。最近她最大的心事是沈屿和林晚晴——一个天天画人家，一个天天煮咖啡给人家喝，就是没人先开口。她决定利用送信之便，给这对木头人制造点机会。',
   traits: ['爽朗', '热心', '藏不住话'],
   goals: ['把每一封信准时送到', '撮合沈屿与林晚晴'],
   speechStyle: '语速快，爱开玩笑',

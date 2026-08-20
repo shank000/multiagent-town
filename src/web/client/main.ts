@@ -6,6 +6,10 @@ import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
+  age: number; gender: string;
+  appearance: { hairStyle: string; hairColor: string; skinTone: string; outfit: string };
+  hobbies: string[]; skills: Record<string, number>; values: string[]; motivation: string;
+  personality: { extraversion: number; empathy: number; honesty: number; curiosity: number; patience: number };
   x: number; y: number; locationId: string; locationName: string;
   verb: string; thought: string | null; targetName: string | null;
   spriteIndex: number; background: string;
@@ -268,6 +272,7 @@ function updatePanel(): void {
     return;
   }
   if (activeTab === 'detail') renderDetail(body, a);
+  else if (activeTab === 'profile') renderProfile(body, a);
   else void renderMind(body, a.id, activeTab);
 }
 
@@ -283,6 +288,28 @@ function renderDetail(body: HTMLElement, a: AgentView): void {
     <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>
     <button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button>`;
   document.getElementById('play-toggle')!.addEventListener('click', () => togglePlay(a.id));
+}
+
+function renderProfile(body: HTMLElement, a: AgentView): void {
+  const skillBars = Object.entries(a.skills).map(([k, v]) =>
+    `<div class="mem-item">${escapeHtml(k)}<div class="bar"><div class="bar-fill skill" style="width:${v * 10}%"></div><span>${v}/10</span></div></div>`).join('');
+  const dims: [string, number][] = [
+    ['外向', a.personality.extraversion], ['共情', a.personality.empathy], ['诚实', a.personality.honesty],
+    ['好奇', a.personality.curiosity], ['耐心', a.personality.patience],
+  ];
+  const persBars = dims.map(([k, v]) =>
+    `<div class="mem-item">${k}<div class="bar"><div class="bar-fill pers" style="width:${Math.round(v * 100)}%"></div></div></div>`).join('');
+  const tags = a.hobbies.map((h) => `<span class="tag">${escapeHtml(h)}</span>`).join('');
+  body.innerHTML = `
+    <h3>${escapeHtml(a.name)} 的档案</h3>
+    <p><span class="label">性别</span> ${escapeHtml(a.gender)} · <span class="label">年龄</span> ${a.age} · <span class="label">职业</span> ${escapeHtml(a.occupation)}</p>
+    <p><span class="label">外貌</span> ${escapeHtml(a.appearance.hairStyle)}，${escapeHtml(a.appearance.hairColor)}，${escapeHtml(a.appearance.skinTone)}肤色，常穿${escapeHtml(a.appearance.outfit)}</p>
+    <p class="label">爱好</p><p>${tags}</p>
+    <p class="label">技能</p>${skillBars}
+    <p class="label">性格五维</p>${persBars}
+    <div class="profile-card"><p class="label">价值观</p><p>${a.values.map((v) => `· ${escapeHtml(v)}`).join('<br>')}</p></div>
+    <div class="profile-card"><p class="label">动机</p><p>${escapeHtml(a.motivation)}</p></div>
+    <div class="profile-card"><p class="label">背景故事</p><p>${escapeHtml(a.background)}</p></div>`;
 }
 
 function renderObjectCard(body: HTMLElement, o: ObjectView): void {

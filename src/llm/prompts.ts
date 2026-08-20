@@ -45,7 +45,8 @@ export function routineToText(p: Persona): string {
 }
 
 export function personaText(p: Persona): string {
-  return `${p.name}，${p.age} 岁，${p.occupation}。${p.background} 性格：${p.traits.join('、')}。目标：${p.goals.join('；')}。`;
+  const skills = Object.entries(p.skills).map(([k, v]) => `${k}(${v}/10)`).join('、');
+  return `${p.name}，${p.age} 岁，${p.gender}，${p.occupation}。${p.background} 性格：${p.traits.join('、')}。爱好：${p.hobbies.join('、')}。技能：${skills}。价值观：${p.values.join('、')}。动机：${p.motivation}。目标：${p.goals.join('；')}。`;
 }
 
 export function buildActionDecisionMessages(input: ActionDecisionInput): { messages: ChatMessage[] } {
@@ -58,6 +59,7 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
     `你是 ${personaText(p)}`,
     `当前时间：${TimeEngine.format(clock)}。你现在在「${input.locationName}」。`,
     `你的一天安排（兜底作息）：${routineToText(p)}`,
+    `你的价值观（决策时保持一致）：${p.values.join('、')}`,
     `今日计划（当前时段）：${agendaText}`,
     `近期记忆：\n${memLines}`,
     `自我认知（反思）：${insightText}`,
