@@ -9,9 +9,11 @@ import type { TimeEngine } from '../core/time';
 import type { WorldState } from '../core/world';
 import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
+import type { RelationshipStore } from '../store/relationships';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
+import { computeStanding } from '../engine/status';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -21,6 +23,7 @@ export interface TownWebOptions {
   log: EventLog;
   mind?: MindEngine;    // M1 认知核心（心智面板数据源）
   player?: PlayerDirector;    // 玩家扮演
+  rels?: RelationshipStore;  // M3 关系存储（声望/关系 API 数据源）
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   port?: number;        // 默认 0 = 系统随机端口
@@ -80,6 +83,20 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       if (url.pathname === '/api/state') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(currentSnapshot()));
+        return;
+      }
+      if (url.pathname === '/api/status' && req.method === 'GET') {
+        if (!opts.rels) {
+          res.writeHead(404);
+          res.end('关系未启用');
+          return;
+        }
+        const standing = computeStanding(opts.rels.allPairs());
+        const list = [...standing.entries()]
+          .map(([id, score]) => ({ id, name: world.getAgent(id)?.name ?? id, score }))
+          .sort((a, b) => b.score - a.score);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(list));
         return;
       }
       if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
