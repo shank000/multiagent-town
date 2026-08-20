@@ -43,13 +43,31 @@ const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
 
+// —— 摄像机 ——
+const VIEW_W = 15; // 视口瓦片数
+const VIEW_H = 10;
+const camera = { x: 0, y: 0, zoom: 1 as 1 | 2 };
+const MAX_CAM_X = 40 - VIEW_W;
+const MAX_CAM_Y = 40 - VIEW_H;
+
+// —— 拖拽平移（pointer）——
+let pointerDown = false;
+let lastX = 0;
+let lastY = 0;
+let startX = 0;
+let startY = 0;
+let dragged = false;
+
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
   initCanvas();
   for (const a of snap.agents) initDisplay(a);
-  canvas.addEventListener('click', onClick);
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => { tooltip = null; });
+  canvas.addEventListener('wheel', onWheel);
   bindControls();
   bindPlayBar();
   document.querySelectorAll('#panel-tabs .tab').forEach((tab) => {
@@ -70,9 +88,21 @@ async function main(): Promise<void> {
 }
 
 function initCanvas(): void {
-  if (!snap) return;
-  canvas.width = snap.gridW * TILE;
-  canvas.height = snap.gridH * TILE;
+  canvas.width = VIEW_W * TILE;
+  canvas.height = VIEW_H * TILE;
+}
+
+function clampCam(): void {
+  camera.x = Math.max(0, Math.min(MAX_CAM_X, camera.x));
+  camera.y = Math.max(0, Math.min(MAX_CAM_Y, camera.y));
+}
+
+function applyCamera(): void {
+  ctx.setTransform(camera.zoom, 0, 0, camera.zoom, -camera.x * TILE * camera.zoom, -camera.y * TILE * camera.zoom);
+}
+
+function resetCamera(): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 function initDisplay(a: AgentView): void {
   display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false });
@@ -140,6 +170,40 @@ function bindControls(): void {
   });
 }
 
+// —— 拖拽/缩放：pointerdown/move/up 区分点击与拖拽（位移 <4px 视为点击）——
+function onPointerDown(e: PointerEvent): void {
+  pointerDown = true;
+  dragged = false;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  startX = e.clientX;
+  startY = e.clientY;
+}
+
+function onPointerMove(e: PointerEvent): void {
+  if (!pointerDown) return;
+  const dx = (e.clientX - lastX) / camera.zoom;
+  const dy = (e.clientY - lastY) / camera.zoom;
+  camera.x -= dx / TILE;
+  camera.y -= dy / TILE;
+  clampCam();
+  if (Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) dragged = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+}
+
+function onPointerUp(e: PointerEvent): void {
+  pointerDown = false;
+  if (!dragged) onClick(e);
+}
+
+// 滚轮切换缩放：上滚放大视野（zoom=1），下滚贴近（zoom=2）
+function onWheel(e: WheelEvent): void {
+  if (e.deltaY < 0) camera.zoom = 1;
+  else if (e.deltaY > 0) camera.zoom = 2;
+  clampCam();
+}
+
 function onClick(ev: MouseEvent): void {
   if (!snap) return;
   const { tx, ty } = tileAt(ev);
@@ -177,7 +241,12 @@ function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: numbe
   const rect = canvas.getBoundingClientRect();
   const px = (ev.clientX - rect.left) * (canvas.width / rect.width);
   const py = (ev.clientY - rect.top) * (canvas.height / rect.height);
-  return { px, py, tx: Math.floor(px / TILE), ty: Math.floor(py / TILE) };
+  // 逆变换：屏幕像素 → 世界瓦片（含缩放与摄像机偏移）
+  return {
+    px, py,
+    tx: Math.floor(px / (TILE * camera.zoom) + camera.x),
+    ty: Math.floor(py / (TILE * camera.zoom) + camera.y),
+  };
 }
 
 function findObjectAt(tx: number, ty: number): ObjectView | null {
@@ -344,17 +413,32 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
+  // —— 跟随：选中 NPC 时摄像机平滑 lerp 至其瓦片中心 ——
+  if (selectedId) {
+    const d = display.get(selectedId);
+    if (d) {
+      camera.x += (d.x / TILE - VIEW_W / 2 - camera.x) * 0.08;
+      camera.y += (d.y / TILE - VIEW_H / 2 - camera.y) * 0.08;
+      clampCam();
+    }
+  }
   draw();
   requestAnimationFrame(loop);
 }
 
 function draw(): void {
   if (!snap) return;
-  drawTerrain(ctx, canvas.width, canvas.height);
+  const worldW = snap.gridW * TILE;
+  const worldH = snap.gridH * TILE;
+  // 世界层：应用摄像机变换后绘制（地形/对象/agent/气泡）
+  applyCamera();
+  drawTerrain(ctx, worldW, worldH);
   drawObjects();
   drawAgents();
   drawBubbles();
-  applyDayNight(ctx, canvas.width, canvas.height, snap.clock.minutesOfDay);
+  applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
+  // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner）
+  resetCamera();
   drawTooltip();
   drawBanner();
 }

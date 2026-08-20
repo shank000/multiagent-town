@@ -16,7 +16,7 @@ body {
 main { flex: 1; display: flex; gap: 12px; padding: 12px; min-height: 0; }
 canvas {
   image-rendering: pixelated;
-  width: 768px; height: 512px; max-width: 72vw; max-height: 100%;
+  width: 960px; height: 640px; max-width: 88vw; max-height: 80vh;
   border: 2px solid #3a4657; border-radius: 6px; background: #7fb069;
 }
 #side { width: 240px; background: #141a22; border: 2px solid #3a4657; border-radius: 6px; padding: 12px; overflow-y: auto; }
