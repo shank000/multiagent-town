@@ -31,6 +31,7 @@ export const LIN_PERSONA: Persona = {
     { from: 840, to: 900, type: 'interact', target: 'obj:bookstore', verb: '去书店翻翻新书' },
     { from: 1020, to: 1080, type: 'interact', target: 'obj:park', verb: '在公园散步' },
   ],
+  greetingPool: ['今天的咖啡特别香，要来一杯吗？', '你看起来气色不错。', '常来坐坐呀，小镇最近可热闹了。'],
 };
 
 export const CHEN_PERSONA: Persona = {
@@ -44,6 +45,7 @@ export const CHEN_PERSONA: Persona = {
     { from: 540, to: 1080, type: 'interact', target: 'obj:bookstore_counter', verb: '接待顾客' },
     { from: 1140, to: 1200, type: 'interact', target: 'obj:plaza', verb: '到广场散步' },
   ],
+  greetingPool: ['最近在读什么书？', '……嗯，好久不见。', '书店到了批新书，有空来看看。'],
 };
 
 export const SHEN_PERSONA: Persona = {
@@ -56,6 +58,7 @@ export const SHEN_PERSONA: Persona = {
     { from: 480, to: 720, type: 'interact', target: 'obj:park_easel', verb: '在公园写生' },
     { from: 900, to: 1020, type: 'interact', target: 'obj:cafe', verb: '在咖啡馆喝咖啡画速写' },
   ],
+  greetingPool: ['今天的阳光是柠檬黄色的。', '我在画一张很特别的速写。', '要不要来公园看我的画？'],
 };
 
 export const ZHOU_PERSONA: Persona = {
@@ -70,6 +73,7 @@ export const ZHOU_PERSONA: Persona = {
     { from: 660, to: 720, type: 'interact', target: 'obj:cafe', verb: '到咖啡馆送信' },
     { from: 900, to: 960, type: 'interact', target: 'obj:bookstore', verb: '到书店送信' },
   ],
+  greetingPool: ['有你的信吗？我帮你留意！', '早啊！今天也要加油。', '听说湖边傍晚特别好看。'],
 };
 
 const HOME_BY_NAME: Record<string, string> = {

@@ -34,6 +34,8 @@ export interface Persona {
   speechStyle: string;
   /** M0 用结构化作息代替规划引擎（M1 起由 Planner 生成） */
   routine: RoutineSlot[];
+  /** 相邻闲聊的台词池（M2-lite 社交气泡用；缺省用通用台词） */
+  greetingPool?: string[];
 }
 
 export interface Agent {
