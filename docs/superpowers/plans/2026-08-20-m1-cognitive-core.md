@@ -896,7 +896,11 @@ test('跨 5:00 生成日计划，跨整点生成小时计划', async () => {
     const plan = mind.store.planFor(a.id, 1);
     assert.ok(plan, `${a.name} 应有日计划`);
     assert.ok(plan.broadPlan.length > 5);
+    assert.ok(plan.broadPlan !== '自由安排一天。', `${a.name} 的日计划不应是兜底文本`);
     assert.ok(plan.hourly.length >= 1, `${a.name} 应有小时议程`);
+    const planMem = mind.store.recentMemories(a.id, 500).find((m) => m.kind === 'plan');
+    assert.ok(planMem, `${a.name} 应有 kind=plan 记忆`);
+    assert.equal(planMem.importance, 8);
   }
 });
 
@@ -940,7 +944,8 @@ export class Planner {
     const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((m) => ({ content: m.content, importance: m.importance }));
     const insights = this.store.recentInsights(agent.id, 5);
     const res = await this.llm.complete({ tier: 'large', template: DAILY_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512, messages: dailyPlanMessages(agent, day, memories, insights) });
-    const broad = (((res.parsed as { broad_plan?: string } | null)?.broad_plan) ?? '').slice(0, 300) || '自由安排一天。';
+    const raw = (res.parsed as { broad_plan?: unknown } | null)?.broad_plan;
+    const broad = (typeof raw === 'string' ? raw : '').slice(0, 300) || '自由安排一天。';
     this.store.savePlan({ agentId: agent.id, day, broadPlan: broad, hourly: [], status: 'active', createdGameTime: now });
     this.store.addMemory({ agentId: agent.id, kind: 'plan', content: `第${day}天计划：${broad}`, importance: 8, createdGameTime: now });
   }
@@ -949,7 +954,11 @@ export class Planner {
     const plan = this.store.planFor(agent.id, day);
     const broad = plan?.broadPlan ?? '';
     const res = await this.llm.complete({ tier: 'large', template: HOUR_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512, messages: hourPlanMessages(agent, hour, broad) });
-    const agenda = ((res.parsed as { agenda?: AgendaItem[] } | null)?.agenda ?? []).map((h) => ({ time: h.time, action: String(h.action).slice(0, 60), location: String(h.location).slice(0, 40) }));
+    const rawAgenda = (res.parsed as { agenda?: unknown } | null)?.agenda;
+    const agenda = (Array.isArray(rawAgenda) ? rawAgenda : [])
+      .filter((h): h is { time: string; action: string; location?: unknown } =>
+        !!h && typeof (h as { time?: unknown }).time === 'string' && typeof (h as { action?: unknown }).action === 'string')
+      .map((h) => ({ time: h.time, action: h.action.slice(0, 60), location: String(h.location ?? '').slice(0, 40) }));
     const merged = (plan?.hourly ?? []).filter((h) => Math.floor(hhToMin(h.time) / 60) !== hour);
     merged.push(...agenda);
     merged.sort((a, b) => hhToMin(a.time) - hhToMin(b.time));
@@ -1012,13 +1021,19 @@ export class MindEngine {
   tick(world: WorldState, dt: number, now: number): void {
     const day = Math.floor(now / MINUTES_PER_DAY) + 1;
     const minute = now % MINUTES_PER_DAY;
-    if (this.lastMinute < 300 && minute >= 300) {
-      for (const a of world.allAgents()) void this.planner.dailyPlan(a, day, now);
-    }
-    const prevHour = Math.floor(this.lastMinute / 60);
     const hour = Math.floor(minute / 60);
-    if (hour !== prevHour) {
-      for (const a of world.allAgents()) void this.planner.decomposeHour(a, day, hour, now);
+    if (this.lastMinute < 300 && minute >= 300) {
+      // 跨 5:00：先日计划、完成后再小时分解（避免同 tick 竞争覆盖 plans 行）
+      for (const a of world.allAgents()) {
+        void this.planner.dailyPlan(a, day, now)
+          .catch((err) => console.error('[planner] dailyPlan', err))
+          .then(() => this.planner.decomposeHour(a, day, hour, now))
+          .catch((err) => console.error('[planner] decomposeHour', err));
+      }
+    } else if (hour !== Math.floor(this.lastMinute / 60)) {
+      for (const a of world.allAgents()) {
+        void this.planner.decomposeHour(a, day, hour, now).catch((err) => console.error('[planner] decomposeHour', err));
+      }
     }
     this.lastMinute = minute;
     for (const a of world.allAgents()) this.reflection?.tick(a, day, now);
