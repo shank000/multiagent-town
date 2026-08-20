@@ -1,7 +1,7 @@
 // 像素小镇浏览器客户端：Canvas 2D 像素渲染，零依赖，SSE 实时刷新
 
 import { drawNpc, type Dir } from './sprites';
-import { drawTerrain, drawObjectDetail, applyDayNight, TILE } from './render';
+import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
@@ -225,7 +225,7 @@ function onClick(ev: MouseEvent): void {
     return;
   }
   // 未命中 NPC → 命中对象则显示建筑信息卡
-  const obj = findObjectAt(tx, ty);
+  const obj = findObjectAtTile(tx, ty);
   selectedId = null;
   selectedObjectId = obj?.id ?? null;
   updatePanel();
@@ -239,7 +239,7 @@ function onMouseMove(ev: MouseEvent): void {
     tooltip = { text: `${a.name}（${STATE_NAME[a.state] ?? a.state}）`, x: px, y: py };
     return;
   }
-  const o = findObjectAt(tx, ty);
+  const o = findObjectAtTile(tx, ty);
   if (o) {
     tooltip = { text: `${o.name}（${TYPE_NAME[o.type] ?? o.type}）`, x: px, y: py };
     return;
@@ -259,9 +259,16 @@ function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: numbe
   };
 }
 
-function findObjectAt(tx: number, ty: number): ObjectView | null {
+// 客户端版 objectAt：返回包含该瓦片且面积最小的对象（与服务器 world.objectAt 一致）
+function findObjectAtTile(tx: number, ty: number): ObjectView | null {
   if (!snap) return null;
-  return snap.objects.find((o) => o.type !== 'town' && tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h) ?? null;
+  let best: ObjectView | null = null;
+  for (const o of snap.objects) {
+    if (o.type === 'town') continue;
+    const contains = tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h;
+    if (contains && (!best || o.w * o.h < best.w * best.h)) best = o;
+  }
+  return best;
 }
 
 let activeTab = 'detail';
@@ -453,12 +460,52 @@ function draw(): void {
   drawBanner();
 }
 
+// —— 屋顶剖切：含 NPC 的建筑改画内饰 ——
+
+/** 返回包含该瓦片的建筑（若有） */
+function buildingAt(tx: number, ty: number): ObjectView | null {
+  if (!snap) return null;
+  return snap.objects.find((o) => o.type === 'building' &&
+    tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h) ?? null;
+}
+
+/** 建筑的子对象（room/furniture）：几何上完整落在建筑矩形内（等价于 parentId 归属） */
+function childrenOf(building: ObjectView): ObjectView[] {
+  if (!snap) return [];
+  return snap.objects.filter((o) =>
+    (o.type === 'room' || o.type === 'furniture') &&
+    o.x >= building.x && o.y >= building.y &&
+    o.x + o.w <= building.x + building.w && o.y + o.h <= building.y + building.h);
+}
+
+/** 对象是否落在某建筑内部（建筑子对象）：屋顶未剖切时应被遮挡、不单独绘制 */
+function isBuildingChild(o: ObjectView): boolean {
+  if (!snap) return false;
+  return snap.objects.some((b) => b.type === 'building' &&
+    o.x >= b.x && o.y >= b.y && o.x + o.w <= b.x + b.w && o.y + o.h <= b.y + b.h);
+}
+
 function drawObjects(): void {
+  const now = performance.now();
+  // 每帧计算含 NPC 的建筑集合
+  const inside = new Set<string>();
+  for (const a of snap!.agents) {
+    const b = buildingAt(a.x, a.y);
+    if (b) inside.add(b.id);
+  }
   const order: Record<string, number> = { zone: 0, building: 1, room: 2, furniture: 2 };
+  // 建筑子对象不单独绘制：未剖切时被屋顶遮挡，剖切时由 drawInterior 统一绘制
   const objs = snap!.objects
     .filter((o) => o.type !== 'town')
+    .filter((o) => !(o.type === 'room' || o.type === 'furniture') || !isBuildingChild(o))
     .sort((a, b) => (order[a.type] ?? 0) - (order[b.type] ?? 0));
-  for (const o of objs) drawObjectDetail(ctx, o, performance.now());
+  for (const o of objs) {
+    if (o.type === 'building' && inside.has(o.id)) {
+      drawInterior(ctx, o, childrenOf(o), now);
+    } else {
+      drawObjectDetail(ctx, o, now);
+    }
+  }
 }
 
 function drawAgents(): void {
