@@ -101,6 +101,34 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.end(JSON.stringify(list));
         return;
       }
+      if (url.pathname.startsWith('/api/relationships/') && req.method === 'GET') {
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/relationships/'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
+        if (!opts.rels) {
+          res.writeHead(404);
+          res.end('关系未启用');
+          return;
+        }
+        const relations = opts.rels.allFor(id).map((r) => ({
+          otherId: r.agentB,
+          otherName: world.allAgents().find((a) => a.id === r.agentB)?.name ?? r.agentB,
+          affection: r.affection,
+          respect: r.respect,
+          knowledgeCount: r.knowledge.length,
+        }));
+        const standings = [...computeStanding(opts.rels.allPairs()).entries()]
+          .map(([sid, score]) => ({ id: sid, name: world.allAgents().find((a) => a.id === sid)?.name ?? sid, score }))
+          .sort((a, b) => b.score - a.score);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ relations, standings }));
+        return;
+      }
       if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
         let id: string;
         try {

@@ -294,6 +294,23 @@ async function renderMind(body: HTMLElement, agentId: string, tab: string): Prom
       body.innerHTML = mind.reflections.length
         ? mind.reflections.map((r) => `<div class="ref-item">${r.insights.map((i) => `<div class="ins">💡 ${escapeHtml(i)}</div>`).join('')}</div>`).join('')
         : '<p class="label">暂无反思</p>';
+    } else if (tab === 'relation') {
+      const res2 = await fetch(`/api/relationships/${encodeURIComponent(agentId)}`);
+      const rel = (await res2.json()) as {
+        relations: { otherName: string; affection: number; respect: number }[];
+        standings: { name: string; score: number }[];
+      };
+      const bars = rel.relations.length
+        ? rel.relations.map((r) => {
+            const pct = (v: number) => Math.round(((v + 1) / 2) * 100);
+            return `<div class="mem-item">${escapeHtml(r.otherName)}
+              <div class="bar"><div class="bar-fill love" style="width:${pct(r.affection)}%"></div><span>💗${r.affection.toFixed(2)}</span></div>
+              <div class="bar"><div class="bar-fill resp" style="width:${pct(r.respect)}%"></div><span>💙${r.respect.toFixed(2)}</span></div>
+            </div>`;
+          }).join('')
+        : '<p class="label">暂无关系</p>';
+      const top = rel.standings.slice(0, 3).map((s, i) => `<div class="dl-item">👑${i + 1} ${escapeHtml(s.name)}（${s.score.toFixed(3)}）</div>`).join('');
+      body.innerHTML = `<p class="label">小镇声望榜</p>${top}<p class="label">对他人的看法</p>${bars}`;
     } else {
       body.innerHTML = mind.dialogues.length
         ? mind.dialogues.map((d) => `<div class="dl-item">${escapeHtml(d.fromAgent)}：${escapeHtml(d.content)}</div>`).join('')
