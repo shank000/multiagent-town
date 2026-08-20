@@ -27,8 +27,8 @@ test('快照包含时钟/速度/网格/对象/agent 全字段', () => {
   assert.equal(snap.seq, 7);
   assert.equal(snap.paused, false);
   assert.equal(snap.speedPerRealSecond, 60);
-  assert.equal(snap.gridW, 40);
-  assert.equal(snap.gridH, 40);
+  assert.equal(snap.gridW, 48);
+  assert.equal(snap.gridH, 44);
   assert.equal(snap.clock.totalMinutes, 0);
   assert.equal(snap.objects.length, 2);
   assert.equal(snap.objects[0].type, 'town');

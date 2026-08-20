@@ -1,10 +1,10 @@
-// 小镇种子数据：对象树（40×40 瓦片）+ 4 个 persona（M0 用结构化作息代替规划引擎）
+// 小镇种子数据：对象树（48×44 瓦片）+ 4 个 persona（M0 用结构化作息代替规划引擎）
 
 import type { Agent, Persona, WorldObject } from '../core/types';
 import { WorldState } from '../core/world';
 
 export const TOWN_OBJECTS: WorldObject[] = [
-  { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 40, h: 40 },
+  { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 48, h: 44 },
   // 商业街
   { id: 'obj:cafe', name: '林间咖啡馆', type: 'building', parentId: 'obj:town', x: 8, y: 8, w: 4, h: 4 },
   { id: 'obj:cafe_counter', name: '咖啡馆吧台', type: 'room', parentId: 'obj:cafe', x: 9, y: 8, w: 2, h: 1 },
@@ -36,6 +36,17 @@ export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:sofa_chen', name: '沙发', type: 'furniture', parentId: 'obj:home_chen', x: 34, y: 4, w: 2, h: 1 },
   { id: 'obj:sofa_shen', name: '沙发', type: 'furniture', parentId: 'obj:home_shen', x: 2, y: 36, w: 2, h: 1 },
   { id: 'obj:sofa_zhou', name: '沙发', type: 'furniture', parentId: 'obj:home_zhou', x: 34, y: 36, w: 2, h: 1 },
+  // 阶段 B 扩容地形带（x≥40 或 y≥40，纯装饰/水域；果园树为 zone 不阻挡）
+  { id: 'obj:orchard', name: '西坡果园', type: 'zone', parentId: 'obj:town', x: 40, y: 2, w: 8, h: 10 },
+  { id: 'obj:forest_ne', name: '东山树林', type: 'zone', parentId: 'obj:town', x: 42, y: 14, w: 6, h: 8 },
+  { id: 'obj:river', name: '小镇河', type: 'water', parentId: 'obj:town', x: 8, y: 40, w: 40, h: 4 },
+  { id: 'obj:farm_east', name: '东侧农田', type: 'zone', parentId: 'obj:town', x: 40, y: 24, w: 8, h: 10 },
+  { id: 'obj:meadow_s', name: '南坡草地', type: 'zone', parentId: 'obj:town', x: 0, y: 40, w: 8, h: 4 },
+  // 路灯（Task 5 灯火辉光用；zone 1×1 不阻挡）
+  { id: 'obj:lamp_plaza', name: '广场路灯', type: 'zone', parentId: 'obj:town', x: 17, y: 18, w: 1, h: 1 },
+  { id: 'obj:lamp_street1', name: '主街路灯', type: 'zone', parentId: 'obj:town', x: 10, y: 16, w: 1, h: 1 },
+  { id: 'obj:lamp_street2', name: '主街路灯', type: 'zone', parentId: 'obj:town', x: 29, y: 16, w: 1, h: 1 },
+  { id: 'obj:lamp_lake', name: '湖边路灯', type: 'zone', parentId: 'obj:town', x: 16, y: 27, w: 1, h: 1 },
 ];
 
 export const LIN_PERSONA: Persona = {

@@ -26,12 +26,14 @@ test('小镇2.0阶段A：大图全 routine 可达、NPC 行动、家具对象就
   const social = new SocialTicker(log, {}, mind.dialogue);
   const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
 
-  // ① 网格 40×40，家具对象就位
-  assert.equal(GRID_W, 40);
-  assert.equal(GRID_H, 40);
+  // ① 网格 48×44，家具对象就位
+  assert.equal(GRID_W, 48);
+  assert.equal(GRID_H, 44);
   assert.equal(world.allObjects().some((o) => o.id === 'obj:bed_lin'), true);
   assert.equal(world.allObjects().some((o) => o.id === 'obj:sofa_zhou'), true);
   assert.equal(world.allObjects().some((o) => o.id === 'obj:cafe_table1'), true);
+  assert.equal(world.allObjects().some((o) => o.id === 'obj:river'), true);
+  assert.equal(world.allObjects().some((o) => o.id === 'obj:lamp_plaza'), true);
 
   // ② 每个 agent 的每个 routine 目标都可达（A* 有解）
   for (const a of world.allAgents()) {
@@ -59,4 +61,10 @@ test('小镇2.0阶段A：大图全 routine 可达、NPC 行动、家具对象就
   const cafe = world.getObject('obj:cafe')!;
   assert.equal(world.walkable(cafe.x + Math.floor(cafe.w / 2), cafe.y + cafe.h - 1), true);
   assert.equal(world.walkable(cafe.x, cafe.y), false);
+
+  // ⑤ 河流（water）不可走：左上角与右下角瓦片均被阻挡
+  const river = world.getObject('obj:river')!;
+  assert.equal(river.type, 'water');
+  assert.equal(world.walkable(river.x, river.y), false);
+  assert.equal(world.walkable(river.x + river.w - 1, river.y + river.h - 1), false);
 });

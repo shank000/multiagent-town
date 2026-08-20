@@ -67,7 +67,7 @@ export interface Agent {
 
 export interface Tile { x: number; y: number }
 
-export type ObjectType = 'town' | 'building' | 'room' | 'furniture' | 'zone';
+export type ObjectType = 'town' | 'building' | 'room' | 'furniture' | 'zone' | 'water';
 
 export interface WorldObject {
   id: string;

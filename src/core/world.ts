@@ -1,10 +1,10 @@
-// 世界状态：agent 集合 + 对象树 + 40×40 网格
+// 世界状态：agent 集合 + 对象树 + 48×44 网格
 
 import type { Agent, Tile, WorldObject } from './types';
 import { findPath } from './pathfinding';
 
-export const GRID_W = 40;
-export const GRID_H = 40;
+export const GRID_W = 48;
+export const GRID_H = 44;
 
 export class WorldState {
   private agents = new Map<string, Agent>();
@@ -28,6 +28,13 @@ export class WorldState {
           const border = x === o.x || x === o.x + o.w - 1 || y === o.y || y === o.y + o.h - 1;
           if (border) this.blocked.add(key({ x, y }));
         }
+      }
+    }
+    // 1.5) 水域瓦片全部阻挡（河流不可走，无 routine 端点依赖）
+    for (const o of this.objects.values()) {
+      if (o.type !== 'water') continue;
+      for (let x = o.x; x < o.x + o.w; x++) {
+        for (let y = o.y; y < o.y + o.h; y++) this.blocked.add(key({ x, y }));
       }
     }
     // 2) 房间/家具瓦片开口（活动目标点必须可达）
