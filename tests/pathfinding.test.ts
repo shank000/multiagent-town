@@ -42,3 +42,12 @@ test('findPath 目标为墙 → null；邻居四方向', () => {
   assert.equal(w.findPath({ x: 4, y: 4 }, { x: 2, y: 2 }), null); // (2,2) 是墙
   assert.deepEqual(w.neighbors({ x: 0, y: 0 }), [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }]);
 });
+
+test('地图边角建筑也有出口（防死角）', () => {
+  const OBJS2: WorldObject[] = [
+    { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
+    { id: 'obj:home', name: '家', type: 'building', parentId: 'obj:town', x: 10, y: 6, w: 2, h: 2 },
+  ];
+  const w = new WorldState(OBJS2, []);
+  assert.ok(w.findPath({ x: 11, y: 7 }, { x: 11, y: 5 }), '边角建筑必须能出门');
+});
