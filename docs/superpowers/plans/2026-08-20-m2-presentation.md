@@ -85,6 +85,11 @@ test('findPath 目标为墙 → null；邻居四方向', () => {
   assert.deepEqual(w.neighbors({ x: 0, y: 0 }), [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }]);
 });
 
+test('findPath 起点为墙 → null', () => {
+  const w = world();
+  assert.equal(w.findPath({ x: 2, y: 2 }, { x: 4, y: 4 }), null); // (2,2) 是墙
+});
+
 test('地图边角建筑也有出口（防死角）', () => {
   const OBJS2: WorldObject[] = [
     { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
@@ -118,7 +123,7 @@ const h = (a: Tile, b: Tile) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 /** 返回含起点终点的路径；起点或终点不可通行 → null */
 export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null {
   if (!world.inBounds(from) || !world.inBounds(to)) return null;
-  if (!world.walkable(to.x, to.y)) return null;
+  if (!world.walkable(from.x, from.y) || !world.walkable(to.x, to.y)) return null;
   const startKey = key(from);
   const goalKey = key(to);
   if (startKey === goalKey) return [from];
@@ -586,7 +591,14 @@ import：`import type { PlayerDirector } from '../engine/player';`
 
 ```ts
       if (url.pathname.startsWith('/api/player/') && url.pathname.endsWith('/act')) {
-        const id = decodeURIComponent(url.pathname.slice('/api/player/'.length, -'/act'.length));
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/player/'.length, -'/act'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
         if (req.method === 'POST') {
           const body = (await readBody(req)) as { instruction?: unknown };
           const instruction = typeof body.instruction === 'string' ? body.instruction.slice(0, 120) : '';
@@ -835,7 +847,7 @@ function drawNpcProcedural(
 ```ts
       if (url.pathname.startsWith('/assets/') && req.method === 'GET') {
         const name = url.pathname.slice('/assets/'.length);
-        if (!/^[\w.-]+$/.test(name)) {
+        if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$/.test(name)) {
           res.writeHead(404);
           res.end('not found');
           return;
@@ -1195,7 +1207,7 @@ Expected: 1 通过。若失败按断言修被测代码，不放宽断言。
 M2 行打勾 + 使用说明：
 
 ```markdown
-pnpm town-web   # 浏览器像素小镇：点击「🎮 扮演」输入指令指挥 NPC；「📢 广播」发布小镇消息
+pnpm town-web   # 浏览器像素小镇（默认 http://127.0.0.1:8787）：点「🎮 扮演」输入指令指挥 NPC；「📢 广播」发布小镇消息
 ```
 
 - [ ] **Step 4: 全量验证**
