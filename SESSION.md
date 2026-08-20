@@ -146,4 +146,6 @@ score = α_recency · recency + α_importance · importance + α_relevance · re
 
 ## 下一步（待用户决定）
 
-按 `docs/ai-town-design.md` 的 **M0 骨架** 开工：世界状态 + 时间引擎 + LLM 网关 + 事件日志，4 个 agent 命令行观察，验收标准为"4 agent 连续跑 1 游戏日不崩，日志可回放"。
+✅ **M0 骨架已完成**（4 个 agent：林晚晴/陈默/沈屿/周岚）。40 个测试全绿，验收通过：4 agent 虚拟时钟连续跑 1 游戏日不崩、日志可回放（`pnpm town` 观察、`pnpm replay --day 1` 回放）。实现经 10 任务逐项评审 + 终审，已合并回 main。
+
+下一步按 `docs/ai-town-design.md` 的 **M1 认知核心** 开工：记忆流/检索/打分、日计划/分解/执行、反思树、对话摘要回写；验收标准为计划-执行-反思闭环跑通、访谈能答出"昨天做了什么"。
