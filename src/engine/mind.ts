@@ -9,6 +9,7 @@ import type { LLMGateway } from '../llm/gateway';
 import { MemoryStore } from '../store/memory';
 import { Planner } from '../llm/planner';
 import { MemoryWriter } from './memory-writer';
+import { ReflectionEngine } from './reflection';
 
 export interface MindEngineOptions {
   db: DbHandle;
@@ -16,14 +17,13 @@ export interface MindEngineOptions {
   log: EventLog;
 }
 
-/** 反思/对话先以结构化接口占位（Task 6/7 装配为具体实现，避免跨任务 import） */
-interface ReflectionLike { tick(agent: Agent, day: number, now: number): void }
+/** 对话先以结构化接口占位（Task 7 装配为具体实现，避免跨任务 import） */
 interface DialogueLike { tick(world: WorldState, dt: number, now: number): void }
 
 export class MindEngine {
   readonly store: MemoryStore;
   readonly planner: Planner;
-  reflection?: ReflectionLike;
+  readonly reflection: ReflectionEngine;
   dialogue?: DialogueLike;
   private writer: MemoryWriter;
   private lastMinute = 0;
@@ -31,7 +31,7 @@ export class MindEngine {
   constructor(opts: MindEngineOptions) {
     this.store = new MemoryStore(opts.db);
     this.planner = new Planner(opts.llm, this.store);
-    this.reflection = undefined; // Task 6 装配
+    this.reflection = new ReflectionEngine(opts.llm, this.store, opts.log);
     this.dialogue = undefined;   // Task 7 装配
     this.writer = new MemoryWriter(this.store, opts.llm);
     this.writer.attach(opts.log);
