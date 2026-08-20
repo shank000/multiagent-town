@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TimeEngine } from '../src/core/time';
+import { GRID_W, GRID_H } from '../src/core/world';
 import { buildTown, TOWN_OBJECTS } from '../src/engine/seed';
 import { WorldLoop } from '../src/engine/loop';
 import { AgentExecutor } from '../src/core/state-machine';
@@ -26,6 +27,8 @@ test('小镇2.0阶段A：大图全 routine 可达、NPC 行动、家具对象就
   const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
 
   // ① 网格 40×40，家具对象就位
+  assert.equal(GRID_W, 40);
+  assert.equal(GRID_H, 40);
   assert.equal(world.allObjects().some((o) => o.id === 'obj:bed_lin'), true);
   assert.equal(world.allObjects().some((o) => o.id === 'obj:sofa_zhou'), true);
   assert.equal(world.allObjects().some((o) => o.id === 'obj:cafe_table1'), true);
