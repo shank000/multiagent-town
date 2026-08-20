@@ -9,7 +9,7 @@
 - [x] M0 骨架：世界状态 + 时间引擎 + LLM 网关 + 事件日志（4 agent 命令行观察）
 - [x] M1 认知核心：记忆流/检索/反思/规划闭环
 - [x] M2 空间呈现：Phaser 3 地图 + 心智面板 + 玩家扮演
-- [ ] M3 社交涌现：关系网络 / 信息传播 / 事件广播
+- [x] M3 社交涌现：关系网络 / 信息传播 / 事件广播
 - [ ] M4 生产化：持久化/回放、成本治理、自动化评估
 
 ## 目录结构
@@ -40,7 +40,7 @@ pnpm town --until-minutes 1440 --speed 60   # 虚拟时钟快速跑 1 游戏日
 pnpm replay --day 1              # 回放第 1 天事件时间线
 pnpm test                        # 全部测试
 pnpm acceptance                  # M0 验收测试
-pnpm town-web   # 浏览器像素小镇（默认 http://127.0.0.1:8787）：点「🎮 扮演」输入指令指挥 NPC；「📢 广播」发布小镇消息
+pnpm town-web   # 关系面板看喜欢/尊重与声望榜；「📢 广播」办活动；POST /api/rumor 撒谣言
 pnpm interview -- --agent 林晚晴 --question "今天做了什么"   # 上帝视角访谈（先跑 pnpm town --until-minutes 1440 --speed 60 生成记忆）
 ```
 
