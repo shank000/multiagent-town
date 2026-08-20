@@ -5,6 +5,7 @@ import { WorldState } from '../src/core/world';
 import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
 import { LLMGateway } from '../src/llm/gateway';
+import { MindEngine } from '../src/engine/mind';
 import { makeAgent, flush, StubProvider } from './helpers';
 import type { WorldObject } from '../src/core/types';
 
@@ -92,4 +93,22 @@ test('thinking 期间不重复发起决策', async () => {
   assert.equal(agent.state, 'thinking');
   await flush();
   assert.equal((gateway.metricSummary()[0] ?? { calls: 0 }).calls, 1);
+});
+
+test('注入 mind 后决策提示词包含记忆与议程', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const agent = makeAgent({ id: 'agent:1', name: '甲', x: 0, y: 0, locationId: 'obj:home' });
+  const world = new WorldState(TEST_OBJECTS, [agent]);
+  const gateway = new LLMGateway({ provider: 'mock' });
+  const mind = new MindEngine({ db, llm: gateway, log });
+  mind.store.addMemory({ agentId: 'agent:1', kind: 'observation', content: '在咖啡馆煮咖啡招待客人', importance: 6, createdGameTime: 1 });
+  const executor = new AgentExecutor(gateway, world, log, mind);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  assert.equal(agent.state, 'acting'); // mock 无作息槽 → idle 行动
+  const mems = mind.store.recentMemories('agent:1', 5);
+  assert.ok(mems.some((m) => m.content.includes('煮咖啡')));
+  assert.equal(mems[0].lastAccessGameTime, 10); // 检索更新了 last_access
 });

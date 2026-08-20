@@ -6,10 +6,12 @@ import type { Agent, Decision, GameEvent } from './types';
 import { MINUTES_PER_DAY } from './time';
 import { validateDecision, type ValidationResult } from '../llm/action-validator';
 import { buildActionDecisionMessages, ACTION_DECISION_TEMPLATE } from '../llm/prompts';
+import type { MemoryBrief } from '../llm/prompts';
 import type { LLMGateway } from '../llm/gateway';
 import type { LLMRequest } from '../llm/types';
 import type { WorldState } from './world';
 import type { EventLog } from '../store/events';
+import type { MindEngine } from '../engine/mind';
 
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
@@ -22,7 +24,12 @@ interface PendingDecision {
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
 
-  constructor(private llm: LLMGateway, private world: WorldState, private log: EventLog) {}
+  constructor(
+    private llm: LLMGateway,
+    private world: WorldState,
+    private log: EventLog,
+    private mind?: MindEngine
+  ) {}
 
   /** 每 tick 对每个 agent 调用一次；dt = 本次 tick 推进的游戏分钟数 */
   progress(agent: Agent, dt: number, now: number): void {
@@ -58,13 +65,24 @@ export class AgentExecutor {
     agent.state = 'thinking';
     agent.lastDecisionAt = now;
     const minuteOfDay = now % MINUTES_PER_DAY;
+    // 装配决策上下文：有 mind 时注入检索记忆 / 近期洞察 / 当前时段议程
+    let memories: MemoryBrief[] = [];
+    let insights: string[] = [];
+    let agenda: string | null = null;
+    if (this.mind) {
+      const day = Math.floor(now / MINUTES_PER_DAY) + 1;
+      const query = `${agent.persona.goals.join(' ')} ${agent.action?.action.verb ?? ''} ${this.world.getObject(agent.locationId)?.name ?? ''}`;
+      memories = this.mind.store.retrieve(agent.id, query, now, 20).map((m) => ({ content: m.content, importance: m.importance }));
+      insights = this.mind.store.recentInsights(agent.id, 3);
+      agenda = this.mind.planner.currentAgendaLine(agent, day, minuteOfDay);
+    }
     const { messages } = buildActionDecisionMessages({
       agent,
       day: Math.floor(now / MINUTES_PER_DAY) + 1,
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
       objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
-      mockContext: { persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories: [], insights: [], agenda: null },
+      mockContext: { persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights, agenda },
     });
     const req: LLMRequest = {
       tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true, maxTokens: 512,
