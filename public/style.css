@@ -1,0 +1,28 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #1c2430; color: #e8e2d4;
+  font-family: "Microsoft YaHei", "PingFang SC", monospace;
+  display: flex; flex-direction: column; height: 100vh;
+}
+#hud { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: #141a22; }
+#clock { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
+#controls button {
+  margin-left: 6px; padding: 4px 12px; border: 1px solid #3a4657; border-radius: 4px;
+  background: #2a3547; color: #e8e2d4; cursor: pointer; font-size: 14px;
+}
+#controls button:hover { background: #3b4a63; }
+main { flex: 1; display: flex; gap: 12px; padding: 12px; min-height: 0; }
+canvas {
+  image-rendering: pixelated;
+  width: 768px; height: 512px; max-width: 72vw; max-height: 100%;
+  border: 2px solid #3a4657; border-radius: 6px; background: #7fb069;
+}
+#side { width: 240px; background: #141a22; border: 2px solid #3a4657; border-radius: 6px; padding: 12px; overflow-y: auto; }
+#panel p { margin: 6px 0; line-height: 1.5; }
+#panel h3 { margin: 2px 0 10px; }
+#panel .label { color: #9fb0c6; font-size: 12px; }
+#ticker {
+  padding: 8px 14px; background: #141a22; border-top: 2px solid #3a4657;
+  font-size: 13px; max-height: 92px; overflow-y: auto;
+}
+#ticker p { margin: 3px 0; }

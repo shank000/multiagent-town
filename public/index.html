@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>multiagent-town 像素小镇</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="hud">
+    <div id="clock">第1天 00:00</div>
+    <div id="controls">
+      <button data-action="pause">⏸ 暂停</button>
+      <button data-action="speed" data-value="1">▶ 1x</button>
+      <button data-action="speed" data-value="60">▶ 60x</button>
+      <button data-action="speed" data-value="360">▶ 360x</button>
+    </div>
+  </div>
+  <main>
+    <canvas id="game" width="384" height="256"></canvas>
+    <aside id="side">
+      <div id="panel"><p id="panel-empty">点击小镇里的角色查看详情</p></div>
+    </aside>
+  </main>
+  <div id="ticker"><p id="ticker-empty">事件流：等待小镇苏醒……</p></div>
+  <script src="/client.js"></script>
+</body>
+</html>
