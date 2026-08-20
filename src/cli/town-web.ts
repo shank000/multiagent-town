@@ -9,6 +9,7 @@ import { LLMGateway } from '../llm/gateway';
 import { AgentExecutor } from '../core/state-machine';
 import { WorldLoop } from '../engine/loop';
 import { SocialTicker } from '../engine/social';
+import { MindEngine } from '../engine/mind';
 import { createTownServer } from '../web/server';
 
 export interface TownWebArgs {
@@ -39,10 +40,11 @@ async function main(): Promise<void> {
   const log = new EventLog(db);
   const world = buildTown();
   const time = new TimeEngine(args.speed * 0.5);
-  const executor = new AgentExecutor(gateway, world, log);
-  const social = new SocialTicker(log);
-  const loop = new WorldLoop(time, world, executor, log, db, {}, social);
-  const server = await createTownServer({ world, time, loop, log, port: args.port });
+  const mind = new MindEngine({ db, llm: gateway, log });
+  const executor = new AgentExecutor(gateway, world, log, mind);
+  const social = new SocialTicker(log, {}, mind.dialogue);
+  const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
+  const server = await createTownServer({ world, time, loop, log, mind, port: args.port });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   loop.start();

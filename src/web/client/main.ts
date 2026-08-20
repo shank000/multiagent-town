@@ -42,6 +42,13 @@ async function main(): Promise<void> {
   for (const a of snap.agents) initDisplay(a);
   canvas.addEventListener('click', onClick);
   bindControls();
+  document.querySelectorAll('#panel-tabs .tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      activeTab = (tab as HTMLElement).dataset.tab ?? 'detail';
+      document.querySelectorAll('#panel-tabs .tab').forEach((t) => t.classList.toggle('active', t === tab));
+      updatePanel();
+    });
+  });
   const es = new EventSource('/events');
   es.addEventListener('snapshot', (ev) => {
     snap = JSON.parse((ev as MessageEvent<string>).data) as WorldSnapshot;
@@ -126,22 +133,57 @@ function onClick(ev: MouseEvent): void {
   updatePanel();
 }
 
+let activeTab = 'detail';
+
 function updatePanel(): void {
-  const panel = document.getElementById('panel')!;
+  const body = document.getElementById('panel-body')!;
   const a = snap?.agents.find((x) => x.id === selectedId);
   if (!a) {
-    panel.innerHTML = '<p id="panel-empty">点击小镇里的角色查看详情</p>';
+    activeTab = 'detail';
+    body.innerHTML = '<p id="panel-empty">点击小镇里的角色查看详情</p>';
     return;
   }
+  if (activeTab === 'detail') renderDetail(body, a);
+  else void renderMind(body, a.id, activeTab);
+}
+
+function renderDetail(body: HTMLElement, a: AgentView): void {
   const stateName: Record<string, string> = { idle: '待机', thinking: '思考中', moving: '赶路中', acting: '行动中' };
-  panel.innerHTML = `
+  body.innerHTML = `
     <h3>${escapeHtml(a.name)}</h3>
     <p><span class="label">职业</span> ${escapeHtml(a.occupation)}</p>
-    <p><span class="label">状态</span> ${stateName[a.state] ?? a.state}</p>
+    <p><span class="label">状态</span> ${escapeHtml(stateName[a.state] ?? a.state)}</p>
     <p><span class="label">位置</span> ${escapeHtml(a.locationName)}</p>
     ${a.verb ? `<p><span class="label">正在</span> ${escapeHtml(a.verb)}</p>` : ''}
     ${a.thought ? `<p><span class="label">想法</span> ${escapeHtml(a.thought)}</p>` : ''}
     <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>`;
+}
+
+async function renderMind(body: HTMLElement, agentId: string, tab: string): Promise<void> {
+  body.innerHTML = '<p class="label">加载中…</p>';
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/mind`);
+    const mind = (await res.json()) as {
+      memories: { content: string; importance: number; kind: string }[];
+      reflections: { insights: string[] }[];
+      dialogues: { fromAgent: string; content: string }[];
+    };
+    if (tab === 'memory') {
+      body.innerHTML = mind.memories.length
+        ? mind.memories.map((m) => `<div class="mem-item"><span class="stars">${'★'.repeat(Math.round(m.importance / 2))}</span> ${escapeHtml(m.content)}</div>`).join('')
+        : '<p class="label">暂无记忆</p>';
+    } else if (tab === 'reflection') {
+      body.innerHTML = mind.reflections.length
+        ? mind.reflections.map((r) => `<div class="ref-item">${r.insights.map((i) => `<div class="ins">💡 ${escapeHtml(i)}</div>`).join('')}</div>`).join('')
+        : '<p class="label">暂无反思</p>';
+    } else {
+      body.innerHTML = mind.dialogues.length
+        ? mind.dialogues.map((d) => `<div class="dl-item">${escapeHtml(d.fromAgent)}：${escapeHtml(d.content)}</div>`).join('')
+        : '<p class="label">暂无对话</p>';
+    }
+  } catch {
+    body.innerHTML = '<p class="label">加载失败</p>';
+  }
 }
 
 function updateHud(): void {

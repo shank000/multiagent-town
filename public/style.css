@@ -26,3 +26,14 @@ canvas {
   font-size: 13px; max-height: 92px; overflow-y: auto;
 }
 #ticker p { margin: 3px 0; }
+#panel-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+#panel-tabs .tab {
+  flex: 1; padding: 4px 0; border: 1px solid #3a4657; border-radius: 4px;
+  background: #2a3547; color: #e8e2d4; cursor: pointer; font-size: 12px;
+}
+#panel-tabs .tab.active { background: #4a5f83; }
+#panel-body .mem-item { border-bottom: 1px dashed #3a4657; padding: 4px 0; font-size: 12px; line-height: 1.5; }
+#panel-body .mem-item .stars { color: #e3b23c; }
+#panel-body .ref-item { padding-left: 0; margin: 6px 0; font-size: 12px; }
+#panel-body .ref-item .ins { padding-left: 14px; }
+#panel-body .dl-item { font-size: 12px; margin: 4px 0; }
