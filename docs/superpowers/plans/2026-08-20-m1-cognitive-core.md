@@ -229,7 +229,7 @@ export class MemoryStore {
 
   constructor(private db: DbHandle) {}
 
-  addMemory(m: Omit<Memory, 'id'> & { id?: string; sourceEventId?: string }): void {
+  addMemory(m: Omit<Memory, 'id' | 'lastAccessGameTime'> & { id?: string; sourceEventId?: string }): void {
     this.db.raw.prepare(
       `INSERT INTO memories(id, agent_id, kind, content, importance, created_game_time, last_access_game_time, source_event_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -251,7 +251,10 @@ export class MemoryStore {
       .sort((x, y) => y.score - x.score || y.mem.createdGameTime - x.mem.createdGameTime);
     const top = scored.slice(0, k).map((s) => s.mem);
     const upd = this.db.raw.prepare('UPDATE memories SET last_access_game_time = ? WHERE id = ?');
-    for (const m of top) upd.run(now, m.id);
+    for (const m of top) {
+      upd.run(now, m.id);
+      m.lastAccessGameTime = now; // 返回值同步最新访问时间
+    }
     return top;
   }
 
