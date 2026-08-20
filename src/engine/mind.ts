@@ -1,0 +1,55 @@
+// MindEngine：M1 认知核心门面——记忆/规划/反思/对话，作为可选参数注入循环与执行器
+
+import { MINUTES_PER_DAY } from '../core/time';
+import type { WorldState } from '../core/world';
+import type { Agent } from '../core/types';
+import type { DbHandle } from '../store/db';
+import type { EventLog } from '../store/events';
+import type { LLMGateway } from '../llm/gateway';
+import { MemoryStore } from '../store/memory';
+import { Planner } from '../llm/planner';
+import { MemoryWriter } from './memory-writer';
+
+export interface MindEngineOptions {
+  db: DbHandle;
+  llm: LLMGateway;
+  log: EventLog;
+}
+
+/** 反思/对话先以结构化接口占位（Task 6/7 装配为具体实现，避免跨任务 import） */
+interface ReflectionLike { tick(agent: Agent, day: number, now: number): void }
+interface DialogueLike { tick(world: WorldState, dt: number, now: number): void }
+
+export class MindEngine {
+  readonly store: MemoryStore;
+  readonly planner: Planner;
+  reflection?: ReflectionLike;
+  dialogue?: DialogueLike;
+  private writer: MemoryWriter;
+  private lastMinute = 0;
+
+  constructor(opts: MindEngineOptions) {
+    this.store = new MemoryStore(opts.db);
+    this.planner = new Planner(opts.llm, this.store);
+    this.reflection = undefined; // Task 6 装配
+    this.dialogue = undefined;   // Task 7 装配
+    this.writer = new MemoryWriter(this.store, opts.llm);
+    this.writer.attach(opts.log);
+  }
+
+  tick(world: WorldState, dt: number, now: number): void {
+    const day = Math.floor(now / MINUTES_PER_DAY) + 1;
+    const minute = now % MINUTES_PER_DAY;
+    if (this.lastMinute < 300 && minute >= 300) {
+      for (const a of world.allAgents()) void this.planner.dailyPlan(a, day, now);
+    }
+    const prevHour = Math.floor(this.lastMinute / 60);
+    const hour = Math.floor(minute / 60);
+    if (hour !== prevHour) {
+      for (const a of world.allAgents()) void this.planner.decomposeHour(a, day, hour, now);
+    }
+    this.lastMinute = minute;
+    for (const a of world.allAgents()) this.reflection?.tick(a, day, now);
+    this.dialogue?.tick(world, dt, now);
+  }
+}

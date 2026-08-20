@@ -8,6 +8,7 @@ import { EventLog } from '../store/events';
 import type { DbHandle } from '../store/db';
 import type { GameEvent } from '../core/types';
 import type { SocialTicker } from './social';
+import type { MindEngine } from './mind';
 
 export interface LoopHooks {
   onTick?: (clock: ClockState) => void;
@@ -25,7 +26,8 @@ export class WorldLoop {
     private log: EventLog,
     private db: DbHandle,
     private hooks: LoopHooks = {},
-    private social?: SocialTicker
+    private social?: SocialTicker,
+    private mind?: MindEngine
   ) {
     this.log.subscribe((e) => this.hooks.onEvent?.(e));
     this.log.addEvent(systemEvent(0, '第1天开始，小镇从晨光中醒来。'));
@@ -39,6 +41,7 @@ export class WorldLoop {
       this.executor.progress(agent, dt, clock.totalMinutes);
     }
     this.social?.tick(this.world.allAgents(), dt, clock.totalMinutes);
+    this.mind?.tick(this.world, dt, clock.totalMinutes);
     if (clock.day !== this.lastDay) {
       this.lastDay = clock.day;
       this.log.addEvent(systemEvent(clock.totalMinutes, `第${clock.day}天开始。`));
