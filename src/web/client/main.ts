@@ -174,6 +174,7 @@ function bindControls(): void {
 
 // —— 拖拽/缩放：pointerdown/move/up 区分点击与拖拽（位移 <4px 视为点击）——
 function onPointerDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
   pointerDown = true;
   dragged = false;
   lastX = e.clientX;
@@ -187,10 +188,13 @@ function onPointerMove(e: PointerEvent): void {
   if (!pointerDown) return;
   // CSS 缩放系数：CSS 尺寸被放大（如 960px），换算回画布像素（480px）
   const s = canvas.width / canvas.getBoundingClientRect().width;
-  camera.x -= (e.clientX - lastX) / camera.zoom * s / TILE;
-  camera.y -= (e.clientY - lastY) / camera.zoom * s / TILE;
-  clampCam();
-  if (Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) dragged = true;
+  // 累计本次按压位移：超过 4px 阈值才开始平移，未超阈值保持点击语义（不移动相机）
+  if (dragged || Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) {
+    dragged = true;
+    camera.x -= (e.clientX - lastX) / camera.zoom * s / TILE;
+    camera.y -= (e.clientY - lastY) / camera.zoom * s / TILE;
+    clampCam();
+  }
   lastX = e.clientX;
   lastY = e.clientY;
 }
@@ -434,8 +438,8 @@ function loop(): void {
   if (selectedId) {
     const d = display.get(selectedId);
     if (d) {
-      camera.x += (d.x / TILE - VIEW_W / 2 - camera.x) * 0.08;
-      camera.y += (d.y / TILE - VIEW_H / 2 - camera.y) * 0.08;
+      camera.x += (d.x / TILE - VIEW_W / (2 * camera.zoom) - camera.x) * 0.08;
+      camera.y += (d.y / TILE - VIEW_H / (2 * camera.zoom) - camera.y) * 0.08;
       clampCam();
     }
   }
