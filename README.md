@@ -7,7 +7,7 @@
 - [x] 调研报告（见 [SESSION.md](./SESSION.md)）
 - [x] 技术方案文档（见 [docs/ai-town-design.md](./docs/ai-town-design.md)）
 - [x] M0 骨架：世界状态 + 时间引擎 + LLM 网关 + 事件日志（4 agent 命令行观察）
-- [ ] M1 认知核心：记忆流/检索/反思/规划闭环
+- [x] M1 认知核心：记忆流/检索/反思/规划闭环
 - [ ] M2 空间呈现：Phaser 3 地图 + 心智面板 + 玩家扮演
 - [ ] M3 社交涌现：关系网络 / 信息传播 / 事件广播
 - [ ] M4 生产化：持久化/回放、成本治理、自动化评估
@@ -41,6 +41,7 @@ pnpm replay --day 1              # 回放第 1 天事件时间线
 pnpm test                        # 全部测试
 pnpm acceptance                  # M0 验收测试
 pnpm town-web                    # 像素小镇浏览器版（默认 mock，自动打开 http://127.0.0.1:8787）
+pnpm interview -- --agent 林晚晴 --question "今天做了什么"   # 上帝视角访谈（先跑 pnpm town --until-minutes 1440 --speed 60 生成记忆）
 ```
 
 > 像素小镇：浏览器里看 4 个像素 NPC 在小镇地图上活动、闲聊冒泡；可暂停/调速，点击角色看状态面板。真机：`LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-xxx pnpm town-web`。
