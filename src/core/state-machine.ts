@@ -182,7 +182,7 @@ export class AgentExecutor {
       description: `${agent.name} 心想：「${d.thought}」`,
       location: agent.locationId,
       gameTime: now,
-      payload: { kind: 'thought' },
+      payload: { kind: 'thought', thought: d.thought },
     };
   }
 }

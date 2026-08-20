@@ -18,6 +18,7 @@ export interface TownWebOptions {
   log: EventLog;
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
+  port?: number;        // 默认 0 = 系统随机端口
 }
 
 export interface TownWebServer {
@@ -121,7 +122,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     }
   }
 
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(opts.port ?? 0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
   const interval = setInterval(() => broadcast('snapshot', currentSnapshot()), snapshotMs);
   const heartbeat = setInterval(() => {
