@@ -72,8 +72,17 @@ function extract(messages: ChatMessage[]): Record<string, unknown> {
   throw new Error('mock 找不到 <M0_CONTEXT>');
 }
 
-/** 确定性动作决策：命中作息槽 → 执行；否则原地小憩（M0 行为，计划/记忆已进提示词但 mock 走作息） */
+/** 确定性动作决策：玩家指令最优先；其次作息槽；否则原地小憩 */
 function decideAction(ctx: Record<string, unknown>): Decision {
+  const instruction = ctx.playerInstruction as string | null | undefined;
+  if (instruction) {
+    const objects = (ctx.objects ?? []) as { id: string; name: string }[];
+    const hit = objects.find((o) => instruction.includes(o.name));
+    if (hit) {
+      return { thought: `按玩家的指令：${instruction}`, action: { type: 'interact', target: hit.id, verb: instruction.slice(0, 20) }, durationMinutes: 15 };
+    }
+    return { thought: `尝试执行玩家指令：${instruction}`, action: { type: 'idle', target: null, verb: instruction.slice(0, 20) }, durationMinutes: 10 };
+  }
   const t = Number(ctx.minuteOfDay ?? 0);
   const routine = (ctx.routine as RoutineSlot[]) ?? [];
   const hh = String(Math.floor(t / 60)).padStart(2, '0');

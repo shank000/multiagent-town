@@ -1,5 +1,8 @@
 // 像素小镇浏览器客户端：Canvas 2D 像素渲染，零依赖，SSE 实时刷新
 
+import { drawNpc, type Dir } from './sprites';
+import { drawTerrain, drawObjectDetail, applyDayNight, TILE } from './render';
+
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
   x: number; y: number; locationId: string; locationName: string;
@@ -17,31 +20,38 @@ interface TownEvent {
   payload: { kind?: string; line?: string; thought?: string; fromId?: string } | null;
 }
 
-const TILE = 32;
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 let snap: WorldSnapshot | null = null;
 let selectedId: string | null = null;
+let selectedObjectId: string | null = null;
+
+const STATE_NAME: Record<string, string> = { idle: '待机', thinking: '思考中', moving: '赶路中', acting: '行动中' };
+const TYPE_NAME: Record<string, string> = { town: '小镇', building: '建筑', room: '房间', furniture: '家具', zone: '区域' };
+
+// 玩家扮演：快照不含该信息，客户端本地记录正在被扮演的 NPC
+const playing = new Set<string>();
+let playTargetId: string | null = null;
+
+// 悬停 tooltip 与广播横幅（canvas 绘制层）
+let tooltip: { text: string; x: number; y: number } | null = null;
+let banner: { text: string; until: number } | null = null;
 
 interface Display { x: number; y: number; tx: number; ty: number; lastTileX: number; lastTileY: number; moving: boolean }
+interface Bubble { kind: 'chat' | 'thought' | 'chat_summary'; speaker: string; text: string; until: number }
 const display = new Map<string, Display>();
-const bubbles = new Map<string, { text: string; kind: string; until: number }>();
+const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
-
-const PALETTES = [
-  { hair: '#5b3a29', skin: '#f2c99c', top: '#d97757', bottom: '#6b4f6b', accent: '#f7e8d0' }, // 林晚晴·围裙
-  { hair: '#2f2f2f', skin: '#e8c39a', top: '#4a6fa5', bottom: '#3a3a3a', accent: '#9fb8d8' }, // 陈默·眼镜
-  { hair: '#7a4a2b', skin: '#f5d0a8', top: '#8a2f2f', bottom: '#5a4a3a', accent: '#c9a66b' }, // 沈屿·贝雷帽
-  { hair: '#1f1f1f', skin: '#f2c99c', top: '#b33b3b', bottom: '#4a4a4a', accent: '#2f6b2f' }, // 周岚·邮差帽
-];
-const ROOFS = ['#b35d45', '#8a5a3a', '#5a7a8a', '#6b4f6b', '#8a7a3a', '#4a6a4a'];
 
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
   initCanvas();
   for (const a of snap.agents) initDisplay(a);
   canvas.addEventListener('click', onClick);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mouseleave', () => { tooltip = null; });
   bindControls();
+  bindPlayBar();
   document.querySelectorAll('#panel-tabs .tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       activeTab = (tab as HTMLElement).dataset.tab ?? 'detail';
@@ -93,10 +103,18 @@ function onEvent(e: TownEvent): void {
   if (ticker.length > 5) ticker.pop();
   updateTicker();
   const kind = e.payload?.kind;
+  // 广播事件 → 顶部横幅（6 秒后淡出）
+  if (kind === 'broadcast') {
+    banner = { text: e.description, until: performance.now() + 6000 };
+    return;
+  }
   const fromId = e.payload?.fromId ?? e.actorId;
-  if ((kind === 'thought' || kind === 'chat') && fromId) {
-    const text = kind === 'chat' ? (e.payload?.line ?? '') : (e.payload?.thought ?? '');
-    bubbles.set(fromId, { text, kind, until: performance.now() + 7000 });
+  if (fromId && (kind === 'thought' || kind === 'chat' || kind === 'chat_summary')) {
+    const speaker = snap?.agents.find((x) => x.id === fromId)?.name ?? fromId;
+    const text = kind === 'thought' ? (e.payload?.thought ?? '') : (e.payload?.line ?? '');
+    // 对话条（chat/chat_summary）显示 9 秒，thought 气泡维持 7 秒
+    const until = performance.now() + (kind === 'thought' ? 7000 : 9000);
+    bubbles.set(fromId, { kind, speaker, text, until });
   }
 }
 
@@ -124,19 +142,61 @@ function bindControls(): void {
 
 function onClick(ev: MouseEvent): void {
   if (!snap) return;
+  const { tx, ty } = tileAt(ev);
+  const agent = snap.agents.find((a) => Math.abs(a.x - tx) <= 0.5 && Math.abs(a.y - ty) <= 0.5);
+  if (agent) {
+    selectedId = agent.id;
+    selectedObjectId = null;
+    updatePanel();
+    return;
+  }
+  // 未命中 NPC → 命中对象则显示建筑信息卡
+  const obj = findObjectAt(tx, ty);
+  selectedId = null;
+  selectedObjectId = obj?.id ?? null;
+  updatePanel();
+}
+
+function onMouseMove(ev: MouseEvent): void {
+  if (!snap) return;
+  const { px, py, tx, ty } = tileAt(ev);
+  const a = snap.agents.find((x) => Math.abs(x.x - tx) <= 0.5 && Math.abs(x.y - ty) <= 0.5);
+  if (a) {
+    tooltip = { text: `${a.name}（${STATE_NAME[a.state] ?? a.state}）`, x: px, y: py };
+    return;
+  }
+  const o = findObjectAt(tx, ty);
+  if (o) {
+    tooltip = { text: `${o.name}（${TYPE_NAME[o.type] ?? o.type}）`, x: px, y: py };
+    return;
+  }
+  tooltip = null;
+}
+
+function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: number } {
   const rect = canvas.getBoundingClientRect();
   const px = (ev.clientX - rect.left) * (canvas.width / rect.width);
   const py = (ev.clientY - rect.top) * (canvas.height / rect.height);
-  const tx = Math.floor(px / TILE);
-  const ty = Math.floor(py / TILE);
-  selectedId = snap.agents.find((a) => Math.abs(a.x - tx) <= 0.5 && Math.abs(a.y - ty) <= 0.5)?.id ?? null;
-  updatePanel();
+  return { px, py, tx: Math.floor(px / TILE), ty: Math.floor(py / TILE) };
+}
+
+function findObjectAt(tx: number, ty: number): ObjectView | null {
+  if (!snap) return null;
+  return snap.objects.find((o) => o.type !== 'town' && tx >= o.x && tx < o.x + o.w && ty >= o.y && ty < o.y + o.h) ?? null;
 }
 
 let activeTab = 'detail';
 
 function updatePanel(): void {
   const body = document.getElementById('panel-body')!;
+  if (selectedObjectId) {
+    const o = snap?.objects.find((x) => x.id === selectedObjectId);
+    if (o) {
+      renderObjectCard(body, o);
+      return;
+    }
+    selectedObjectId = null;
+  }
   const a = snap?.agents.find((x) => x.id === selectedId);
   if (!a) {
     activeTab = 'detail';
@@ -148,15 +208,73 @@ function updatePanel(): void {
 }
 
 function renderDetail(body: HTMLElement, a: AgentView): void {
-  const stateName: Record<string, string> = { idle: '待机', thinking: '思考中', moving: '赶路中', acting: '行动中' };
+  const isPlaying = playing.has(a.id);
   body.innerHTML = `
     <h3>${escapeHtml(a.name)}</h3>
     <p><span class="label">职业</span> ${escapeHtml(a.occupation)}</p>
-    <p><span class="label">状态</span> ${escapeHtml(stateName[a.state] ?? a.state)}</p>
+    <p><span class="label">状态</span> ${escapeHtml(STATE_NAME[a.state] ?? a.state)}</p>
     <p><span class="label">位置</span> ${escapeHtml(a.locationName)}</p>
     ${a.verb ? `<p><span class="label">正在</span> ${escapeHtml(a.verb)}</p>` : ''}
     ${a.thought ? `<p><span class="label">想法</span> ${escapeHtml(a.thought)}</p>` : ''}
-    <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>`;
+    <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>
+    <button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button>`;
+  document.getElementById('play-toggle')!.addEventListener('click', () => togglePlay(a.id));
+}
+
+function renderObjectCard(body: HTMLElement, o: ObjectView): void {
+  body.innerHTML = `
+    <h3>${escapeHtml(o.name)}</h3>
+    <p><span class="label">类型</span> ${escapeHtml(TYPE_NAME[o.type] ?? o.type)}</p>
+    <p><span class="label">尺寸</span> ${o.w}×${o.h}</p>`;
+}
+
+// —— 玩家扮演 ——
+function togglePlay(id: string): void {
+  if (playing.has(id)) stopPlay(id);
+  else startPlay(id);
+}
+
+function startPlay(id: string): void {
+  // 若此前在扮演其他 NPC，先清除服务端覆盖
+  if (playTargetId && playTargetId !== id) {
+    void fetch(`/api/player/${encodeURIComponent(playTargetId)}/act`, { method: 'DELETE' });
+    playing.delete(playTargetId);
+  }
+  playing.add(id);
+  playTargetId = id;
+  const input = document.getElementById('play-input') as HTMLInputElement;
+  input.value = '';
+  document.getElementById('play-bar')!.hidden = false;
+  input.focus();
+  updatePanel();
+}
+
+function stopPlay(id: string): void {
+  playing.delete(id);
+  if (playTargetId === id) playTargetId = null;
+  document.getElementById('play-bar')!.hidden = true;
+  void fetch(`/api/player/${encodeURIComponent(id)}/act`, { method: 'DELETE' });
+  updatePanel();
+}
+
+async function sendPlay(): Promise<void> {
+  if (!playTargetId) return;
+  const input = document.getElementById('play-input') as HTMLInputElement;
+  const instruction = input.value.trim();
+  if (!instruction) return;
+  await fetch(`/api/player/${encodeURIComponent(playTargetId)}/act`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction }),
+  });
+  input.value = '';
+}
+
+function bindPlayBar(): void {
+  document.getElementById('play-send')!.addEventListener('click', () => void sendPlay());
+  document.getElementById('play-exit')!.addEventListener('click', () => {
+    if (playTargetId) stopPlay(playTargetId);
+  });
 }
 
 async function renderMind(body: HTMLElement, agentId: string, tab: string): Promise<void> {
@@ -208,17 +326,20 @@ function loop(): void {
   for (const [id, b] of bubbles) {
     if (now > b.until) bubbles.delete(id);
   }
+  if (banner && now > banner.until) banner = null;
   draw();
   requestAnimationFrame(loop);
 }
 
 function draw(): void {
   if (!snap) return;
-  ctx.fillStyle = '#7fb069';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawTerrain(ctx, canvas.width, canvas.height);
   drawObjects();
   drawAgents();
   drawBubbles();
+  applyDayNight(ctx, canvas.width, canvas.height, snap.clock.minutesOfDay);
+  drawTooltip();
+  drawBanner();
 }
 
 function drawObjects(): void {
@@ -226,141 +347,21 @@ function drawObjects(): void {
   const objs = snap!.objects
     .filter((o) => o.type !== 'town')
     .sort((a, b) => (order[a.type] ?? 0) - (order[b.type] ?? 0));
-  for (const o of objs) {
-    const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
-    if (o.type === 'zone') {
-      if (o.id === 'obj:park') drawPark(px, py, pw, ph);
-      else drawPlaza(px, py, pw, ph);
-    } else if (o.type === 'building') {
-      drawBuilding(o, px, py, pw, ph);
-    } else if (o.type === 'room') {
-      ctx.fillStyle = '#d9b48f';
-      ctx.fillRect(px, py, pw, ph);
-      ctx.strokeStyle = '#a97c50';
-      ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
-    } else {
-      ctx.fillStyle = '#8a6f4d';
-      ctx.fillRect(px + 4, py + 4, pw - 8, ph - 8);
-    }
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.font = '11px monospace';
-    ctx.fillText(o.name, px + 3, py + 13);
-  }
-}
-
-function drawPark(px: number, py: number, pw: number, ph: number): void {
-  ctx.fillStyle = '#6aa84f';
-  ctx.fillRect(px, py, pw, ph);
-  for (const [tx, ty] of [[px + 8, py + 8], [px + pw - 14, py + ph - 14]]) {
-    ctx.fillStyle = '#4a3520';
-    ctx.fillRect(tx, ty, 6, 14);
-    ctx.fillStyle = '#2f7a3a';
-    ctx.fillRect(tx - 6, ty - 8, 18, 12);
-  }
-}
-
-function drawPlaza(px: number, py: number, pw: number, ph: number): void {
-  ctx.fillStyle = '#c9b79c';
-  ctx.fillRect(px, py, pw, ph);
-  ctx.strokeStyle = '#a3937a';
-  for (let x = px + 8; x < px + pw; x += 16) {
-    for (let y = py + 8; y < py + ph; y += 16) {
-      ctx.strokeRect(x, y, 16, 16);
-    }
-  }
-  ctx.fillStyle = '#6b9bd1';
-  ctx.fillRect(px + pw / 2 - 8, py + ph / 2 - 8, 16, 16);
-}
-
-function drawBuilding(o: ObjectView, px: number, py: number, pw: number, ph: number): void {
-  ctx.fillStyle = '#e8d5b7';
-  ctx.fillRect(px, py, pw, ph);
-  const roof = ROOFS[hash(o.id) % ROOFS.length];
-  ctx.fillStyle = roof;
-  ctx.fillRect(px, py, pw, 8);
-  ctx.fillStyle = '#7a5a3a';
-  ctx.fillRect(px + pw / 2 - 5, py + ph - 12, 10, 12);
-  if (o.id === 'obj:post_office') {
-    ctx.fillStyle = '#e3b23c';
-    ctx.fillRect(px + pw - 14, py + 4, 10, 10);
-  }
-}
-
-function hash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
+  for (const o of objs) drawObjectDetail(ctx, o, performance.now());
 }
 
 function drawAgents(): void {
   const sorted = [...snap!.agents].sort((a, b) => a.y - b.y);
   for (const a of sorted) {
     const d = display.get(a.id)!;
-    const frame = d.moving ? Math.floor(performance.now() / 300) % 2 : 0;
-    drawSprite(d.x + TILE / 2, d.y + TILE / 2, a.spriteIndex, frame, d.moving, a.state === 'thinking', a.id === selectedId, a.name);
-  }
-}
-
-function drawSprite(cx: number, cy: number, index: number, frame: number, moving: boolean, thinking: boolean, selected: boolean, name: string): void {
-  const p = PALETTES[index % PALETTES.length];
-  const x = Math.round(cx);
-  const y = Math.round(cy) + (moving ? Math.round(Math.sin(performance.now() / 120)) : 0);
-  // 影子
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(x, cy + 6, 5, 2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // 腿
-  ctx.fillStyle = p.bottom;
-  if (frame === 0) {
-    ctx.fillRect(x - 4, y - 4, 3, 5);
-    ctx.fillRect(x + 1, y - 4, 3, 5);
-  } else {
-    ctx.fillRect(x - 5, y - 4, 3, 4);
-    ctx.fillRect(x + 2, y - 4, 3, 5);
-  }
-  // 身体
-  ctx.fillStyle = p.top;
-  ctx.fillRect(x - 4, y - 9, 8, 6);
-  if (index === 0) {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 2, y - 9, 4, 6);
-  }
-  if (index === 3) {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 4, y - 9, 8, 2);
-  }
-  // 头
-  ctx.fillStyle = p.skin;
-  ctx.fillRect(x - 3, y - 16, 6, 6);
-  // 头发
-  ctx.fillStyle = p.hair;
-  ctx.fillRect(x - 3, y - 18, 6, 3);
-  if (index === 2) {
-    ctx.fillStyle = p.top;
-    ctx.fillRect(x - 4, y - 19, 8, 2);
-  }
-  if (index === 3) {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 4, y - 18, 8, 2);
-  }
-  // 眼镜（陈默）
-  if (index === 1) {
-    ctx.fillStyle = '#111111';
-    ctx.fillRect(x - 3, y - 14, 2, 2);
-    ctx.fillRect(x + 1, y - 14, 2, 2);
-  }
-  if (thinking) {
-    ctx.fillStyle = '#ffe9a8';
-    ctx.font = 'bold 14px monospace';
-    ctx.fillText('…', x - 7, y - 22);
-  }
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.font = '10px monospace';
-  ctx.fillText(name, x - ctx.measureText(name).width / 2, y + 13);
-  if (selected) {
-    ctx.strokeStyle = '#ffd700';
-    ctx.strokeRect(x - 6, y - 21, 12, 29);
+    const dir: Dir = d.tx > d.x ? 'right' : d.tx < d.x ? 'left' : d.ty > d.y ? 'down' : d.ty < d.y ? 'up' : 'down';
+    const frame = (d.moving ? Math.floor(performance.now() / 300) % 2 : 0) as 0 | 1;
+    drawNpc(ctx, d.x + TILE / 2, d.y + TILE / 2, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
+    // 正在被玩家扮演的 NPC：名字旁补 🎮 徽标
+    if (playing.has(a.id)) {
+      ctx.font = '10px monospace';
+      ctx.fillText('🎮', d.x + TILE / 2 + ctx.measureText(a.name).width / 2 + 2, d.y + TILE / 2 + 19);
+    }
   }
 }
 
@@ -373,9 +374,13 @@ function drawBubbles(): void {
     }
     const d = display.get(id);
     if (!d) continue;
-    const lines = wrap(b.text, 14);
-    const w = Math.max(...lines.map((l) => l.length)) * 12 + 14;
-    const h = lines.length * 14 + 12;
+    const isDialogue = b.kind === 'chat' || b.kind === 'chat_summary';
+    const prefix = b.kind === 'chat_summary' ? '📜' : b.kind === 'chat' ? '💬' : '💭';
+    const textLines = wrap(b.text, 14);
+    // 对话条：说话人姓名行 + 文本行、宽 180；thought 维持单行
+    const rows = isDialogue ? [`${prefix} ${b.speaker}`, ...textLines] : textLines.map((l) => `${prefix}${l}`);
+    const w = isDialogue ? 180 : Math.max(...textLines.map((l) => l.length)) * 12 + 14;
+    const h = rows.length * 14 + 12;
     const bx = d.x + TILE / 2 - w / 2;
     const by = d.y - 40 - h;
     ctx.fillStyle = 'rgba(255,255,255,0.95)';
@@ -383,11 +388,41 @@ function drawBubbles(): void {
     ctx.strokeStyle = '#333333';
     ctx.strokeRect(bx, by, w, h);
     ctx.fillStyle = '#222222';
-    ctx.font = '12px monospace';
-    lines.forEach((l, i) => {
-      ctx.fillText((b.kind === 'chat' ? '💬' : '💭') + l, bx + 7, by + 16 + i * 14);
+    rows.forEach((l, i) => {
+      ctx.font = i === 0 && isDialogue ? 'bold 12px monospace' : '12px monospace';
+      ctx.fillText(l, bx + 7, by + 16 + i * 14);
     });
   }
+}
+
+function drawTooltip(): void {
+  if (!tooltip) return;
+  ctx.font = '12px monospace';
+  const w = ctx.measureText(tooltip.text).width + 16;
+  const h = 24;
+  let x = tooltip.x + 14;
+  let y = tooltip.y + 14;
+  if (x + w > canvas.width) x = tooltip.x - 14 - w;
+  if (y + h > canvas.height) y = tooltip.y - 14 - h;
+  ctx.fillStyle = 'rgba(20,26,34,0.92)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#3a4657';
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#e8e2d4';
+  ctx.fillText(tooltip.text, x + 8, y + 16);
+}
+
+function drawBanner(): void {
+  if (!banner) return;
+  ctx.font = 'bold 14px monospace';
+  const w = ctx.measureText(banner.text).width + 36;
+  const h = 28;
+  const x = (canvas.width - w) / 2;
+  const y = 8;
+  ctx.fillStyle = 'rgba(227,178,60,0.95)';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillText(banner.text, x + 18, y + 19);
 }
 
 function wrap(text: string, max: number): string[] {

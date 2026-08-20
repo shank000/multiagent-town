@@ -3,6 +3,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { TimeEngine } from '../core/time';
 import type { WorldState } from '../core/world';
@@ -10,6 +11,7 @@ import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
+import type { PlayerDirector } from '../engine/player';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -18,6 +20,7 @@ export interface TownWebOptions {
   loop: WorldLoop;
   log: EventLog;
   mind?: MindEngine;    // M1 认知核心（心智面板数据源）
+  player?: PlayerDirector;    // 玩家扮演
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   port?: number;        // 默认 0 = 系统随机端口
@@ -32,6 +35,7 @@ const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
 };
 
 export async function createTownServer(opts: TownWebOptions): Promise<TownWebServer> {
@@ -79,7 +83,14 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         return;
       }
       if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
-        const id = decodeURIComponent(url.pathname.slice('/api/agents/'.length, -'/mind'.length));
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/agents/'.length, -'/mind'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
         if (!opts.mind) {
           res.writeHead(404);
           res.end('mind 未启用');
@@ -97,6 +108,62 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(body));
+        return;
+      }
+      if (url.pathname.startsWith('/api/player/') && url.pathname.endsWith('/act')) {
+        let id: string;
+        try {
+          id = decodeURIComponent(url.pathname.slice('/api/player/'.length, -'/act'.length));
+        } catch {
+          res.writeHead(400);
+          res.end('bad id');
+          return;
+        }
+        if (req.method === 'POST') {
+          const body = (await readBody(req)) as { instruction?: unknown };
+          const instruction = typeof body.instruction === 'string' ? body.instruction.slice(0, 120) : '';
+          if (!instruction) {
+            res.writeHead(400);
+            res.end('指令不能为空');
+            return;
+          }
+          if (!opts.player) {
+            res.writeHead(404);
+            res.end('扮演未启用');
+            return;
+          }
+          opts.player.act(id, instruction, time.state.totalMinutes);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (req.method === 'DELETE') {
+          opts.player?.clear(id);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+      }
+      if (url.pathname === '/api/broadcast' && req.method === 'POST') {
+        const body = (await readBody(req)) as { text?: unknown };
+        const text = typeof body.text === 'string' ? body.text.slice(0, 120) : '';
+        if (!text) {
+          res.writeHead(400);
+          res.end('广播内容不能为空');
+          return;
+        }
+        log.addEvent({
+          id: randomUUID(),
+          type: 'broadcast',
+          actorId: null,
+          targetIds: world.allAgents().map((a) => a.id),
+          description: `小镇广播：${text}`,
+          location: null,
+          gameTime: time.state.totalMinutes,
+          payload: { kind: 'broadcast', text },
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
       if (url.pathname === '/api/world/control' && req.method === 'POST') {
@@ -121,6 +188,15 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true }));
         return;
+      }
+      if (url.pathname.startsWith('/assets/') && req.method === 'GET') {
+        const name = url.pathname.slice('/assets/'.length);
+        if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9]+)?$/.test(name)) {
+          res.writeHead(404);
+          res.end('not found');
+          return;
+        }
+        return await file(res, resolve(publicDir, 'assets', name));
       }
       if (url.pathname === '/') return await file(res, resolve(publicDir, 'index.html'));
       if (url.pathname === '/client.js' || url.pathname === '/style.css') {

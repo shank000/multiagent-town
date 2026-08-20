@@ -12,6 +12,7 @@ import type { LLMRequest } from '../llm/types';
 import type { WorldState } from './world';
 import type { EventLog } from '../store/events';
 import type { MindEngine } from '../engine/mind';
+import type { PlayerDirector } from '../engine/player';
 
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
@@ -23,12 +24,14 @@ interface PendingDecision {
 
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
+  private blockCount = new Map<string, number>();
 
   constructor(
     private llm: LLMGateway,
     private world: WorldState,
     private log: EventLog,
-    private mind?: MindEngine
+    private mind?: MindEngine,
+    private player?: PlayerDirector
   ) {}
 
   /** 每 tick 对每个 agent 调用一次；dt = 本次 tick 推进的游戏分钟数 */
@@ -82,7 +85,12 @@ export class AgentExecutor {
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
       objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
-      mockContext: { persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights, agenda },
+      playerInstruction: this.player?.current(agent.id, now) ?? null,
+      mockContext: {
+        persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights, agenda,
+        playerInstruction: this.player?.current(agent.id, now) ?? null,
+        objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
+      },
     });
     const req: LLMRequest = {
       tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true, maxTokens: 512,
@@ -114,8 +122,16 @@ export class AgentExecutor {
     const here = { x: agent.x, y: agent.y };
     const isHere = !tile || (tile.x === here.x && tile.y === here.y);
     if ((d.action.type === 'move_to' || d.action.type === 'interact') && !isHere) {
+      const path = this.world.findPath(here, tile!);
+      if (!path) {
+        this.log.addEvent(this.makeEvent('system', agent, d, now, `找不到通往「${this.targetName(d)}」的路，先休息一下。`));
+        agent.state = 'idle';
+        agent.action = null;
+        agent.lastDecisionAt = now;
+        return;
+      }
       agent.state = 'moving';
-      agent.path = this.world.manhattanPath(here, tile!);
+      agent.path = path;
       agent.pathProgress = 0;
       return;
     }
@@ -138,7 +154,29 @@ export class AgentExecutor {
   }
 
   private stepMove(agent: Agent, dt: number, now: number): void {
-    agent.pathProgress += dt * MOVE_SPEED_TILES_PER_MIN;
+    const nextProgress = agent.pathProgress + dt * MOVE_SPEED_TILES_PER_MIN;
+    const nextIdx = Math.min(Math.floor(nextProgress), agent.path.length - 1);
+    const nextTile = agent.path[nextIdx];
+    // 排队让行：下一格被 moving/acting 的他人占用则本 tick 等待（idle 者不阻塞，防死锁）
+    const occupied = this.world.allAgents().some(
+      (other) => other.id !== agent.id && other.x === nextTile.x && other.y === nextTile.y && (other.state === 'moving' || other.state === 'acting')
+    );
+    if (occupied) {
+      const blocked = (this.blockCount.get(agent.id) ?? 0) + 1;
+      if (blocked >= 4) {
+        // 连续受阻：判定死锁，放弃本次移动，休息后再决策
+        this.blockCount.delete(agent.id);
+        this.log.addEvent(this.makeEvent('system', agent, agent.action!, now, '被堵住了，先休息一下。'));
+        agent.state = 'idle';
+        agent.action = null;
+        agent.lastDecisionAt = now;
+        return;
+      }
+      this.blockCount.set(agent.id, blocked);
+      return;
+    }
+    this.blockCount.delete(agent.id);
+    agent.pathProgress = nextProgress;
     const idx = Math.min(Math.floor(agent.pathProgress), agent.path.length - 1);
     const tile = agent.path[idx];
     agent.x = tile.x;

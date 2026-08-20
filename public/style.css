@@ -4,13 +4,15 @@ body {
   font-family: "Microsoft YaHei", "PingFang SC", monospace;
   display: flex; flex-direction: column; height: 100vh;
 }
-#hud { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: #141a22; }
+#hud { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: linear-gradient(180deg, #1a2230, #141a22); box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
 #clock { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
 #controls button {
   margin-left: 6px; padding: 4px 12px; border: 1px solid #3a4657; border-radius: 4px;
   background: #2a3547; color: #e8e2d4; cursor: pointer; font-size: 14px;
+  transition: background 0.15s;
 }
 #controls button:hover { background: #3b4a63; }
+#controls button.active { background: #4a5f83; }
 main { flex: 1; display: flex; gap: 12px; padding: 12px; min-height: 0; }
 canvas {
   image-rendering: pixelated;
@@ -37,3 +39,23 @@ canvas {
 #panel-body .ref-item { padding-left: 0; margin: 6px 0; font-size: 12px; }
 #panel-body .ref-item .ins { padding-left: 14px; }
 #panel-body .dl-item { font-size: 12px; margin: 4px 0; }
+#tooltip {
+  position: absolute; display: none; background: rgba(20,26,34,0.92);
+  border: 1px solid #3a4657; border-radius: 4px; padding: 4px 8px;
+  font-size: 12px; pointer-events: none; white-space: pre-line;
+}
+#banner {
+  position: absolute; top: 52px; left: 50%; transform: translateX(-50%);
+  background: rgba(227,178,60,0.95); color: #1a1a1a; padding: 6px 18px;
+  border-radius: 6px; font-size: 14px; font-weight: bold; display: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+#play-bar { display: flex; gap: 6px; margin-top: 10px; }
+#play-bar[hidden] { display: none; }
+#play-input { flex: 1; background: #1a2230; color: #e8e2d4; border: 1px solid #3a4657; border-radius: 4px; padding: 4px 8px; }
+#play-bar button { background: #2a3547; color: #e8e2d4; border: 1px solid #3a4657; border-radius: 4px; cursor: pointer; }
+#play-toggle {
+  margin-top: 4px; padding: 5px 12px; border: 1px solid #3a4657; border-radius: 4px;
+  background: #2a3547; color: #e8e2d4; cursor: pointer; font-size: 13px;
+}
+#play-toggle:hover { background: #3b4a63; }

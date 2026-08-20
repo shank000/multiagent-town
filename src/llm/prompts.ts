@@ -23,6 +23,8 @@ export interface MockContextPayload {
   memories: MemoryBrief[];
   insights: string[];
   agenda: string | null;
+  playerInstruction: string | null;
+  objects: { id: string; name: string }[];
 }
 
 export interface ActionDecisionInput {
@@ -31,6 +33,7 @@ export interface ActionDecisionInput {
   minuteOfDay: number;
   locationName: string;
   objects: { id: string; name: string }[];
+  playerInstruction: string | null;
   mockContext: MockContextPayload;
 }
 
@@ -58,6 +61,7 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
     `今日计划（当前时段）：${agendaText}`,
     `近期记忆：\n${memLines}`,
     `自我认知（反思）：${insightText}`,
+    `玩家指令（最高优先级，尽力执行）：${input.playerInstruction ?? '（无）'}`,
     `决定接下来 5~15 分钟做什么。地点必须从给定对象里选。`,
     `只输出 JSON：{"thought": "...", "action": {"type": "move_to|interact|idle", "target": "<object_id 或 null>", "verb": "..."}, "duration_minutes": <int>}`,
   ].join('\n');

@@ -7,6 +7,7 @@ export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
   { id: 'obj:plaza', name: '中央广场', type: 'zone', parentId: 'obj:town', x: 4, y: 2, w: 3, h: 3 },
   { id: 'obj:park', name: '湖边公园', type: 'zone', parentId: 'obj:town', x: 8, y: 5, w: 3, h: 2 },
+  { id: 'obj:lake', name: '湖边', type: 'zone', parentId: 'obj:town', x: 8, y: 7, w: 3, h: 1 },
   { id: 'obj:cafe', name: '林间咖啡馆', type: 'building', parentId: 'obj:town', x: 2, y: 1, w: 2, h: 2 },
   { id: 'obj:cafe_counter', name: '咖啡馆吧台', type: 'room', parentId: 'obj:cafe', x: 2, y: 1, w: 1, h: 1 },
   { id: 'obj:bookstore', name: '默语书店', type: 'building', parentId: 'obj:town', x: 6, y: 1, w: 2, h: 2 },
