@@ -112,6 +112,14 @@ function hourAgenda(routine: RoutineSlot[], hour: number): { time: string; actio
 }
 
 function dialogueTurn(ctx: Record<string, unknown>): { utterance: string; end_dialogue: boolean } {
+  const rumors = Array.isArray(ctx.rumors) ? (ctx.rumors as { id: string; content: string }[]) : [];
+  const affection = Number(ctx.affection ?? 0);
+  const honesty = Number(ctx.honesty ?? 0.5);
+  if (rumors.length && affection >= 0.3) {
+    const rumor = rumors[0];
+    const text = honesty >= 0.6 ? rumor.content : `听说${rumor.content}（转述）`;
+    return { utterance: text, end_dialogue: Number(ctx.turns ?? 0) >= 2 };
+  }
   const pool = Array.isArray(ctx.speakerPool) && (ctx.speakerPool as string[]).length ? (ctx.speakerPool as string[]) : ['你好呀！', '今天天气真不错。'];
   const turns = Number(ctx.turns ?? 0);
   return { utterance: pool[turns % pool.length], end_dialogue: turns >= 3 };

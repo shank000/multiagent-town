@@ -41,7 +41,7 @@ test('reflection 模板：3 问 + 证据洞察', async () => {
 });
 
 test('dialogue 与 summary：轮换台词、4 句后结束', async () => {
-  const ctx = { speakerName: '林晚晴', speakerPool: ['你好呀！', '咖啡很香。', '常来坐坐。', '再见啦。'], otherName: '陈默', goal: '经营咖啡馆', turns: 0 };
+  const ctx = { speakerName: '林晚晴', speakerPool: ['你好呀！', '咖啡很香。', '常来坐坐。', '再见啦。'], otherName: '陈默', goal: '经营咖啡馆', turns: 0, rumors: [], affection: 0, honesty: 0.5 };
   const r1 = await g.complete({ tier: 'large', template: DIALOGUE_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueMessages(ctx) });
   const d1 = r1.parsed as { utterance: string; end_dialogue: boolean };
   assert.equal(d1.utterance, '你好呀！');

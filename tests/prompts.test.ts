@@ -69,7 +69,7 @@ test('提示词 → mock 网关端到端产出合法动作', async () => {
 });
 
 test('对话提示词允许结束对话（end_dialogue 非写死 false）', () => {
-  const messages = dialogueMessages({ speakerName: '甲', speakerPool: ['你好'], otherName: '乙', goal: '闲聊', turns: 0 });
+  const messages = dialogueMessages({ speakerName: '甲', speakerPool: ['你好'], otherName: '乙', goal: '闲聊', turns: 0, rumors: [], affection: 0, honesty: 0.5 });
   const sys = messages[0].content;
   assert.ok(sys.includes('end_dialogue": <true|false>'));
   assert.ok(!sys.includes('"end_dialogue": false"'));

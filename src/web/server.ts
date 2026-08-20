@@ -10,6 +10,7 @@ import type { WorldState } from '../core/world';
 import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
 import type { RelationshipStore } from '../store/relationships';
+import type { RumorTracker } from '../engine/rumors';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
@@ -24,6 +25,7 @@ export interface TownWebOptions {
   mind?: MindEngine;    // M1 认知核心（心智面板数据源）
   player?: PlayerDirector;    // 玩家扮演
   rels?: RelationshipStore;  // M3 关系存储（声望/关系 API 数据源）
+  rumors?: RumorTracker;  // M3 谣言追踪（种子 API 数据源）
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   port?: number;        // 默认 0 = 系统随机端口
@@ -181,6 +183,25 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (url.pathname === '/api/rumor' && req.method === 'POST') {
+        const body = (await readBody(req)) as { text?: unknown; sourceId?: unknown };
+        const text = typeof body.text === 'string' ? body.text.slice(0, 120) : '';
+        const sourceId = typeof body.sourceId === 'string' ? body.sourceId : world.allAgents()[0]?.id;
+        if (!text || !sourceId || !opts.rumors) {
+          res.writeHead(400);
+          res.end('谣言内容/来源无效');
+          return;
+        }
+        const id = opts.rumors.seed(sourceId, text, time.state.totalMinutes);
+        log.addEvent({
+          id: randomUUID(), type: 'system', actorId: sourceId, targetIds: [],
+          description: `「${world.getAgent(sourceId)?.name ?? sourceId}」听说了一个秘密：${text}`, location: null,
+          gameTime: time.state.totalMinutes, payload: { kind: 'rumor_seed', rumorId: id, text },
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, id }));
         return;
       }
       if (url.pathname === '/api/world/control' && req.method === 'POST') {

@@ -9,6 +9,7 @@ import type { RelationshipStore } from '../store/relationships';
 import type { RumorTracker } from './rumors';
 import type { LLMGateway } from '../llm/gateway';
 import { DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE, dialogueMessages, dialogueSummaryMessages } from '../llm/prompts';
+import { personalityOf } from './town-model';
 
 interface Session {
   a: string; aName: string; b: string; bName: string;
@@ -82,12 +83,18 @@ export class DialogueEngine {
     this.pending.set(key, entry);
     void (async () => {
       try {
+        const carried = this.rumors ? this.rumors.carriedBy(speaker.id).map((r) => ({ id: r.id, content: r.content })) : [];
+        const affection = this.rels ? this.rels.getOrCreate(speaker.id, other.id).affection : 0;
+        const honesty = personalityOf(speaker.persona).honesty;
         const ctx = {
           speakerName: speaker.name,
           speakerPool: speaker.persona.greetingPool ?? [],
           otherName: other.name,
           goal: speaker.persona.goals[0] ?? '',
           turns: s.turns.length,
+          rumors: carried,
+          affection,
+          honesty,
         };
         const res = await this.llm.complete({ tier: 'large', template: DIALOGUE_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueMessages(ctx) });
         const parsed = res.parsed as { utterance?: string; end_dialogue?: boolean } | null;
@@ -114,6 +121,14 @@ export class DialogueEngine {
       payload: { kind: 'chat', line: u.utterance, fromId, toId, conversationId: s.conversationId },
     });
     this.store.addMessage({ eventId: null, fromAgent: fromId, toAgent: toId, content: u.utterance, gameTime: now });
+    if (this.rumors) {
+      const carried = this.rumors.carriedBy(fromId);
+      for (const r of carried) {
+        if (u.utterance.includes(r.content.slice(0, 8))) {
+          this.rumors.spread(fromId, toId, r.id, u.utterance, now);
+        }
+      }
+    }
     if (u.end) void this.finish(s, now);
   }
 
