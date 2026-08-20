@@ -34,12 +34,14 @@ test('M2 验收：寻路经门进吧台、玩家指令执行、广播全员记�
     const base = `http://127.0.0.1:${server.port}`;
 
     // ① 寻路：咖啡馆吧台在房间瓦片（开口），从家出发存在合法路径且全程无墙
-    const lin = world.allAgents()[0]; // 林晚晴，家 (2,7)
+    const lin = world.allAgents()[0]; // 林晚晴，家中心 (4,4)
     const path = world.findPath({ x: lin.x, y: lin.y }, world.targetTile('obj:cafe_counter')!)!;
     assert.ok(path, '应找到通往吧台的路');
     for (const t of path) assert.equal(world.walkable(t.x, t.y), true, `路径含墙 (${t.x},${t.y})`);
-    assert.equal(world.walkable(3, 1), false); // 顶边是墙
-    assert.equal(world.walkable(3, 2), true);  // 门开口
+    const cafe = world.getObject('obj:cafe')!;
+    const door = { x: cafe.x + Math.floor(cafe.w / 2), y: cafe.y + cafe.h - 1 };
+    assert.equal(world.walkable(door.x, door.y), true); // 门开口（底边中点）
+    assert.equal(world.walkable(cafe.x, cafe.y), false); // 左上角顶边是墙（无房间覆盖）
 
     // ② 玩家指令：让沈屿去书店（含「默语书店」对象名）
     const shen = world.allAgents().find((a) => a.name === '沈屿')!;

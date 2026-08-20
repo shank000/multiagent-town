@@ -1,23 +1,41 @@
-// 小镇种子数据：对象树（12×8 瓦片）+ 4 个 persona（M0 用结构化作息代替规划引擎）
+// 小镇种子数据：对象树（40×40 瓦片）+ 4 个 persona（M0 用结构化作息代替规划引擎）
 
 import type { Agent, Persona, WorldObject } from '../core/types';
 import { WorldState } from '../core/world';
 
 export const TOWN_OBJECTS: WorldObject[] = [
-  { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
-  { id: 'obj:plaza', name: '中央广场', type: 'zone', parentId: 'obj:town', x: 4, y: 2, w: 3, h: 3 },
-  { id: 'obj:park', name: '湖边公园', type: 'zone', parentId: 'obj:town', x: 8, y: 5, w: 3, h: 2 },
-  { id: 'obj:lake', name: '湖边', type: 'zone', parentId: 'obj:town', x: 8, y: 7, w: 3, h: 1 },
-  { id: 'obj:cafe', name: '林间咖啡馆', type: 'building', parentId: 'obj:town', x: 2, y: 1, w: 2, h: 2 },
-  { id: 'obj:cafe_counter', name: '咖啡馆吧台', type: 'room', parentId: 'obj:cafe', x: 2, y: 1, w: 1, h: 1 },
-  { id: 'obj:bookstore', name: '默语书店', type: 'building', parentId: 'obj:town', x: 6, y: 1, w: 2, h: 2 },
-  { id: 'obj:bookstore_counter', name: '书店柜台', type: 'room', parentId: 'obj:bookstore', x: 6, y: 1, w: 1, h: 1 },
-  { id: 'obj:park_easel', name: '公园画架', type: 'furniture', parentId: 'obj:park', x: 9, y: 6, w: 1, h: 1 },
-  { id: 'obj:home_lin', name: '林晚晴的家', type: 'building', parentId: 'obj:town', x: 1, y: 6, w: 2, h: 2 },
-  { id: 'obj:home_chen', name: '陈默的家', type: 'building', parentId: 'obj:town', x: 9, y: 1, w: 2, h: 2 },
-  { id: 'obj:home_shen', name: '沈屿的家', type: 'building', parentId: 'obj:town', x: 10, y: 6, w: 2, h: 2 },
-  { id: 'obj:home_zhou', name: '周岚的家', type: 'building', parentId: 'obj:town', x: 0, y: 0, w: 2, h: 2 },
-  { id: 'obj:post_office', name: '小镇邮局', type: 'building', parentId: 'obj:town', x: 4, y: 5, w: 2, h: 2 },
+  { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 40, h: 40 },
+  // 商业街
+  { id: 'obj:cafe', name: '林间咖啡馆', type: 'building', parentId: 'obj:town', x: 8, y: 8, w: 4, h: 4 },
+  { id: 'obj:cafe_counter', name: '咖啡馆吧台', type: 'room', parentId: 'obj:cafe', x: 9, y: 8, w: 2, h: 1 },
+  { id: 'obj:cafe_table1', name: '咖啡桌', type: 'furniture', parentId: 'obj:cafe', x: 8, y: 9, w: 1, h: 1 },
+  { id: 'obj:cafe_table2', name: '咖啡桌', type: 'furniture', parentId: 'obj:cafe', x: 11, y: 9, w: 1, h: 1 },
+  { id: 'obj:bookstore', name: '默语书店', type: 'building', parentId: 'obj:town', x: 18, y: 8, w: 4, h: 4 },
+  { id: 'obj:bookstore_counter', name: '书店柜台', type: 'room', parentId: 'obj:bookstore', x: 19, y: 8, w: 2, h: 1 },
+  { id: 'obj:post_office', name: '小镇邮局', type: 'building', parentId: 'obj:town', x: 28, y: 8, w: 4, h: 4 },
+  { id: 'obj:bakery', name: '晨光面包店', type: 'building', parentId: 'obj:town', x: 32, y: 18, w: 4, h: 4 },
+  { id: 'obj:clinic', name: '小镇诊所', type: 'building', parentId: 'obj:town', x: 4, y: 18, w: 4, h: 4 },
+  // 公共区域
+  { id: 'obj:plaza', name: '中央广场', type: 'zone', parentId: 'obj:town', x: 18, y: 18, w: 6, h: 6 },
+  { id: 'obj:park', name: '湖边公园', type: 'zone', parentId: 'obj:town', x: 6, y: 26, w: 10, h: 6 },
+  { id: 'obj:lake', name: '湖边', type: 'zone', parentId: 'obj:town', x: 16, y: 28, w: 4, h: 2 },
+  { id: 'obj:park_easel', name: '公园画架', type: 'furniture', parentId: 'obj:park', x: 7, y: 27, w: 1, h: 1 },
+  { id: 'obj:farm', name: '晨光农田', type: 'zone', parentId: 'obj:town', x: 24, y: 24, w: 8, h: 6 },
+  { id: 'obj:path_main', name: '主街', type: 'zone', parentId: 'obj:town', x: 8, y: 16, w: 24, h: 2 },
+  // 住宅（四角）
+  { id: 'obj:home_lin', name: '林晚晴的家', type: 'building', parentId: 'obj:town', x: 2, y: 2, w: 4, h: 4 },
+  { id: 'obj:home_chen', name: '陈默的家', type: 'building', parentId: 'obj:town', x: 34, y: 2, w: 4, h: 4 },
+  { id: 'obj:home_shen', name: '沈屿的家', type: 'building', parentId: 'obj:town', x: 2, y: 34, w: 4, h: 4 },
+  { id: 'obj:home_zhou', name: '周岚的家', type: 'building', parentId: 'obj:town', x: 34, y: 34, w: 4, h: 4 },
+  // 家具（床 + 沙发，各户一件）
+  { id: 'obj:bed_lin', name: '床', type: 'furniture', parentId: 'obj:home_lin', x: 3, y: 2, w: 1, h: 2 },
+  { id: 'obj:bed_chen', name: '床', type: 'furniture', parentId: 'obj:home_chen', x: 35, y: 2, w: 1, h: 2 },
+  { id: 'obj:bed_shen', name: '床', type: 'furniture', parentId: 'obj:home_shen', x: 3, y: 34, w: 1, h: 2 },
+  { id: 'obj:bed_zhou', name: '床', type: 'furniture', parentId: 'obj:home_zhou', x: 35, y: 34, w: 1, h: 2 },
+  { id: 'obj:sofa_lin', name: '沙发', type: 'furniture', parentId: 'obj:home_lin', x: 2, y: 4, w: 2, h: 1 },
+  { id: 'obj:sofa_chen', name: '沙发', type: 'furniture', parentId: 'obj:home_chen', x: 34, y: 4, w: 2, h: 1 },
+  { id: 'obj:sofa_shen', name: '沙发', type: 'furniture', parentId: 'obj:home_shen', x: 2, y: 36, w: 2, h: 1 },
+  { id: 'obj:sofa_zhou', name: '沙发', type: 'furniture', parentId: 'obj:home_zhou', x: 34, y: 36, w: 2, h: 1 },
 ];
 
 export const LIN_PERSONA: Persona = {

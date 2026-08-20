@@ -1,10 +1,10 @@
-// 世界状态：agent 集合 + 对象树 + 12×8 网格
+// 世界状态：agent 集合 + 对象树 + 40×40 网格
 
 import type { Agent, Tile, WorldObject } from './types';
 import { findPath } from './pathfinding';
 
-export const GRID_W = 12;
-export const GRID_H = 8;
+export const GRID_W = 40;
+export const GRID_H = 40;
 
 export class WorldState {
   private agents = new Map<string, Agent>();
