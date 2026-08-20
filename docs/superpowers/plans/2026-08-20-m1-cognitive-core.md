@@ -974,14 +974,13 @@ export class Planner {
 
 import { MINUTES_PER_DAY } from '../core/time';
 import type { WorldState } from '../core/world';
+import type { Agent } from '../core/types';
 import type { DbHandle } from '../store/db';
 import type { EventLog } from '../store/events';
 import type { LLMGateway } from '../llm/gateway';
 import { MemoryStore } from '../store/memory';
 import { Planner } from '../llm/planner';
 import { MemoryWriter } from './memory-writer';
-import type { ReflectionEngine } from './reflection';
-import type { DialogueEngine } from './dialogue';
 
 export interface MindEngineOptions {
   db: DbHandle;
@@ -989,21 +988,23 @@ export interface MindEngineOptions {
   log: EventLog;
 }
 
+/** 反思/对话先以结构化接口占位（Task 6/7 装配为具体实现，避免跨任务 import） */
+interface ReflectionLike { tick(agent: Agent, day: number, now: number): void }
+interface DialogueLike { tick(world: WorldState, dt: number, now: number): void }
+
 export class MindEngine {
   readonly store: MemoryStore;
   readonly planner: Planner;
-  readonly reflection?: ReflectionEngine;
-  readonly dialogue?: DialogueEngine;
+  reflection?: ReflectionLike;
+  dialogue?: DialogueLike;
   private writer: MemoryWriter;
   private lastMinute = 0;
 
   constructor(opts: MindEngineOptions) {
     this.store = new MemoryStore(opts.db);
     this.planner = new Planner(opts.llm, this.store);
-    // 反思与对话在后续任务装配（避免循环依赖），先以可选注入：
-    // 外部可通过 (mind as { reflection?: ... }).reflection = ... 注入，或后续任务改构造器
-    this.reflection = undefined;
-    this.dialogue = undefined;
+    this.reflection = undefined; // Task 6 装配
+    this.dialogue = undefined;   // Task 7 装配
     this.writer = new MemoryWriter(this.store, opts.llm);
     this.writer.attach(opts.log);
   }
@@ -1026,7 +1027,7 @@ export class MindEngine {
 }
 ```
 
-（注：Task 6/7 会把 ReflectionEngine/DialogueEngine 装配进来——届时把 `readonly reflection?: ...` 与 `readonly dialogue?: ...` 改为构造器参数注入，见相应任务步骤。）
+（注：Task 6/7 会把结构化占位替换为具体 ReflectionEngine/DialogueEngine 并改字段为必填，见相应任务步骤。）
 
 - [ ] **Step 5: 修改 src/engine/loop.ts（mind 注入）**
 
@@ -1315,9 +1316,9 @@ function reflectionEvent(agent: Agent, insight: string, day: number, now: number
 
 - [ ] **Step 4: 修改 src/engine/mind.ts（装配 reflection）**
 
-`readonly reflection?: ReflectionEngine;` → `readonly reflection: ReflectionEngine;`
-构造器内 `this.reflection = undefined;` → `this.reflection = new ReflectionEngine(opts.llm, this.store, opts.log);`
-import 加：`import { ReflectionEngine } from './reflection';`
+`reflection?: ReflectionLike;` → `readonly reflection: ReflectionEngine;`
+构造器内 `this.reflection = undefined; // Task 6 装配` → `this.reflection = new ReflectionEngine(opts.llm, this.store, opts.log);`
+import 加：`import { ReflectionEngine } from './reflection';`（并删除 ReflectionLike 接口）
 
 - [ ] **Step 5: 运行确认通过 + 全量 + 类型检查**
 
@@ -1577,9 +1578,9 @@ import 加：`import type { DialogueEngine } from './dialogue';`
 
 - [ ] **Step 5: 修改 src/engine/mind.ts（装配 dialogue）**
 
-`readonly dialogue?: DialogueEngine;` → `readonly dialogue: DialogueEngine;`
-构造器内 `this.dialogue = undefined;` → `this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log);`
-import 改为实导入：`import { DialogueEngine } from './dialogue';`
+`dialogue?: DialogueLike;` → `readonly dialogue: DialogueEngine;`
+构造器内 `this.dialogue = undefined;   // Task 7 装配` → `this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log);`
+import 加：`import { DialogueEngine } from './dialogue';`（并删除 DialogueLike 接口）
 
 - [ ] **Step 6: 运行确认通过 + 全量 + 类型检查**
 
