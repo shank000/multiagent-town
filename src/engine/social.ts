@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, GameEvent } from '../core/types';
 import type { EventLog } from '../store/events';
+import type { DialogueEngine } from './dialogue';
 
 export interface SocialConfig {
   minProximityMinutes?: number; // 相邻累计多少游戏分钟触发（默认 3）
@@ -17,7 +18,7 @@ export class SocialTicker {
   private nextAt = new Map<string, number>();
   private triggerCount = new Map<string, number>();
 
-  constructor(private log: EventLog, private cfg: SocialConfig = {}) {}
+  constructor(private log: EventLog, private cfg: SocialConfig = {}, private dialogue?: DialogueEngine) {}
 
   /** 每 tick 调用一次；dt = 本次推进的游戏分钟数 */
   tick(agents: Agent[], dt: number, now: number): void {
@@ -35,12 +36,16 @@ export class SocialTicker {
           continue;
         }
         if (this.proximity.get(key)! >= min && now >= (this.nextAt.get(key) ?? 0)) {
-          const count = this.triggerCount.get(key) ?? 0;
-          const line = pickLine(a, count);
-          this.log.addEvent(makeChatEvent(a, b, line, now));
+          if (this.dialogue && !this.dialogue.isActive(a.id, b.id)) {
+            this.dialogue.start(a, b, now);
+          } else {
+            const count = this.triggerCount.get(key) ?? 0;
+            const line = pickLine(a, count);
+            this.log.addEvent(makeChatEvent(a, b, line, now));
+            this.triggerCount.set(key, count + 1);
+          }
           this.proximity.set(key, 0);
           this.nextAt.set(key, now + cooldown);
-          this.triggerCount.set(key, count + 1);
         }
       }
     }
