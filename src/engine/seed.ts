@@ -109,8 +109,8 @@ export const SHEN_PERSONA: Persona = {
   goals: ['完成小镇系列画展', '画出林晚晴开咖啡馆的样子'],
   speechStyle: '热情洋溢，喜欢描述颜色',
   routine: [
-    { from: 480, to: 720, type: 'interact', target: 'obj:park_easel', verb: '在公园写生' },
-    { from: 900, to: 1020, type: 'interact', target: 'obj:cafe', verb: '在咖啡馆喝咖啡画速写' },
+    { from: 480, to: 660, type: 'interact', target: 'obj:park_easel', verb: '在公园写生' },
+    { from: 660, to: 780, type: 'interact', target: 'obj:cafe_table2', verb: '在咖啡馆喝咖啡画速写' },
     { from: 1020, to: 1080, type: 'interact', target: 'obj:sofa_shen', verb: '在沙发上小憩' },
     { from: 1320, to: 1440, type: 'interact', target: 'obj:bed_shen', verb: '睡觉' },
     { from: 0, to: 420, type: 'interact', target: 'obj:bed_shen', verb: '睡觉' },
@@ -133,9 +133,9 @@ export const ZHOU_PERSONA: Persona = {
   routine: [
     { from: 480, to: 540, type: 'interact', target: 'obj:post_office', verb: '分拣信件' },
     { from: 540, to: 660, type: 'interact', target: 'obj:plaza', verb: '到广场送信' },
-    { from: 660, to: 720, type: 'interact', target: 'obj:cafe', verb: '到咖啡馆送信' },
+    { from: 660, to: 720, type: 'interact', target: 'obj:cafe_counter', verb: '到咖啡馆吧台送信' },
     { from: 900, to: 960, type: 'interact', target: 'obj:bookstore', verb: '到书店送信' },
-    { from: 1020, to: 1080, type: 'interact', target: 'obj:sofa_zhou', verb: '在沙发上整理信件' },
+    { from: 1140, to: 1200, type: 'interact', target: 'obj:sofa_zhou', verb: '在沙发上整理信件' },
     { from: 1320, to: 1440, type: 'interact', target: 'obj:bed_zhou', verb: '睡觉' },
     { from: 0, to: 420, type: 'interact', target: 'obj:bed_zhou', verb: '睡觉' },
   ],
