@@ -54,25 +54,24 @@ const OBJS: WorldObject[] = [
 
 const world = () => new WorldState(OBJS, []);
 
-test('walkable：室内可通行、边界被挡、门开口', () => {
+test('walkable：房间开口可通行、门开口、其余边界被挡', () => {
   const w = world();
-  assert.equal(w.walkable(2, 1), true);  // 室内（吧台）
-  assert.equal(w.walkable(2, 1), true);
-  assert.equal(w.walkable(3, 2), true);  // 门
+  assert.equal(w.walkable(2, 1), true);  // 吧台（房间瓦片开口）
+  assert.equal(w.walkable(3, 2), true);  // 门（底边中点）
+  assert.equal(w.walkable(3, 1), false); // 顶边（非门非房间）
   assert.equal(w.walkable(2, 2), false); // 底边（非门）
-  assert.equal(w.walkable(3, 1), false); // 顶边
   assert.equal(w.walkable(2, 0), true);  // 咖啡馆外草地
   assert.equal(w.walkable(-1, 0), false); // 越界
 });
 
-test('findPath 从馆外经门进吧台', () => {
+test('findPath 从馆外进吧台：路径全可通行、逐格相邻', () => {
   const w = world();
   const path = w.findPath({ x: 4, y: 4 }, { x: 2, y: 1 })!;
   assert.ok(path, '应有路径');
   assert.deepEqual(path[0], { x: 4, y: 4 });
   assert.deepEqual(path[path.length - 1], { x: 2, y: 1 });
-  // 必经门 (3,2)
-  assert.ok(path.some((t) => t.x === 3 && t.y === 2), '路径应经过门');
+  // 全程无墙
+  for (const t of path) assert.equal(w.walkable(t.x, t.y), true, `路径含墙 (${t.x},${t.y})`);
   // 相邻步差 1（无穿墙）
   for (let i = 1; i < path.length; i++) {
     const d = Math.abs(path[i].x - path[i - 1].x) + Math.abs(path[i].y - path[i - 1].y);
@@ -120,14 +119,15 @@ export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null
   gScore.set(startKey, 0);
   open.set(startKey, { tile: from, g: 0, f: h(from, to) });
   while (open.size) {
-    let curKey = startKey;
-    let cur = open.get(startKey)!;
+    let curKey = '';
+    let cur: { tile: Tile; g: number; f: number } | undefined;
     for (const [k, v] of open) {
-      if (v.f < cur.f || (v.f === cur.f && k < curKey)) {
+      if (!cur || v.f < cur.f || (v.f === cur.f && k < curKey)) {
         curKey = k;
         cur = v;
       }
     }
+    cur = cur!;
     if (curKey === goalKey) {
       const path: Tile[] = [to];
       let k = goalKey;
@@ -160,7 +160,7 @@ export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null
 ```ts
   private blocked = new Set<string>();
 
-  /** 建筑边界（除门）为墙；门 = 底边中点 */
+  /** 建筑边界（除门）为墙；门 = 底边中点；房间/家具所在瓦片始终可通行（活动目标点） */
   private computeWalkable(): void {
     for (const o of this.objects.values()) {
       if (o.type !== 'building') continue;
@@ -172,6 +172,13 @@ export function findPath(world: WorldState, from: Tile, to: Tile): Tile[] | null
         }
       }
       this.blocked.delete(door); // 门开口
+    }
+    // 房间/家具瓦片开口（2×2 小建筑无室内，吧台/柜台等活动点必须可达）
+    for (const r of this.objects.values()) {
+      if (r.type !== 'room' && r.type !== 'furniture') continue;
+      for (let x = r.x; x < r.x + r.w; x++) {
+        for (let y = r.y; y < r.y + r.h; y++) this.blocked.delete(`${x},${y}`);
+      }
     }
   }
 
@@ -1046,12 +1053,13 @@ test('M2 验收：寻路经门进吧台、玩家指令执行、广播全员记�
   try {
     const base = `http://127.0.0.1:${server.port}`;
 
-    // ① 寻路：咖啡馆吧台在室内，从家出发必经门
+    // ① 寻路：咖啡馆吧台在房间瓦片（开口），从家出发存在合法路径且全程无墙
     const lin = world.allAgents()[0]; // 林晚晴，家 (2,7)
     const path = world.findPath({ x: lin.x, y: lin.y }, world.targetTile('obj:cafe_counter')!)!;
     assert.ok(path, '应找到通往吧台的路');
-    assert.ok(path.some((t) => t.x === 3 && t.y === 2), '路径必须经过咖啡馆门 (3,2)');
+    for (const t of path) assert.equal(world.walkable(t.x, t.y), true, `路径含墙 (${t.x},${t.y})`);
     assert.equal(world.walkable(3, 1), false); // 顶边是墙
+    assert.equal(world.walkable(3, 2), true);  // 门开口
 
     // ② 玩家指令：让沈屿去书店（含「默语书店」对象名）
     const shen = world.allAgents().find((a) => a.name === '沈屿')!;
