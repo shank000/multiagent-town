@@ -33,7 +33,7 @@
 - Produces（后续任务依赖，签名以此为准）：
   - `SocialConfig { minProximityMinutes?: number; cooldownMinutes?: number }`（默认 3 / 90）
   - `new SocialTicker(log: EventLog, cfg?: SocialConfig)`
-  - `ticker.tick(agents: Agent[], dt: number, now: number): void`（每 tick 调用；相邻=切比雪夫距离 ≤1；分离即清零累计；触发后同对冷却）
+  - `ticker.tick(agents: Agent[], dt: number, now: number): void`（每 tick 调用；相邻=切比雪夫距离 ≤1；分离或触发即清零累计；触发后同对冷却）
   - 闲聊事件：`{ type: 'chat', actorId: a.id, targetIds: [b.id], description: '「A」对「B」说：「台词」', payload: { kind: 'chat', line, fromId, toId } }`
   - Persona 新增可选字段 `greetingPool?: string[]`（缺省用通用台词池）
 
@@ -95,7 +95,7 @@ test('persona 台词池优先，冷却后轮换', () => {
   const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1 });
   const ticker = new SocialTicker(log, { cooldownMinutes: 10 });
   ticker.tick([a, b], 3, 5);
-  ticker.tick([a, b], 1, 16);
+  ticker.tick([a, b], 3, 16); // 冷却已过，再累计 3 分钟触发第二次
   const chats = log.eventsForDay(1).filter((e) => e.type === 'chat');
   assert.equal(chats[0].payload?.line, '你好！');
   assert.equal(chats[1].payload?.line, '再见！');
@@ -431,7 +431,7 @@ git commit -m "feat(web): 世界快照序列化"
 
 **Interfaces:**
 - Produces：
-  - `TownWebOptions { world; time; loop; log; publicDir?; snapshotMs? }`（publicDir 默认 `<cwd>/public`；snapshotMs 默认 200）
+  - `TownWebOptions { world; time; loop; log; publicDir?; snapshotMs?; port? }`（publicDir 默认 `<cwd>/public`；snapshotMs 默认 200；port 默认 0=随机端口）
   - `createTownServer(opts): Promise<TownWebServer>`，`TownWebServer { port: number; close(): Promise<void> }`（监听 127.0.0.1 随机端口）
   - 路由：`GET /`（index.html）、`GET /client.js|/style.css`（静态）、`GET /api/state`（快照 JSON）、`POST /api/world/control`（`{action:'pause'|'resume'|'speed', value?}`，speed.value = 游戏分钟/现实秒）、`GET /events`（SSE：连接即发一帧 `event: snapshot`，此后 200ms 一帧；新事件即时 `event: event`；15s 心跳注释）
 
@@ -522,6 +522,26 @@ test('控制接口：调速与暂停', async () => {
   }
 });
 
+test('SSE 客户端断开后服务不崩（写守卫）', async () => {
+  const { server, base, log } = await setup();
+  try {
+    const res = await fetch(`${base}/events`);
+    const reader = res.body!.getReader();
+    await reader.read();
+    await reader.cancel(); // 模拟浏览器标签页关闭
+    await new Promise((r) => setTimeout(r, 100)); // 让服务端感知断开
+    log.addEvent({
+      id: 'e9', type: 'system', actorId: null, targetIds: [], description: '断开后事件',
+      location: null, gameTime: 2, payload: null,
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const snap = (await (await fetch(`${base}/api/state`)).json()) as { agents: unknown[] };
+    assert.equal(snap.agents.length, 2);
+  } finally {
+    await server.close();
+  }
+});
+
 test('SSE：首帧快照 + 事件即时推送', async () => {
   const { server, base, log, world } = await setup();
   try {
@@ -584,6 +604,7 @@ export interface TownWebOptions {
   log: EventLog;
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
+  port?: number;        // 默认 0 = 系统随机端口
 }
 
 export interface TownWebServer {
@@ -609,12 +630,16 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     return buildSnapshot(world, time, paused, ++seq);
   }
   function send(res: ServerResponse, event: string, data: unknown): void {
+    if (res.writableEnded || res.destroyed) {
+      clients.delete(res);
+      return;
+    }
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
   function broadcast(event: string, data: unknown): void {
     for (const c of clients) send(c, event, data);
   }
-  log.subscribe((e: GameEvent) => broadcast('event', e));
+  const unsubLog = log.subscribe((e: GameEvent) => broadcast('event', e));
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -629,6 +654,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         clients.add(res);
         send(res, 'snapshot', currentSnapshot());
         req.on('close', () => clients.delete(res));
+        res.on('error', () => clients.delete(res));
         return;
       }
       if (url.pathname === '/api/state') {
@@ -687,17 +713,22 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     }
   }
 
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(opts.port ?? 0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
   const interval = setInterval(() => broadcast('snapshot', currentSnapshot()), snapshotMs);
   const heartbeat = setInterval(() => {
-    for (const c of clients) c.write(': ping\n\n');
+    for (const c of clients) {
+      if (c.writableEnded || c.destroyed) clients.delete(c);
+      else c.write(': ping\n\n');
+    }
   }, 15_000);
 
   return {
     port,
     close: () =>
       new Promise<void>((r) => {
+        loop.stop(); // 服务停止时一并停掉世界循环（调速/恢复可能由本服务启动过 loop）
+        unsubLog();  // 解除事件订阅，防止 close 后订阅泄漏
         clearInterval(interval);
         clearInterval(heartbeat);
         for (const c of clients) c.end();
@@ -937,7 +968,7 @@ async function main(): Promise<void> {
   const executor = new AgentExecutor(gateway, world, log);
   const social = new SocialTicker(log);
   const loop = new WorldLoop(time, world, executor, log, db, {}, social);
-  const server = await createTownServer({ world, time, loop, log });
+  const server = await createTownServer({ world, time, loop, log, port: args.port });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   loop.start();
@@ -978,6 +1009,7 @@ git commit -m "feat(web): town-web CLI、社交集成与客户端构建脚本"
 - Consumes: `/api/state` 快照、`/events` SSE（snapshot/event）、`POST /api/world/control`
 - Produces: 浏览器像素小镇页面（canvas 12×8 瓦片 × 32px、CSS 2x 像素化；4 套 NPC 配色与走路 2 帧；快照插值平滑移动；💭/💬 气泡 7 秒；时钟 + 暂停/1x/60x/360x + 事件滚动条 + 点击 NPC 状态面板）
 - 客户端为浏览器 TS，无单元测试（由 tsc 类型检查 + esbuild 构建 + Task 6 e2e 覆盖）；本任务验证 = 构建成功 + 服务器可服务 + 页面含 canvas
+- 前置：`tsconfig.json` 的 `lib` 为 `["ES2023", "DOM"]`（客户端需要 DOM 全局类型；skipLibCheck 已开，与 node 类型共存无冲突）
 
 - [ ] **Step 1: 写 public/index.html**
 
@@ -1495,7 +1527,7 @@ test('像素小镇 e2e：一天内快照推进 + NPC 闲聊 + 调速 + SSE', asy
     }
     clearTimeout(timeout);
     assert.ok(sseBuf.includes('event: snapshot'));
-    void sse.body?.cancel();
+    await reader.cancel(); // 流已被 getReader 锁定，用 reader.cancel 释放
 
     // 跑满 1 游戏日（服务端快照推送并行运行）
     await loop.runUntil(1440);

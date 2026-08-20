@@ -40,7 +40,10 @@ pnpm town --until-minutes 1440 --speed 60   # 虚拟时钟快速跑 1 游戏日
 pnpm replay --day 1              # 回放第 1 天事件时间线
 pnpm test                        # 全部测试
 pnpm acceptance                  # M0 验收测试
+pnpm town-web                    # 像素小镇浏览器版（默认 mock，自动打开 http://127.0.0.1:8787）
 ```
+
+> 像素小镇：浏览器里看 4 个像素 NPC 在小镇地图上活动、闲聊冒泡；可暂停/调速，点击角色看状态面板。真机：`LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-xxx pnpm town-web`。
 
 切换真机 DeepSeek（OpenAI 兼容）：
 
