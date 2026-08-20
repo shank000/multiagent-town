@@ -133,6 +133,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     port,
     close: () =>
       new Promise<void>((r) => {
+        loop.stop(); // 服务停止时一并停掉世界循环（调速/恢复可能由本服务启动过 loop）
         clearInterval(interval);
         clearInterval(heartbeat);
         for (const c of clients) c.end();
