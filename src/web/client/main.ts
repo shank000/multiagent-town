@@ -2,6 +2,7 @@
 
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
+import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
@@ -43,31 +44,20 @@ const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
 
-// —— 摄像机 ——
-const VIEW_W = 15; // 视口瓦片数
-const VIEW_H = 10;
-const camera = { x: 0, y: 0, zoom: 1 as 1 | 2 };
-
-// —— 拖拽平移（pointer）——
-let pointerDown = false;
-let lastX = 0;
-let lastY = 0;
-let startX = 0;
-let startY = 0;
-let dragged = false;
+// —— 全屏相机（fit-to-screen，无拖拽）——
+const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
+let fitScale = 1;
 
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
-  initCanvas();
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
   for (const a of snap.agents) initDisplay(a);
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', onPointerCancel);
-  canvas.addEventListener('pointerleave', onPointerCancel);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => { tooltip = null; });
-  canvas.addEventListener('wheel', onWheel);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('dblclick', () => fitCamera());
+  canvas.addEventListener('click', onClick);
   bindControls();
   bindPlayBar();
   document.querySelectorAll('#panel-tabs .tab').forEach((tab) => {
@@ -87,25 +77,31 @@ async function main(): Promise<void> {
   requestAnimationFrame(loop);
 }
 
-function initCanvas(): void {
-  canvas.width = VIEW_W * TILE;
-  canvas.height = VIEW_H * TILE;
+function resizeCanvas(): void {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+  canvas.style.width = `${window.innerWidth}px`;
+  canvas.style.height = `${window.innerHeight}px`;
+  fitCamera();
 }
 
-function clampCam(): void {
-  const maxX = (snap ? snap.gridW : 40) - VIEW_W / camera.zoom;
-  const maxY = (snap ? snap.gridH : 40) - VIEW_H / camera.zoom;
-  camera.x = Math.max(0, Math.min(maxX, camera.x));
-  camera.y = Math.max(0, Math.min(maxY, camera.y));
+function fitCamera(): void {
+  if (!snap) return;
+  const dpr = window.devicePixelRatio || 1;
+  const f = computeFit(canvas.width / dpr, canvas.height / dpr, snap.gridW, snap.gridH, TILE);
+  fitScale = f.scale;
+  camera.scale = fitScale;
+  camera.offX = f.offX * dpr;
+  camera.offY = f.offY * dpr;
 }
 
 function applyCamera(): void {
-  ctx.setTransform(camera.zoom, 0, 0, camera.zoom, -camera.x * TILE * camera.zoom, -camera.y * TILE * camera.zoom);
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, camera.offX, camera.offY);
 }
 
-function resetCamera(): void {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-}
+function resetCamera(): void { ctx.setTransform(1, 0, 0, 1, 0, 0); }
 function initDisplay(a: AgentView): void {
   display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false });
 }
@@ -128,6 +124,7 @@ function applySnapshot(): void {
     }
   }
   updateHud();
+  fitCamera();
 }
 
 function onEvent(e: TownEvent): void {
@@ -159,7 +156,7 @@ function escapeHtml(s: string): string {
 }
 
 function bindControls(): void {
-  document.querySelectorAll('#controls button').forEach((btn) => {
+  document.querySelectorAll('#controls button[data-action]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const action = btn.getAttribute('data-action')!;
       const value = btn.getAttribute('data-value');
@@ -170,52 +167,22 @@ function bindControls(): void {
       });
     });
   });
+  document.getElementById('fit-view')!.addEventListener('click', () => fitCamera());
 }
 
-// —— 拖拽/缩放：pointerdown/move/up 区分点击与拖拽（位移 <4px 视为点击）——
-function onPointerDown(e: PointerEvent): void {
-  if (e.button !== 0) return;
-  pointerDown = true;
-  dragged = false;
-  lastX = e.clientX;
-  lastY = e.clientY;
-  startX = e.clientX;
-  startY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
-}
-
-function onPointerMove(e: PointerEvent): void {
-  if (!pointerDown) return;
-  // CSS 缩放系数：CSS 尺寸被放大（如 960px），换算回画布像素（480px）
-  const s = canvas.width / canvas.getBoundingClientRect().width;
-  // 累计本次按压位移：超过 4px 阈值才开始平移，未超阈值保持点击语义（不移动相机）
-  if (dragged || Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) {
-    dragged = true;
-    camera.x -= (e.clientX - lastX) / camera.zoom * s / TILE;
-    camera.y -= (e.clientY - lastY) / camera.zoom * s / TILE;
-    clampCam();
-  }
-  lastX = e.clientX;
-  lastY = e.clientY;
-}
-
-function onPointerUp(e: PointerEvent): void {
-  pointerDown = false;
-  if (!dragged) onClick(e);
-}
-
-// pointercancel/leave：画布外松手时复位，防止幻影平移
-function onPointerCancel(): void {
-  pointerDown = false;
-  lastX = Number.NaN;
-  lastY = Number.NaN;
-}
-
-// 滚轮切换缩放：上滚放大视野（zoom=1），下滚贴近（zoom=2）
 function onWheel(e: WheelEvent): void {
-  if (e.deltaY < 0) camera.zoom = 1;
-  else if (e.deltaY > 0) camera.zoom = 2;
-  clampCam();
+  if (!snap) return;
+  e.preventDefault();
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const ax = (e.clientX - rect.left) * dpr;
+  const ay = (e.clientY - rect.top) * dpr;
+  const factor = e.deltaY < 0 ? 1.25 : 0.8;
+  const next = zoomScale(camera.scale, factor, fitScale * dpr);
+  const off = zoomOffsets(ax, ay, camera.scale, next, camera.offX, camera.offY, TILE);
+  camera.scale = next;
+  camera.offX = off.offX;
+  camera.offY = off.offY;
 }
 
 function onClick(ev: MouseEvent): void {
@@ -253,13 +220,13 @@ function onMouseMove(ev: MouseEvent): void {
 
 function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: number } {
   const rect = canvas.getBoundingClientRect();
-  const px = (ev.clientX - rect.left) * (canvas.width / rect.width);
-  const py = (ev.clientY - rect.top) * (canvas.height / rect.height);
-  // 逆变换：屏幕像素 → 世界瓦片（含缩放与摄像机偏移）
+  const dpr = window.devicePixelRatio || 1;
+  const px = (ev.clientX - rect.left) * dpr;
+  const py = (ev.clientY - rect.top) * dpr;
   return {
     px, py,
-    tx: Math.floor(px / (TILE * camera.zoom) + camera.x),
-    ty: Math.floor(py / (TILE * camera.zoom) + camera.y),
+    tx: Math.floor((px - camera.offX) / (TILE * camera.scale)),
+    ty: Math.floor((py - camera.offY) / (TILE * camera.scale)),
   };
 }
 
@@ -434,15 +401,6 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
-  // —— 跟随：选中 NPC 时摄像机平滑 lerp 至其瓦片中心 ——
-  if (selectedId) {
-    const d = display.get(selectedId);
-    if (d) {
-      camera.x += (d.x / TILE - VIEW_W / (2 * camera.zoom) - camera.x) * 0.08;
-      camera.y += (d.y / TILE - VIEW_H / (2 * camera.zoom) - camera.y) * 0.08;
-      clampCam();
-    }
-  }
   draw();
   requestAnimationFrame(loop);
 }
