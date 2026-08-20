@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS messages (
   content   TEXT,
   game_time INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS relationships (
+  id         TEXT PRIMARY KEY,
+  agent_a    TEXT NOT NULL,
+  agent_b    TEXT NOT NULL,
+  knowledge_json TEXT NOT NULL DEFAULT '[]',
+  affection  REAL NOT NULL DEFAULT 0,
+  respect    REAL NOT NULL DEFAULT 0,
+  updated_game_time INTEGER NOT NULL,
+  UNIQUE(agent_a, agent_b)
+);
 `;
 
 export interface DbHandle {
