@@ -668,26 +668,32 @@ git commit -m "feat(web): 玩家扮演与小镇广播 API"
 
 ---
 
-### Task 4: 客户端渲染升级（32×32 精灵 / 地图细节 / 昼夜）
+### Task 4: 客户端渲染升级（图集精灵 / 地图细节 / 昼夜）
 
 **Files:**
-- Create: `src/web/client/sprites.ts`、`src/web/client/render.ts`
-- Modify: `src/web/client/main.ts`（拆分渲染与精灵逻辑到新模块）、`public/style.css`（画布加大到 32px 瓦片 + 更精致 HUD）
+- Create: `public/assets/32x32folk.png`（已由控制器下载，a16z/ai-town，CC-BY 4.0 George Bailey；384×256：每角色块 96×128，行序 down/left/right/up 各 32px，列 3 帧）、`ATTRIBUTION.md`（素材署名）、`src/web/client/sprites.ts`（重写为图集精灵 + 程序绘制兜底）、`src/web/client/render.ts`
+- Modify: `src/web/client/main.ts`（接线新模块）、`src/web/server.ts`（/assets/ 静态路由，白名单正则防穿越）、`public/style.css`
 
 **Interfaces:**
 - Produces（浏览器 TS，构建+typecheck 验证）：
-  - `PALETTES: SpriteStyle[]`（4 套：围裙/眼镜/贝雷帽/邮差帽，含 hair/skin/top/bottom/accent/kind）
-  - `drawNpc(ctx, cx, cy, dir: 'up'|'down'|'left'|'right', frame: 0|1, index: number, moving: boolean, selected: boolean, name: string, thoughtBubble?: boolean): void`（32×32 像素小人：影子/腿/躯干/头/发/配件；四方向；行走帧摆动）
-  - `drawTerrain(ctx, w, h)`（草地基底 + 石板小径）
-  - `drawLake(ctx, px, py, pw, ph, nowMs)`（波光动画）
-  - `drawObjectDetail(ctx, o, nowMs)`（建筑门窗/屋顶高光/招牌、公园树与花、广场喷泉）
-  - `applyDayNight(ctx, w, h, minuteOfDay)`（清晨 300-480 橙 0.12、黄昏 1020-1200 橙 0.18、夜晚 1200-300 深蓝 0.32）
-  - 画布瓦片 32px；CSS 宽 768→（12×32=384 逻辑 ×2 = 768）保持
+  - `drawNpc(ctx, cx, cy, dir, frame: 0|1, index, moving, selected, name, thinking)`：**优先**从 32x32folk.png 裁剪（spriteIndex 0-3 → f1-f4；dir 行 down/left/right/up；帧取列 0/32）；图集未加载/失败 → **回退**程序绘制小人（原 PALETTES 四套配色逻辑保留为 drawNpcProcedural）
+  - `drawTerrain / drawLake / drawObjectDetail / applyDayNight`（同前版设计）
+  - 服务器 `/assets/<文件名>`（`/^[\w.-]+$/` 白名单）映射 publicDir/assets
 
-- [ ] **Step 1: 写 src/web/client/sprites.ts**
+- [ ] **Step 0: 写 ATTRIBUTION.md**
+
+```markdown
+# 素材署名
+
+- `public/assets/32x32folk.png`：32×32 角色行走图集，来自 [a16z-infra/ai-town](https://github.com/a16z-infra/ai-town)（MIT 仓库），原作者 George Bailey（[opengameart.org · 16x16 game assets](https://opengameart.org/content/16x16-game-assets)，CC-BY 4.0）。四个 NPC 依次使用 f1-f4 角色块。
+- 地图瓦片/建筑/水体/昼夜着色均为本项目程序绘制。
+```
+
+- [ ] **Step 1: 写 src/web/client/sprites.ts（图集优先 + 程序兜底）**
 
 ```ts
-// 32×32 像素小人：四方向行走 2 帧 + 待机微动；程序绘制（无美术资源）
+// 32×32 精灵：优先裁剪 a16z/ai-town 的 32x32folk.png（CC-BY 4.0, George Bailey，见 ATTRIBUTION.md），
+// 图集未加载/失败时回退到程序绘制小人（四套配色）
 
 export interface SpriteStyle {
   hair: string; skin: string; top: string; bottom: string; accent: string;
@@ -695,13 +701,21 @@ export interface SpriteStyle {
 }
 
 export const PALETTES: SpriteStyle[] = [
-  { hair: '#5b3a29', skin: '#f2c99c', top: '#d97757', bottom: '#6b4f6b', accent: '#f7e8d0', kind: 'apron' },   // 林晚晴
-  { hair: '#2f2f2f', skin: '#e8c39a', top: '#4a6fa5', bottom: '#3a3a3a', accent: '#9fb8d8', kind: 'glasses' }, // 陈默
-  { hair: '#7a4a2b', skin: '#f5d0a8', top: '#8a2f2f', bottom: '#5a4a3a', accent: '#c9a66b', kind: 'beret' },   // 沈屿
-  { hair: '#1f1f1f', skin: '#f2c99c', top: '#b33b3b', bottom: '#4a4a4a', accent: '#2f6b2f', kind: 'cap' },     // 周岚
+  { hair: '#5b3a29', skin: '#f2c99c', top: '#d97757', bottom: '#6b4f6b', accent: '#f7e8d0', kind: 'apron' },
+  { hair: '#2f2f2f', skin: '#e8c39a', top: '#4a6fa5', bottom: '#3a3a3a', accent: '#9fb8d8', kind: 'glasses' },
+  { hair: '#7a4a2b', skin: '#f5d0a8', top: '#8a2f2f', bottom: '#5a4a3a', accent: '#c9a66b', kind: 'beret' },
+  { hair: '#1f1f1f', skin: '#f2c99c', top: '#b33b3b', bottom: '#4a4a4a', accent: '#2f6b2f', kind: 'cap' },
 ];
 
 export type Dir = 'up' | 'down' | 'left' | 'right';
+
+const sheet = new Image();
+let sheetReady = false;
+sheet.onload = () => { sheetReady = true; };
+sheet.onerror = () => { sheetReady = false; };
+sheet.src = '/assets/32x32folk.png';
+
+const DIR_ROW: Record<Dir, number> = { down: 0, left: 32, right: 64, up: 96 };
 
 export function drawNpc(
   ctx: CanvasRenderingContext2D,
@@ -715,72 +729,22 @@ export function drawNpc(
   name: string,
   thinking: boolean
 ): void {
-  const p = PALETTES[index % PALETTES.length];
   const x = Math.round(cx);
-  const y = Math.round(cy) + (moving ? Math.round(Math.sin(performance.now() / 150)) : 0);
+  const y = Math.round(cy);
   // 影子
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
   ctx.beginPath();
   ctx.ellipse(x, cy + 10, 7, 3, 0, 0, Math.PI * 2);
   ctx.fill();
-  const step = frame === 0 ? 0 : 1;
-  // 腿
-  ctx.fillStyle = p.bottom;
-  if (dir === 'left' || dir === 'right') {
-    ctx.fillRect(x - 5 + step, y - 8, 4, 9);
-    ctx.fillRect(x + 1 - step, y - 8, 4, 9);
+  if (sheetReady && sheet.complete && sheet.naturalWidth > 0) {
+    const col = index % 4;
+    const row = Math.floor(index / 4);
+    const sx = col * 96 + (frame === 0 ? 0 : 32);
+    const sy = row * 128 + (DIR_ROW[dir] ?? 0);
+    const bob = moving ? Math.round(Math.sin(performance.now() / 150)) : 0;
+    ctx.drawImage(sheet, sx, sy, 32, 32, x - 16, y - 26 + bob, 32, 32);
   } else {
-    ctx.fillRect(x - 5, y - 8 + step, 4, 9);
-    ctx.fillRect(x + 1, y - 8 - step, 4, 9);
-  }
-  // 躯干
-  ctx.fillStyle = p.top;
-  ctx.fillRect(x - 6, y - 19, 12, 12);
-  if (p.kind === 'apron') {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 3, y - 19, 6, 12);
-  }
-  if (p.kind === 'cap') {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 6, y - 19, 12, 3);
-  }
-  // 手臂（行走摆动）
-  ctx.fillStyle = p.skin;
-  if (moving && dir !== 'up') {
-    ctx.fillRect(x - 8 + step * 3, y - 18, 3, 9);
-    ctx.fillRect(x + 5 - step * 3, y - 18, 3, 9);
-  } else {
-    ctx.fillRect(x - 8, y - 18, 3, 9);
-    ctx.fillRect(x + 5, y - 18, 3, 9);
-  }
-  // 头
-  ctx.fillStyle = p.skin;
-  ctx.fillRect(x - 5, y - 31, 10, 10);
-  // 头发
-  ctx.fillStyle = p.hair;
-  ctx.fillRect(x - 6, y - 33, 12, 4);
-  if (dir !== 'up') ctx.fillRect(x - 6, y - 29, 3, 6); // 侧发
-  // 配件
-  if (p.kind === 'beret') {
-    ctx.fillStyle = p.top;
-    ctx.fillRect(x - 7, y - 35, 14, 3);
-  }
-  if (p.kind === 'cap') {
-    ctx.fillStyle = p.accent;
-    ctx.fillRect(x - 6, y - 34, 12, 3);
-    ctx.fillRect(x - 8, y - 31, 3, 2); // 帽檐
-  }
-  if (p.kind === 'glasses') {
-    ctx.fillStyle = '#111111';
-    ctx.fillRect(x - 4, y - 27, 3, 3);
-    ctx.fillRect(x + 1, y - 27, 3, 3);
-    ctx.fillRect(x - 1, y - 26, 2, 1);
-  }
-  // 眼睛（背向无）
-  if (dir !== 'up') {
-    ctx.fillStyle = '#1a1a1a';
-    const ex = dir === 'left' ? x - 3 : dir === 'right' ? x + 1 : x - 1;
-    ctx.fillRect(ex, y - 27, 2, 2);
+    drawNpcProcedural(ctx, x, y, dir, frame, index, moving);
   }
   if (thinking) {
     ctx.fillStyle = '#ffe9a8';
@@ -795,6 +759,89 @@ export function drawNpc(
     ctx.strokeRect(x - 9, y - 37, 18, 32);
   }
 }
+
+function drawNpcProcedural(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  dir: Dir,
+  frame: 0 | 1,
+  index: number,
+  moving: boolean
+): void {
+  const p = PALETTES[index % PALETTES.length];
+  const yb = y + (moving ? Math.round(Math.sin(performance.now() / 150)) : 0);
+  const step = frame === 0 ? 0 : 1;
+  ctx.fillStyle = p.bottom;
+  if (dir === 'left' || dir === 'right') {
+    ctx.fillRect(x - 5 + step, yb - 8, 4, 9);
+    ctx.fillRect(x + 1 - step, yb - 8, 4, 9);
+  } else {
+    ctx.fillRect(x - 5, yb - 8 + step, 4, 9);
+    ctx.fillRect(x + 1, yb - 8 - step, 4, 9);
+  }
+  ctx.fillStyle = p.top;
+  ctx.fillRect(x - 6, yb - 19, 12, 12);
+  if (p.kind === 'apron') {
+    ctx.fillStyle = p.accent;
+    ctx.fillRect(x - 3, yb - 19, 6, 12);
+  }
+  if (p.kind === 'cap') {
+    ctx.fillStyle = p.accent;
+    ctx.fillRect(x - 6, yb - 19, 12, 3);
+  }
+  ctx.fillStyle = p.skin;
+  if (moving && dir !== 'up') {
+    ctx.fillRect(x - 8 + step * 3, yb - 18, 3, 9);
+    ctx.fillRect(x + 5 - step * 3, yb - 18, 3, 9);
+  } else {
+    ctx.fillRect(x - 8, yb - 18, 3, 9);
+    ctx.fillRect(x + 5, yb - 18, 3, 9);
+  }
+  ctx.fillStyle = p.skin;
+  ctx.fillRect(x - 5, yb - 31, 10, 10);
+  ctx.fillStyle = p.hair;
+  ctx.fillRect(x - 6, yb - 33, 12, 4);
+  if (dir !== 'up') ctx.fillRect(x - 6, yb - 29, 3, 6);
+  if (p.kind === 'beret') {
+    ctx.fillStyle = p.top;
+    ctx.fillRect(x - 7, yb - 35, 14, 3);
+  }
+  if (p.kind === 'cap') {
+    ctx.fillStyle = p.accent;
+    ctx.fillRect(x - 6, yb - 34, 12, 3);
+    ctx.fillRect(x - 8, yb - 31, 3, 2);
+  }
+  if (p.kind === 'glasses') {
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(x - 4, yb - 27, 3, 3);
+    ctx.fillRect(x + 1, yb - 27, 3, 3);
+    ctx.fillRect(x - 1, yb - 26, 2, 1);
+  }
+  if (dir !== 'up') {
+    ctx.fillStyle = '#1a1a1a';
+    const ex = dir === 'left' ? x - 3 : dir === 'right' ? x + 1 : x - 1;
+    ctx.fillRect(ex, yb - 27, 2, 2);
+  }
+}
+```
+
+（render.ts 保持本计划原设计不变；main.ts 接线 drawNpc 签名与原设计一致。）
+
+- [ ] **Step 1b: 修改 src/web/server.ts（/assets/ 路由）**
+
+静态路由段追加：
+
+```ts
+      if (url.pathname.startsWith('/assets/') && req.method === 'GET') {
+        const name = url.pathname.slice('/assets/'.length);
+        if (!/^[\w.-]+$/.test(name)) {
+          res.writeHead(404);
+          res.end('not found');
+          return;
+        }
+        return await file(res, resolve(publicDir, 'assets', name));
+      }
 ```
 
 - [ ] **Step 2: 写 src/web/client/render.ts**
