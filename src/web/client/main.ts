@@ -47,8 +47,6 @@ const ticker: string[] = [];
 const VIEW_W = 15; // 视口瓦片数
 const VIEW_H = 10;
 const camera = { x: 0, y: 0, zoom: 1 as 1 | 2 };
-const MAX_CAM_X = 40 - VIEW_W;
-const MAX_CAM_Y = 40 - VIEW_H;
 
 // —— 拖拽平移（pointer）——
 let pointerDown = false;
@@ -65,6 +63,8 @@ async function main(): Promise<void> {
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerCancel);
+  canvas.addEventListener('pointerleave', onPointerCancel);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => { tooltip = null; });
   canvas.addEventListener('wheel', onWheel);
@@ -93,8 +93,10 @@ function initCanvas(): void {
 }
 
 function clampCam(): void {
-  camera.x = Math.max(0, Math.min(MAX_CAM_X, camera.x));
-  camera.y = Math.max(0, Math.min(MAX_CAM_Y, camera.y));
+  const maxX = (snap ? snap.gridW : 40) - VIEW_W / camera.zoom;
+  const maxY = (snap ? snap.gridH : 40) - VIEW_H / camera.zoom;
+  camera.x = Math.max(0, Math.min(maxX, camera.x));
+  camera.y = Math.max(0, Math.min(maxY, camera.y));
 }
 
 function applyCamera(): void {
@@ -178,14 +180,15 @@ function onPointerDown(e: PointerEvent): void {
   lastY = e.clientY;
   startX = e.clientX;
   startY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
 }
 
 function onPointerMove(e: PointerEvent): void {
   if (!pointerDown) return;
-  const dx = (e.clientX - lastX) / camera.zoom;
-  const dy = (e.clientY - lastY) / camera.zoom;
-  camera.x -= dx / TILE;
-  camera.y -= dy / TILE;
+  // CSS 缩放系数：CSS 尺寸被放大（如 960px），换算回画布像素（480px）
+  const s = canvas.width / canvas.getBoundingClientRect().width;
+  camera.x -= (e.clientX - lastX) / camera.zoom * s / TILE;
+  camera.y -= (e.clientY - lastY) / camera.zoom * s / TILE;
   clampCam();
   if (Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) dragged = true;
   lastX = e.clientX;
@@ -195,6 +198,13 @@ function onPointerMove(e: PointerEvent): void {
 function onPointerUp(e: PointerEvent): void {
   pointerDown = false;
   if (!dragged) onClick(e);
+}
+
+// pointercancel/leave：画布外松手时复位，防止幻影平移
+function onPointerCancel(): void {
+  pointerDown = false;
+  lastX = Number.NaN;
+  lastY = Number.NaN;
 }
 
 // 滚轮切换缩放：上滚放大视野（zoom=1），下滚贴近（zoom=2）
