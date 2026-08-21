@@ -33,7 +33,7 @@ let selectedId: string | null = null;
 let selectedObjectId: string | null = null;
 
 const STATE_NAME: Record<string, string> = { idle: '待机', thinking: '思考中', moving: '赶路中', acting: '行动中' };
-const TYPE_NAME: Record<string, string> = { town: '小镇', building: '建筑', room: '房间', furniture: '家具', zone: '区域' };
+const TYPE_NAME: Record<string, string> = { town: '小镇', building: '建筑', room: '房间', furniture: '家具', zone: '区域', water: '水域' };
 
 // 玩家扮演：快照不含该信息，客户端本地记录正在被扮演的 NPC
 const playing = new Set<string>();
@@ -119,13 +119,13 @@ function fitCamera(): void {
   const f = computeFit(canvas.width / dpr, canvas.height / dpr, snap.gridW, snap.gridH, TILE);
   fitScale = f.scale;
   camera.scale = fitScale;
-  camera.offX = f.offX * dpr;
-  camera.offY = f.offY * dpr;
+  camera.offX = f.offX;
+  camera.offY = f.offY;
 }
 
 function applyCamera(): void {
   const dpr = window.devicePixelRatio || 1;
-  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, camera.offX, camera.offY);
+  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, camera.offX * dpr, camera.offY * dpr);
 }
 
 function resetCamera(): void { ctx.setTransform(1, 0, 0, 1, 0, 0); }
@@ -206,8 +206,8 @@ function onWheel(e: WheelEvent): void {
   e.preventDefault();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  const ax = (e.clientX - rect.left) * dpr;
-  const ay = (e.clientY - rect.top) * dpr;
+  const ax = e.clientX - rect.left;
+  const ay = e.clientY - rect.top;
   const factor = e.deltaY < 0 ? 1.25 : 0.8;
   const next = zoomScale(camera.scale, factor, fitScale);
   const off = zoomOffsets(ax, ay, camera.scale, next, camera.offX, camera.offY, TILE);
@@ -256,8 +256,8 @@ function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: numbe
   const py = (ev.clientY - rect.top) * dpr;
   return {
     px, py,
-    tx: Math.floor((px - camera.offX) / (TILE * camera.scale * dpr)),
-    ty: Math.floor((py - camera.offY) / (TILE * camera.scale * dpr)),
+    tx: Math.floor((px - camera.offX * dpr) / (TILE * camera.scale * dpr)),
+    ty: Math.floor((py - camera.offY * dpr) / (TILE * camera.scale * dpr)),
   };
 }
 
@@ -491,9 +491,10 @@ function loop(): void {
     if (a.state === 'acting' && a.targetName && lastActionKey.get(a.id) !== key) {
       lastActionKey.set(a.id, key);
       const cx = d.x + TILE / 2;
-      if (a.targetName === '床') fx.spawn(zzzPuff(cx, d.y - 12));
+      if (a.targetName === '床') { fx.spawn(zzzPuff(cx, d.y - 12)); zzzLast.set(a.id, now); }
       else if (/沙发|咖啡桌|椅/.test(a.targetName)) fx.spawn(sitDust(cx, d.y + TILE));
       if (/煮|咖啡|泡/.test(a.verb)) fx.spawn(steamPuff(cx, d.y - 6));
+      if (/煮|泡/.test(a.verb)) steamLast.set(a.id, now);
       if (/写生|画|速写/.test(a.verb)) fx.spawn(sparkleBurst(cx, d.y - 8, '#ffd700'));
       if (/信|分拣|送/.test(a.verb)) fx.spawn(paperFlutter(cx, d.y - 12));
     }

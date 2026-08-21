@@ -1,10 +1,10 @@
 // 小镇种子数据：对象树（48×44 瓦片）+ 4 个 persona（M0 用结构化作息代替规划引擎）
 
 import type { Agent, Persona, WorldObject } from '../core/types';
-import { WorldState } from '../core/world';
+import { WorldState, GRID_W, GRID_H } from '../core/world';
 
 export const TOWN_OBJECTS: WorldObject[] = [
-  { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 48, h: 44 },
+  { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: GRID_W, h: GRID_H },
   // 商业街
   { id: 'obj:cafe', name: '林间咖啡馆', type: 'building', parentId: 'obj:town', x: 8, y: 8, w: 4, h: 4 },
   { id: 'obj:cafe_counter', name: '咖啡馆吧台', type: 'room', parentId: 'obj:cafe', x: 9, y: 8, w: 2, h: 1 },

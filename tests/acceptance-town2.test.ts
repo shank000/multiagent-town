@@ -1,4 +1,4 @@
-// 小镇 2.0 阶段 A 验收：40×40 大图上全 routine 可达 + 家具可达 + 摄像机数据就绪
+// 小镇 2.0 验收（A+B）：48×44 大图全 routine 可达 + 家具可达 + 河流不可走 + 睡床作息
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +14,7 @@ import { MindEngine } from '../src/engine/mind';
 import { PlayerDirector } from '../src/engine/player';
 import { SocialTicker } from '../src/engine/social';
 
-test('小镇2.0阶段A：大图全 routine 可达、NPC 行动、家具对象就位', async () => {
+test('小镇2.0（A+B）：大图全 routine 可达、NPC 行动、家具对象就位、睡床作息', async () => {
   const db = openDb(':memory:');
   const log = new EventLog(db);
   const world = buildTown();
@@ -57,19 +57,19 @@ test('小镇2.0阶段A：大图全 routine 可达、NPC 行动、家具对象就
     assert.notEqual(a.state, 'thinking', `${a.name} 卡在 thinking`);
   }
 
-  // ⑤ 家具作息：每个 agent 至少一次睡自己的床
+  // ④ 家具作息：每个 agent 至少一次睡自己的床
   for (const a of world.allAgents()) {
     const bed = events.filter((e) =>
       e.actorId === a.id && e.type === 'interact' && e.targetIds.some((t) => t.startsWith('obj:bed_')));
     assert.ok(bed.length > 0, `${a.name} 从未睡床`);
   }
 
-  // ④ 门模型在大图上成立：咖啡馆门开口、顶角是墙
+  // ⑤ 门模型在大图上成立：咖啡馆门开口、顶角是墙
   const cafe = world.getObject('obj:cafe')!;
   assert.equal(world.walkable(cafe.x + Math.floor(cafe.w / 2), cafe.y + cafe.h - 1), true);
   assert.equal(world.walkable(cafe.x, cafe.y), false);
 
-  // ⑤ 河流（water）不可走：左上角与右下角瓦片均被阻挡
+  // ⑥ 河流（water）不可走：左上角与右下角瓦片均被阻挡
   const river = world.getObject('obj:river')!;
   assert.equal(river.type, 'water');
   assert.equal(world.walkable(river.x, river.y), false);

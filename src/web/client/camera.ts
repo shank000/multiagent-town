@@ -24,7 +24,7 @@ export function zoomOffsets(
   prevOffX: number, prevOffY: number,
   tile: number
 ): { offX: number; offY: number } {
-  // 锚点世界坐标守恒：wx = (ax - offX)/(scale*tile)
+  // 锚点世界坐标守恒：锚点与偏移均为 CSS px，scale 为 CSS 尺度；wx = (ax - offX)/(scale*tile)（CSS 瓦片数）
   const wx = (anchorX - prevOffX) / (prevScale * tile);
   const wy = (anchorY - prevOffY) / (prevScale * tile);
   return {

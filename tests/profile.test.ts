@@ -28,12 +28,13 @@ test('快照 AgentView 携带档案全字段', () => {
   const world = buildTown();
   const time = new TimeEngine(60);
   const snap = buildSnapshot(world, time, false, 1);
-  const a = snap.agents[0];
-  assert.ok(['男', '女'].includes(a.gender));
-  assert.ok(a.hobbies.length >= 2);
-  assert.ok(Object.keys(a.skills).length >= 3);
-  assert.ok(a.values.length >= 2);
-  assert.ok(a.motivation.length > 0);
-  assert.ok(a.personality && typeof a.personality.extraversion === 'number');
-  assert.ok(a.appearance && a.appearance.outfit.length > 0);
+  for (const a of snap.agents) {
+    assert.ok(['男', '女'].includes(a.gender));
+    assert.ok(a.hobbies.length >= 2);
+    assert.ok(Object.keys(a.skills).length >= 3);
+    assert.ok(a.values.length >= 2);
+    assert.ok(a.motivation.length > 0);
+    assert.ok(a.personality && typeof a.personality.extraversion === 'number');
+    assert.ok(a.appearance && a.appearance.outfit.length > 0);
+  }
 });

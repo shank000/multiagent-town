@@ -59,7 +59,7 @@ export function drawLampGlow(ctx: CanvasRenderingContext2D, px: number, py: numb
   const g = ctx.createRadialGradient(px + 16, py + 12, 4, px + 16, py + 12, 34);
   g.addColorStop(0, `rgba(255,214,130,${0.45 * pulse})`);
   g.addColorStop(1, 'rgba(255,214,130,0)');
-  ctx.fillStyle = g as unknown as string;
+  ctx.fillStyle = g;
   ctx.fillRect(px - 18, py - 22, 68, 68);
 }
 
@@ -108,8 +108,6 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
       }
     } else if (o.id === 'obj:lake') {
       drawLake(ctx, px, py, pw, ph, nowMs);
-    } else if (o.id === 'obj:river') {
-      drawRiver(ctx, px, py, pw, ph, nowMs);
     } else if (o.id === 'obj:orchard' || o.id === 'obj:forest_ne') {
       ctx.fillStyle = '#6aa84f';
       ctx.fillRect(px, py, pw, ph);
