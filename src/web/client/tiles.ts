@@ -56,24 +56,24 @@ export interface TileMap {
   interior: { floor: number[]; wallTile: number[]; sheet: SheetId };
 }
 
-// 已确认（像素解码）：
-//   town   (medieval-town.png 384×256=24×16) 草地 r00c0/c1=#6d8c54/#6b8b53；墙=橄榄/棕石砖；屋顶=浅米色；门=暗红。
-//   forest (ansimuz-forest.png 544×512=34×32) tree r02c02=(32,32)=#75432e 树干；图集无水面砖（水为演示背景色）。
+// 已确认（Task 2 程序化像素解码，平均色证据见 task-2-report.md）：
+//   town   (medieval-town.png 384×256=24×16) 草地 r00c0-c3=#6d8c54/#6b8b53/#6f8d54/#6c8c53；墙=橄榄/棕石砖(r01-r14c0-c7)；屋顶=浅米色(r04-r14c8-c15)；门=暗红(r01-r03c12-c15)。无 path/plaza/dirt/crops 砖。
+//   forest (ansimuz-forest.png 544×512=34×32) 树冠=橄榄黄绿(r01c30=(480,16)=#928924 等)；树干(r02c02=(32,32)=#75432e)；粉色花(r18c2=(32,288)=#6e2746)。图集无水面砖、无草地砖（水/草为演示背景色）。
 //   interiors (medieval-interior.png 320×320=20×20) floor r00c00=(0,0)=#191919 深色地板；wall r01c00=(0,16)=#746772。
-// 占位/待回退（本图集无对应语义砖，Task 2/3 程序化回退或视觉复核后改真值）：
-//   terrain.dirt/path/plaza/flowers/crops、water、furniture（medieval 内饰无床/沙发/桌/柜家具砖）、building.window（外景无独立窗砖，取浅色石砖近似）。
+// 占位/程序化回退（本图集无对应语义砖）：
+//   terrain.dirt/path/plaza/crops、water、furniture（medieval 内饰无床/沙发/桌/柜家具砖）、building.window（外景无独立窗砖，取浅色石砖近似）。
 export const TILE_MAP: TileMap = {
   terrain: {
     grass: [0, 0],      // town r00c0 草地（确认）
     grassAlt: [16, 0],  // town r00c1 草地变体（确认）
-    dirt: [0, 16],      // 占位（无独立土砖）
-    path: [0, 32],      // 占位
-    plaza: [0, 48],     // 占位
-    flowers: [0, 64],   // 占位
-    crops: [0, 96],     // 占位
+    dirt: [0, 16],      // 占位（无独立土砖，drawTerrain 保持程序化）
+    path: [0, 32],      // 占位（无独立路砖）
+    plaza: [0, 48],     // 占位（无独立广场砖）
+    flowers: [32, 288], // forest r18c2 粉色花簇（确认，约 25% 不透明、透明背景平铺于草地上呈散点花）
+    crops: [0, 96],     // 占位（无农田作物砖，farm_east 保持程序化）
   },
-  water: { frames: [[0, 32], [16, 32]], sheet: 'forest' }, // 占位（forest 无水面砖）
-  tree: { frames: [[32, 32]], sheet: 'forest' },           // forest r02c02 树干（确认）
+  water: { frames: [[0, 32], [16, 32]], sheet: 'forest' }, // 占位（forest 无水面砖，水保持程序化）
+  tree: { frames: [[480, 16]], sheet: 'forest' },          // forest r01c30 树冠（橄榄黄绿，确认）
   buildings: {
     cafe:        { wall: [0, 16],   roof: [128, 64], door: [192, 16], window: [192, 64] },
     bookstore:   { wall: [0, 32],   roof: [144, 64], door: [208, 16], window: [208, 64] },
