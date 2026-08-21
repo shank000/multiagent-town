@@ -246,9 +246,9 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
     // 建筑条目自描述所属图集，图集就绪即绘制，未就绪回退程序化
     const sheet: SheetId = b.sheet;
     if (sheetReady(sheet)) {
-      // 素材优先：墙铺满内部（含底行，补上原镂空底角）
+      // 素材优先：屋顶下整面墙（全宽 4 列 × 3 行），门/窗覆盖其上
       for (let y = o.y + 1; y < o.y + o.h; y++) {
-        for (let x = o.x + 1; x < o.x + o.w - 1; x++) {
+        for (let x = o.x; x < o.x + o.w; x++) {
           drawTile(ctx, sheet, b.wall[0], b.wall[1], x * TILE, y * TILE, TILE);
         }
       }
