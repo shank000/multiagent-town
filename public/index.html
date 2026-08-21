@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>multiagent-town 像素小镇</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="hud">
+    <div id="clock">第1天 00:00</div>
+    <div id="controls">
+      <button data-action="pause">⏸ 暂停</button>
+      <button data-action="speed" data-value="1">▶ 1x</button>
+      <button data-action="speed" data-value="60">▶ 60x</button>
+      <button data-action="speed" data-value="360">▶ 360x</button>
+      <button id="fit-view">🗺 全图</button>
+    </div>
+    <button id="panel-toggle">◀</button>
+    <button id="ticker-toggle">📜</button>
+  </div>
+  <main>
+    <canvas id="game"></canvas>
+    <aside id="side">
+      <div id="panel">
+        <div id="panel-tabs">
+          <button data-tab="detail" class="tab active">详情</button>
+          <button data-tab="profile" class="tab">档案</button>
+          <button data-tab="memory" class="tab">记忆</button>
+          <button data-tab="reflection" class="tab">反思</button>
+          <button data-tab="dialogue" class="tab">对话</button>
+          <button data-tab="relation" class="tab">关系</button>
+        </div>
+        <div id="panel-body"><p id="panel-empty">点击小镇里的角色查看详情</p></div>
+      </div>
+    </aside>
+    <div id="play-bar" hidden>
+      <input id="play-input" placeholder="输入指令，如：去告诉陈默今晚派对" maxlength="120" />
+      <button id="play-send">执行</button>
+      <button id="play-exit">退出扮演</button>
+    </div>
+  </main>
+  <div id="ticker"><p id="ticker-empty">事件流：等待小镇苏醒……</p></div>
+  <script src="/client.js"></script>
+</body>
+</html>
