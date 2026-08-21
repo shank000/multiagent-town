@@ -15,6 +15,7 @@ test('未加载时所有 sheet ready=false，drawTile/drawTileW 不抛', () => {
   assert.equal(sheetReady('ui'), false);
   assert.equal(sheetReady('tinytown'), false);
   assert.equal(sheetReady('tiny16'), false);
+  assert.equal(sheetReady('limezu'), false);
   assert.equal(sheetReady('dungeon'), false);
   const ctx = mockCtx();
   drawTile(ctx, 'town', 0, 0, 0, 0, 32);

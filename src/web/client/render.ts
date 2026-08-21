@@ -1,7 +1,7 @@
 // 地图渲染：地形/建筑细节/湖水波光/昼夜着色
 
 import type { ObjectView } from './types';
-import { sheetReady, drawTile, TILE_MAP, TOWN_SHEET, TERRAIN_SHEETS, INTERIOR_SHEET, type SheetId } from './tiles';
+import { sheetReady, drawTile, drawTileW, TILE_MAP, TOWN_SHEET, TERRAIN_SHEETS, INTERIOR_SHEET, type SheetId } from './tiles';
 
 export const TILE = 32;
 
@@ -323,6 +323,14 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
 // 家具像素样式：按名称区分床/沙发/咖啡桌/柜台
 export function drawFurniture(ctx: CanvasRenderingContext2D, o: ObjectView): void {
   const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
+  const key = o.name === '床' ? 'bed' : o.name === '沙发' ? 'sofa' : o.name === '咖啡桌' ? 'table' : 'counter';
+  const f = TILE_MAP.furniture[key];
+  // 素材优先：LimeZu 内饰家具（32px 原生尺寸按家具几何比例绘制），未就绪回退程序化
+  if (f && sheetReady(f.sheet)) {
+    const [sx, sy] = f.frames[0];
+    drawTileW(ctx, f.sheet, sx, sy, f.sw, f.sh, px, py, pw, ph);
+    return;
+  }
   if (o.name === '床') {
     // 床头板 + 床单 + 枕头
     ctx.fillStyle = '#8a5a3a';

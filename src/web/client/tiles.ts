@@ -6,11 +6,12 @@
 //   ui        = kenney-ui.png          (Kenney "Pixel UI Pack", CC0)
 //   tinytown  = kenney-tinytown.png    (Kenney "Tiny Town", CC0)
 //   tiny16    = sharm-tiny16.png       (Sharm/Lanea Zimmerman "Tiny 16: Basic", CC-BY 3.0)
+//   limezu    = limezu-interiors.png  (LimeZu "Modern Interiors" 免费版, CC-BY 4.0)
 //   dungeon   = (0x72 "DungeonTileset II" 仅 itch.io 发布，本环境不可达 → 未下载、未注册)
-export type SheetId = 'town' | 'forest' | 'interiors' | 'ui' | 'tinytown' | 'tiny16' | 'dungeon';
+export type SheetId = 'town' | 'forest' | 'interiors' | 'ui' | 'tinytown' | 'tiny16' | 'limezu' | 'dungeon';
 
 const SHEETS: Record<SheetId, { img: HTMLImageElement; src: string } | null> = {
-  town: null, forest: null, interiors: null, ui: null, tinytown: null, tiny16: null, dungeon: null,
+  town: null, forest: null, interiors: null, ui: null, tinytown: null, tiny16: null, limezu: null, dungeon: null,
 };
 // ui 素材暂无消费方、dungeon（0x72）不可达，均未注册以避免空载（对应 assets/ATTRIBUTION 条目按实际保留/标注）
 
@@ -22,6 +23,7 @@ if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
     interiors: '/assets/medieval-interior.png',
     tiny16: '/assets/sharm-tiny16.png',
     tinytown: '/assets/kenney-tinytown.png',
+    limezu: '/assets/limezu-interiors.png',
   }) as [SheetId, string][]) {
     const img = new Image();
     img.onload = () => { SHEETS[id] = { img, src }; };
@@ -75,7 +77,7 @@ export interface TileMap {
   water: { frames: number[][]; sheet: SheetId };
   tree: { frames: number[][]; sheet: SheetId };
   buildings: Record<string, { wall: number[]; roof: number[]; door: number[]; window: number[]; sheet: SheetId }>;
-  furniture: Record<string, { frames: number[][]; sw: number; sh: number }>; // 键: bed/sofa/table/counter
+  furniture: Record<string, { frames: number[][]; sw: number; sh: number; sheet: SheetId }>; // 键: bed/sofa/table/counter
   interior: { floor: number[]; wallTile: number[]; sheet: SheetId };
 }
 
@@ -111,10 +113,10 @@ export const TILE_MAP: TileMap = {
     grocer:      { wall: [48, 16],  roof: [32, 16],  door: [48, 32],  window: [80, 16],  sheet: 'tiny16' }, // 蓝石房
   },
   furniture: {
-    bed:     { frames: [[0, 0]], sw: 16, sh: 32 },  // 内饰图集无家具砖，回退程序化
-    sofa:    { frames: [[16, 0]], sw: 32, sh: 16 },
-    table:   { frames: [[48, 0]], sw: 16, sh: 16 },
-    counter: { frames: [[64, 0]], sw: 32, sh: 16 },
+    bed:     { frames: [[0, 192]], sw: 32, sh: 64, sheet: 'limezu' },   // 白床左列（床头+枕+被）
+    sofa:    { frames: [[352, 160]], sw: 64, sh: 32, sheet: 'limezu' }, // 青色双人沙发
+    table:   { frames: [[32, 320]], sw: 32, sh: 32, sheet: 'limezu' },  // 木圆桌
+    counter: { frames: [[384, 896]], sw: 64, sh: 32, sheet: 'limezu' }, // 厨房台面
   },
   interior: { floor: [0, 0], wallTile: [0, 16], sheet: 'interiors' }, // 地板/墙砖
 };

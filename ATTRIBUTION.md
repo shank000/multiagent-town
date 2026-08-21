@@ -10,3 +10,4 @@
 - `public/assets/kenney-tinytown.png`：Tiny Town (1.1)，作者 Kenney（Kenney Vleugels），[kenney.nl · Tiny Town](https://kenney.nl/assets/tiny-town)，CC0（http://creativecommons.org/publicdomain/zero/1.0/ ，署名非必需但感谢）。
 
 地形/建筑外景/内饰地板墙砖来自以上像素素材；水面、家具、路灯与装饰物为程序绘制。
+- `public/assets/limezu-interiors.png`：Modern Interiors（免费版，32×32 内饰家具/门窗/厨房素材），作者 LimeZu（[limezu.itch.io · Modern Interiors](https://limezu.itch.io/moderninteriors)），CC-BY 4.0（署名：`Modern Interiors by LimeZu`，许可链接 https://creativecommons.org/licenses/by/4.0/ ）。
