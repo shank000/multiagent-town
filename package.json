@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "斯坦福小镇式多智能体交互系统（M0 骨架）",
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "test": "node --no-warnings --import tsx --test \"tests/*.test.ts\"",
     "typecheck": "tsc --noEmit",
@@ -13,7 +15,8 @@
     "interview": "node --no-warnings --import tsx src/cli/interview.ts",
     "acceptance": "node --no-warnings --import tsx --test tests/acceptance.test.ts",
     "build:web": "esbuild src/web/client/main.ts --bundle --format=iife --target=chrome100 --outfile=public/client.js",
-    "town-web": "pnpm build:web && node --no-warnings --import tsx src/cli/town-web.ts"
+    "town-web": "pnpm build:web && node --no-warnings --import tsx src/cli/town-web.ts",
+    "experiment": "node --no-warnings --import tsx src/cli/experiment.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
