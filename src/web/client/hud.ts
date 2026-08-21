@@ -7,8 +7,20 @@ import { TILE } from './render';
 export interface Bubble { kind: 'chat' | 'thought' | 'chat_summary'; speaker: string; text: string; until: number }
 export interface DisplayPos { x: number; y: number } // display 的像素坐标子集
 
-function dprScale(): number {
+export function dprScale(): number {
   return (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+}
+
+/** 动作图标（纯函数，可测）：按 verb 关键词 / 目标名映射 emoji；无匹配返回 null。
+ *  优先级：送信/分拣先于咖啡（'到咖啡馆送信' 显示 ✉️ 而非 ☕）。 */
+export function actionIconFor(verb: string, targetName: string | null): string | null {
+  if (/信|分拣|送/.test(verb)) return '✉️';
+  if (/煮|咖啡|泡/.test(verb)) return '☕';
+  if (/写生|画|速写/.test(verb)) return '🎨';
+  if (targetName === '床') return '💤';
+  if (/书|读/.test(verb)) return '📖';
+  if (/钓鱼|鱼/.test(verb)) return '🎣';
+  return null;
 }
 
 export function wrap(text: string, max: number): string[] {

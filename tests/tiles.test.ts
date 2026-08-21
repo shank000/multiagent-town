@@ -28,7 +28,7 @@ test('TILE_MAP 结构完整：全部 terrain 键存在且坐标非负整数', ()
   }
   assert.ok(TILE_MAP.water.frames.length >= 2);
   assert.ok(TILE_MAP.tree.frames.length >= 1);
-  for (const b of ['cafe', 'bookstore', 'post_office', 'bakery', 'clinic', 'home', 'pier']) {
+  for (const b of ['cafe', 'bookstore', 'post_office', 'bakery', 'clinic', 'home', 'pier', 'flower_shop', 'grocer']) {
     const s = TILE_MAP.buildings[b];
     assert.ok(s && s.wall.length === 2 && s.roof.length === 2 && s.door.length === 2 && s.window.length === 2, b);
   }

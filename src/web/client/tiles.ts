@@ -96,6 +96,8 @@ export const TILE_MAP: TileMap = {
     clinic:      { wall: [64, 16],  roof: [144, 80], door: [224, 32], window: [192, 80] },
     home:        { wall: [0, 96],   roof: [160, 80], door: [240, 32], window: [240, 80] },
     pier:        { wall: [64, 64],  roof: [64, 64],  door: [64, 64],  window: [64, 64] }, // tiny16 r04c04 木板（码头 dock 语义由 Task 3 接线确认）
+    flower_shop: { wall: [48, 16],  roof: [32, 16],  door: [64, 64],  window: [96, 16] },  // tiny16 灰石屋（证据见 task-3-report.md）
+    grocer:      { wall: [192, 16], roof: [176, 0],  door: [64, 64],  window: [160, 16] }, // tiny16 红砖屋（证据见 task-3-report.md）
   },
   furniture: {
     bed:     { frames: [[0, 0]], sw: 16, sh: 32 },  // 占位（内饰无家具砖，回退程序化）
