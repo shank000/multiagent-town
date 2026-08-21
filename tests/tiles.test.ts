@@ -18,9 +18,10 @@ test('未加载时所有 sheet ready=false，drawTile/drawTileW 不抛', () => {
   drawTileW(ctx, 'interiors', 0, 0, 16, 32, 0, 0, 32, 64);
 });
 
-test('TILE_MAP 结构完整：C2/C3 依赖的全部键存在且坐标非负整数', () => {
-  for (const k of ['grass', 'dirt', 'path', 'plaza'] as const) {
+test('TILE_MAP 结构完整：全部 terrain 键存在且坐标非负整数', () => {
+  for (const k of ['grass', 'dirt', 'path', 'plaza', 'flowers', 'crops', 'grassAlt'] as const) {
     assert.ok(Array.isArray(TILE_MAP.terrain[k]) && TILE_MAP.terrain[k].length === 2, k);
+    for (const v of TILE_MAP.terrain[k]) assert.ok(Number.isInteger(v) && v >= 0, k + ' 坐标非法');
   }
   assert.ok(TILE_MAP.water.frames.length >= 2);
   assert.ok(TILE_MAP.tree.frames.length >= 1);

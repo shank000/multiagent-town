@@ -33,6 +33,7 @@ export class ParticleSystem {
   }
 
   draw(ctx: CanvasRenderingContext2D, nowMs: number): void {
+    // 注意：rain/splash 粒子由 main.ts drawRainScreen 在屏幕层绘制，此处不处理
     for (const p of this.particles) {
       const t = 1 - p.life / p.maxLife; // 0→1
       ctx.globalAlpha = Math.max(0, 1 - t);
@@ -50,14 +51,6 @@ export class ParticleSystem {
         ctx.rotate(p.phase + t * 2);
         ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.7);
         ctx.restore();
-      } else if (p.kind === 'rain') {
-        ctx.strokeStyle = p.color;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(p.x + 3, p.y + 10);
-        ctx.stroke();
-      } else if (p.kind === 'splash') {
-        ctx.fillRect(p.x - p.size / 2, p.y, p.size, 1);
       } else {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size * (0.6 + t * 0.8), 0, Math.PI * 2);

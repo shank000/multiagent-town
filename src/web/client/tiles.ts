@@ -9,6 +9,7 @@ export type SheetId = 'town' | 'forest' | 'interiors' | 'ui';
 const SHEETS: Record<SheetId, { img: HTMLImageElement; src: string } | null> = {
   town: null, forest: null, interiors: null, ui: null,
 };
+// ui 素材暂无消费方，未注册以避免空载（kenney-ui.png 保留在 assets/，ATTRIBUTION 条目保留）
 
 // node 测试环境无 window：顶层初始化跳过，浏览器才注册
 if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
@@ -16,7 +17,6 @@ if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
     town: '/assets/medieval-town.png',
     forest: '/assets/ansimuz-forest.png',
     interiors: '/assets/medieval-interior.png',
-    ui: '/assets/kenney-ui.png',
   }) as [SheetId, string][]) {
     const img = new Image();
     img.onload = () => { SHEETS[id] = { img, src }; };

@@ -1,7 +1,7 @@
 // 地图渲染：地形/建筑细节/湖水波光/昼夜着色
 
 import type { ObjectView } from './types';
-import { sheetReady, drawTile, drawTileW, TILE_MAP } from './tiles';
+import { sheetReady, drawTile, TILE_MAP } from './tiles';
 
 export const TILE = 32;
 

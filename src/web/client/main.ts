@@ -6,8 +6,8 @@ import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
 import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop } from './effects';
 import { escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind, bindPanel, updatePanelDeps, type AgentView } from './panel';
 import { drawTooltip, drawBanner, drawBubbles, type Bubble, type DisplayPos } from './hud';
+import type { ObjectView } from './types';
 
-interface ObjectView { id: string; name: string; type: string; x: number; y: number; w: number; h: number }
 interface ClockState { day: number; minutesOfDay: number; totalMinutes: number }
 interface WorldSnapshot {
   clock: ClockState; speedPerRealSecond: number; paused: boolean;
@@ -174,8 +174,9 @@ function bindControls(): void {
   });
   document.getElementById('fit-view')!.addEventListener('click', () => fitCamera());
   const side = document.getElementById('side')!;
-  document.getElementById('panel-toggle')!.addEventListener('click', () => {
+  document.getElementById('panel-toggle')!.addEventListener('click', (e) => {
     side.classList.toggle('collapsed');
+    (e.target as HTMLButtonElement).textContent = side.classList.contains('collapsed') ? '▶' : '◀';
   });
   const ticker = document.getElementById('ticker')!;
   document.getElementById('ticker-toggle')!.addEventListener('click', () => {
