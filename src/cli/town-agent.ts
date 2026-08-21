@@ -47,11 +47,37 @@ async function main(): Promise<void> {
       if (!name) throw new Error('需要 --name');
       const r = (await get(`/api/guest/look?name=${encodeURIComponent(name)}`)) as {
         x: number; y: number; location: string; nearby: { id: string; name: string; state: string; verb: string }[];
+        perceptions: { type: string; from: string; attention: number; distance: number; text: string | null }[];
       };
       const people = r.nearby.length
         ? r.nearby.map((n) => `${n.name}${n.verb ? `（${n.verb}）` : ''}`).join('、')
         : '附近暂时无人';
       console.log(`👁 你正位于「${r.location}」(${r.x},${r.y})。附近：${people}`);
+      if (r.perceptions?.length) {
+        console.log('📡 环境感知：');
+        for (const p of r.perceptions) {
+          const icon = p.attention >= 0.7 ? '⚡' : p.attention >= 0.35 ? '●' : '○';
+          const t = p.type === 'chat' ? '💬' : p.type === 'interact' ? '🎭' : p.type === 'move' ? '🚶' : '👋';
+          console.log(`  ${icon} ${t} ${p.from}${p.text ? `：${p.text.slice(0, 30)}` : ''} (距离 ${p.distance} 步)`);
+        }
+      }
+      return;
+    }
+    if (cmd === 'map') {
+      const r = (await get('/api/guest/map')) as { places: { id: string; name: string; type: string; x: number; y: number }[] };
+      console.log('🗺 小镇地点目录：');
+      for (const p of r.places) console.log(`  ${p.name} (${p.x},${p.y}) [${p.type}]`);
+      console.log('用 walk --target "地点名" 前往。');
+      return;
+    }
+    if (cmd === 'status') {
+      if (!name) throw new Error('需要 --name');
+      const r = (await get(`/api/guest/status?name=${encodeURIComponent(name)}`)) as {
+        name: string; x: number; y: number; state: string; verb: string; location: string;
+        relations: { other: string; affection: number }[];
+      };
+      console.log(`📇 ${r.name}｜位置：${r.location} (${r.x},${r.y})｜状态：${r.state}${r.verb ? `（${r.verb}）` : ''}`);
+      if (r.relations.length) console.log('  关系：' + r.relations.map((x) => `${x.other} ${x.affection >= 0 ? '+' : ''}${x.affection.toFixed(2)}`).join('、'));
       return;
     }
     if (cmd === 'walk' || cmd === 'interact') {
@@ -61,14 +87,14 @@ async function main(): Promise<void> {
       console.log(`${cmd === 'walk' ? '🚶' : '🛠'} ${cmd === 'walk' ? '前往' : '互动'}：${target}`);
       return;
     }
-    if (cmd === 'say') {
+    if (cmd === 'say' || cmd === 'chat') {
       const text = arg('text');
       if (!name || !text) throw new Error('需要 --name 和 --text');
       await post('/api/guest/act', { name, action: 'say', text });
       console.log(`💬 你说：「${text}」`);
       return;
     }
-    console.log(`用法：town-agent <login|look|walk|interact|say> --name <名字> [--target <对象>|--text <内容>]`);
+    console.log(`用法：town-agent <login|look|map|status|walk|interact|say|chat> --name <名字> [--target <对象>|--text <内容>]`);
   } catch (e) {
     console.error(`❌ ${(e as Error).message}`);
     process.exit(1);

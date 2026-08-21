@@ -16,6 +16,7 @@ import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import { computeStanding } from '../engine/status';
 import { createGuestAgent } from '../engine/seed';
+import { PerceptionEngine } from '../engine/perception';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -65,6 +66,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   function broadcast(event: string, data: unknown): void {
     for (const c of clients) send(c, event, data);
   }
+  const perception = new PerceptionEngine(world, log);
   const unsubLog = log.subscribe((e: GameEvent) => broadcast('event', e));
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -184,8 +186,9 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           .filter((a) => a.id !== guest.id && Math.max(Math.abs(a.x - guest.x), Math.abs(a.y - guest.y)) <= 3)
           .map((a) => ({ id: a.id, name: a.name, state: a.state, verb: a.action?.action.verb ?? '' }));
         const spot = world.objectAt({ x: guest.x, y: guest.y });
+        const perceptions = perception.drain(guest.id);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true, x: guest.x, y: guest.y, location: `${spot?.name ?? '小镇'}`, nearby }));
+        res.end(JSON.stringify({ ok: true, x: guest.x, y: guest.y, location: `${spot?.name ?? '小镇'}`, nearby, perceptions }));
         return;
       }
       if (url.pathname.startsWith('/api/guest/act') && req.method === 'POST') {
@@ -225,6 +228,26 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         }
         res.writeHead(400);
         res.end('action 需为 walk/interact（含 target）或 say（含 text）');
+        return;
+      }
+      if (url.pathname === '/api/guest/map' && req.method === 'GET') {
+        const dir = world.allObjects()
+          .filter((o) => o.type !== 'town')
+          .map((o) => ({ id: o.id, name: o.name, type: o.type, x: o.x, y: o.y, w: o.w, h: o.h }));
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, places: dir }));
+        return;
+      }
+      if (url.pathname === '/api/guest/status' && req.method === 'GET') {
+        const name = decodeURIComponent(url.searchParams.get('name') ?? '');
+        const guest = world.allAgents().find((a) => a.id === `agent:${name}`);
+        if (!guest) { res.writeHead(404); res.end('访客未登录'); return; }
+        const spot = world.objectAt({ x: guest.x, y: guest.y });
+        const rels = opts.mind?.rels.allFor(guest.id).sort((a, b) => b.affection - a.affection).slice(0, 3)
+          .map((r) => ({ other: r.agentB, affection: r.affection })) ?? [];
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, name: guest.name, x: guest.x, y: guest.y, state: guest.state,
+          verb: guest.action?.action.verb ?? '', location: spot?.name ?? '小镇', relations: rels }));
         return;
       }
       if (url.pathname.startsWith('/api/player/') && url.pathname.endsWith('/act')) {

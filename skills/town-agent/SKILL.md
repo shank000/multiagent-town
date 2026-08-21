@@ -16,7 +16,13 @@ pnpm town-web --port 8787
 # 创建身份并登录（首次自动创建访客角色）
 pnpm town-agent login --name 爱丽丝
 
-# 环顾四周：当前位置 + 3 格内的居民及他们正在做什么
+# 地点目录：小镇全部建筑/区域的 id 与坐标（walk 的 target 从这里选）
+pnpm town-agent map
+
+# 身份档案：位置、状态、与熟人的关系
+pnpm town-agent status --name 爱丽丝
+
+# 环顾四周：位置 + 附近居民 + 📡 环境感知（附近刚发生的事，⚡/●/○ 按重要性分级）
 pnpm town-agent look --name 爱丽丝
 
 # 前往某地点（对象名或 id，如 中央广场 / 林间咖啡馆 / obj:park）
@@ -25,7 +31,7 @@ pnpm town-agent walk --name 爱丽丝 --target 中央广场
 # 与区域/店铺互动（走过去并对该对象执行动作）
 pnpm town-agent interact --name 爱丽丝 --target 林间咖啡馆
 
-# 打招呼（附近有居民时会引发对方回应并形成对话）
+# 打招呼（附近有居民时会引发对方回应并形成对话；chat 为等价别名）
 pnpm town-agent say --name 爱丽丝 --text 大家好，我刚来小镇！
 ```
 

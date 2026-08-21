@@ -82,3 +82,36 @@ test('访客协议：login → look → walk → say 全链路', async () => {
     await server.close();
   }
 });
+
+test('感知系统：say 后的 look 返回环境感知（注意力分级）', async () => {
+  const { base, server } = await boot();
+  try {
+    await fetch(`${base}/api/guest/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '旅人乙' }),
+    });
+    // 让一位 NPC 在远处互动，制造 move/chat 事件（以系统记录为准：直接由脚本 say 触发 chat）
+    await fetch(`${base}/api/guest/act`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '旅人乙', action: 'say', text: '测试感知！' }),
+    });
+    const look = await (await fetch(`${base}/api/guest/look?name=${encodeURIComponent('旅人乙')}`)).json() as {
+      perceptions: { type: string; attention: number; distance: number; text: string | null }[];
+    };
+    assert.ok(Array.isArray(look.perceptions));
+    // 自身 say 事件不会出现在自己的感知里（actor≠me）
+    const selfIncluded = look.perceptions.some((p) => p.text?.includes('测试感知'));
+    assert.equal(selfIncluded, false, '自己的说话不进自己感知');
+    // 另一位访客登录产生 join 事件 → 应进入感知（同点，距离 0）
+    await fetch(`${base}/api/guest/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '旅人丙' }),
+    });
+    const look2 = await (await fetch(`${base}/api/guest/look?name=${encodeURIComponent('旅人乙')}`)).json() as {
+      perceptions: { type: string }[];
+    };
+    assert.ok(look2.perceptions.some((p) => p.type === 'join'), '新居民加入应被感知');
+  } finally {
+    await server.close();
+  }
+});
