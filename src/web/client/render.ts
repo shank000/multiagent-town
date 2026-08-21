@@ -4,6 +4,65 @@ import type { ObjectView } from './types';
 
 export const TILE = 32;
 
+/** 昼夜着色状态（纯函数）：黎明 300~480 淡橙；黄昏 1020~1200 渐深橙；夜 1200~1440/0~300 蓝 */
+export function dayNightState(minuteOfDay: number): { color: string; alpha: number } {
+  const m = minuteOfDay;
+  if (m >= 300 && m < 480) {
+    const t = (m - 300) / 180;
+    return { color: '#ff9a3c', alpha: Math.sin(t * Math.PI) * 0.12 };
+  }
+  if (m >= 1020 && m < 1200) {
+    const t = (m - 1020) / 180;
+    return { color: '#ff7a3c', alpha: 0.04 + t * 0.16 };
+  }
+  if (m >= 1200 || m < 300) return { color: '#1a2a4a', alpha: 0.32 };
+  return { color: '#000000', alpha: 0 };
+}
+
+/** 河流/湖水：底色 + 双层错相位高光条纹（正弦流动） */
+export function drawRiver(ctx: CanvasRenderingContext2D, px: number, py: number, pw: number, ph: number, nowMs: number): void {
+  ctx.fillStyle = '#4e93c9';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.fillStyle = 'rgba(255,255,255,0.30)';
+  const shift = Math.floor(nowMs / 400) % 3;
+  for (let y = py + 4; y < py + ph - 2; y += 10) {
+    const off = (Math.floor((y - py) / 10) % 2 === 0) ? shift * 6 : -shift * 6;
+    for (let x = px + off; x < px + pw; x += 26) ctx.fillRect(x, y, 8, 2);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  const shimmer = Math.sin(nowMs / 700);
+  ctx.fillRect(px + 10 + shimmer * 8, py + 3, 6, 2);
+  ctx.fillRect(px + pw - 20 - shimmer * 8, py + ph - 6, 6, 2);
+}
+
+/** 装饰树：树冠随 sin 摇曳（phase 由位置 hash 决定，避免整齐划一） */
+export function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, nowMs: number, phase: number): void {
+  const sway = Math.round(Math.sin(nowMs / 900 + phase));
+  ctx.fillStyle = '#4a3520';
+  ctx.fillRect(x - 2, y + 6, 4, 10);
+  ctx.fillStyle = '#2f7a3a';
+  ctx.fillRect(x - 9 + sway, y - 8, 18, 14);
+  ctx.fillStyle = '#3f9a4a';
+  ctx.fillRect(x - 6 + sway, y - 11, 12, 8);
+  ctx.fillStyle = '#4f8a5a';
+  ctx.fillRect(x - 14 + sway, y - 3, 10, 7);
+}
+
+/** 路灯夜间暖光晕 */
+export function drawLampGlow(ctx: CanvasRenderingContext2D, px: number, py: number, nowMs: number, night: boolean): void {
+  ctx.fillStyle = '#3a3f4a';
+  ctx.fillRect(px + 10, py + 6, 12, 26);
+  ctx.fillStyle = '#f5e9c8';
+  ctx.fillRect(px + 12, py + 8, 8, 6);
+  if (!night) return;
+  const pulse = 0.85 + 0.15 * Math.sin(nowMs / 800);
+  const g = ctx.createRadialGradient(px + 16, py + 12, 4, px + 16, py + 12, 34);
+  g.addColorStop(0, `rgba(255,214,130,${0.45 * pulse})`);
+  g.addColorStop(1, 'rgba(255,214,130,0)');
+  ctx.fillStyle = g as unknown as string;
+  ctx.fillRect(px - 18, py - 22, 68, 68);
+}
+
 const ROOFS = ['#b35d45', '#8a5a3a', '#5a7a8a', '#6b4f6b', '#8a7a3a', '#4a6a4a'];
 
 export function drawTerrain(ctx: CanvasRenderingContext2D, w: number, h: number): void {
@@ -35,7 +94,7 @@ export function drawLake(ctx: CanvasRenderingContext2D, px: number, py: number, 
   }
 }
 
-export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, nowMs: number): void {
+export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, nowMs: number, minuteOfDay = -1): void {
   const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
   if (o.type === 'zone') {
     if (o.id === 'obj:park') {
@@ -49,6 +108,31 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
       }
     } else if (o.id === 'obj:lake') {
       drawLake(ctx, px, py, pw, ph, nowMs);
+    } else if (o.id === 'obj:river') {
+      drawRiver(ctx, px, py, pw, ph, nowMs);
+    } else if (o.id === 'obj:orchard' || o.id === 'obj:forest_ne') {
+      ctx.fillStyle = '#6aa84f';
+      ctx.fillRect(px, py, pw, ph);
+      const dense = o.id === 'obj:forest_ne';
+      for (let ty = py + 8; ty < py + ph - 8; ty += dense ? 20 : 26) {
+        for (let tx = px + 8; tx < px + pw - 8; tx += dense ? 20 : 26) {
+          drawTree(ctx, tx + ((hash(o.id + tx + ty) % 8) - 4), ty, nowMs, (hash(o.id + tx + ty) % 6) * 1.1);
+        }
+      }
+    } else if (o.id === 'obj:farm_east') {
+      ctx.fillStyle = '#8a6a3a';
+      ctx.fillRect(px, py, pw, ph);
+      ctx.fillStyle = '#c9a06a';
+      for (let ty = py + 6; ty < py + ph; ty += 12) ctx.fillRect(px + 4, ty, pw - 8, 5);
+      ctx.fillStyle = '#5f8f3f';
+      for (let tx = px + 8; tx < px + pw; tx += 12) for (let ty = py + 8; ty < py + ph; ty += 12) ctx.fillRect(tx, ty, 4, 4);
+    } else if (o.id === 'obj:meadow_s') {
+      ctx.fillStyle = '#7fb069';
+      ctx.fillRect(px, py, pw, ph);
+      ctx.fillStyle = '#e8d5a0';
+      for (let i = 0; i < 10; i++) ctx.fillRect(px + ((i * 17) % pw), py + ((i * 11) % ph), 2, 2);
+    } else if (o.id.startsWith('obj:lamp')) {
+      drawLampGlow(ctx, px, py, nowMs, minuteOfDay >= 1200 || (minuteOfDay >= 0 && minuteOfDay < 300));
     } else {
       ctx.fillStyle = '#c9b79c';
       ctx.fillRect(px, py, pw, ph);
@@ -66,8 +150,9 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
     ctx.fillRect(px, py, pw, 10);
     ctx.fillStyle = 'rgba(255,255,255,0.25)';
     ctx.fillRect(px + 4, py + 3, pw - 8, 3);
-    // 窗
-    ctx.fillStyle = '#7a5a3a';
+    // 窗（夜间点亮）
+    const night = minuteOfDay >= 1200 || (minuteOfDay >= 0 && minuteOfDay < 300);
+    ctx.fillStyle = night ? '#ffd98a' : '#7a5a3a';
     for (let wx = px + 8; wx < px + pw - 8; wx += 16) {
       ctx.fillRect(wx, py + 16, 8, 8);
       ctx.strokeStyle = '#4a3520';
@@ -87,6 +172,9 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
     ctx.fillRect(px, py, pw, ph);
     ctx.strokeStyle = '#a97c50';
     ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
+  } else if (o.type === 'water') {
+    // 种子中 obj:river 为 type 'water'（非 zone），故需单独分支渲染水波
+    drawRiver(ctx, px, py, pw, ph, nowMs);
   } else {
     ctx.fillStyle = '#8a6f4d';
     ctx.fillRect(px + 6, py + 6, pw - 12, ph - 12);
@@ -154,14 +242,10 @@ export function drawInterior(
 }
 
 export function applyDayNight(ctx: CanvasRenderingContext2D, w: number, h: number, minuteOfDay: number): void {
-  let color = '';
-  let alpha = 0;
-  if (minuteOfDay >= 300 && minuteOfDay < 480) { color = '#ff9a3c'; alpha = 0.1; }
-  else if (minuteOfDay >= 1020 && minuteOfDay < 1200) { color = '#ff7a3c'; alpha = 0.16; }
-  else if (minuteOfDay >= 1200 || minuteOfDay < 300) { color = '#1a2a4a'; alpha = 0.3; }
-  if (alpha > 0) {
-    ctx.fillStyle = color;
-    ctx.globalAlpha = alpha;
+  const s = dayNightState(minuteOfDay);
+  if (s.alpha > 0) {
+    ctx.fillStyle = s.color;
+    ctx.globalAlpha = s.alpha;
     ctx.fillRect(0, 0, w, h);
     ctx.globalAlpha = 1;
   }

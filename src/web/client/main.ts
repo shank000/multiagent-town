@@ -3,7 +3,7 @@
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
 import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
-import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter } from './effects';
+import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn } from './effects';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
@@ -54,6 +54,19 @@ const lastActionKey = new Map<string, string>();     // agentId -> "targetName:v
 const zzzLast = new Map<string, number>();
 const steamLast = new Map<string, number>();
 let lastFx = performance.now();
+
+const CHIMNEYS: [string, number, number][] = [
+  ['obj:cafe', 11, 8], ['obj:bakery', 35, 18],
+  ['obj:home_lin', 5, 2], ['obj:home_chen', 37, 2],
+  ['obj:home_shen', 5, 34], ['obj:home_zhou', 37, 34],
+];
+const FIREFLY_ZONES = [
+  { x: 16, y: 28, w: 4, h: 2 },  // 湖
+  { x: 6, y: 26, w: 10, h: 6 },  // 公园
+  { x: 42, y: 14, w: 6, h: 8 },  // 树林
+];
+let lastSmoke = 0;
+let lastFirefly = 0;
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
@@ -428,6 +441,30 @@ function updateHud(): void {
   document.getElementById('clock')!.textContent = `第${c.day}天 ${hh}:${mm}${paused}`;
 }
 
+/** 环境粒子：白天炊烟（咖啡馆/面包店/住宅烟囱）、夜间萤火虫（湖/公园/树林，≤40 只） */
+function spawnAmbient(now: number): void {
+  if (!snap) return;
+  const m = snap.clock.minutesOfDay;
+  const night = m >= 1200 || m < 300;
+  if (!night && now - lastSmoke > 900) {
+    lastSmoke = now;
+    for (const [id, tx, ty] of CHIMNEYS) {
+      const o = snap.objects.find((x) => x.id === id);
+      if (o) fx.spawn(smokePuff(tx * TILE, ty * TILE - 6));
+    }
+  }
+  if (night && now - lastFirefly > 350) {
+    lastFirefly = now;
+    const count = fx.particles.filter((p) => p.kind === 'firefly').length;
+    if (count < 40) {
+      const z = FIREFLY_ZONES[Math.floor(Math.random() * FIREFLY_ZONES.length)];
+      const fx0 = (z.x + Math.random() * z.w) * TILE;
+      const fy0 = (z.y + Math.random() * z.h) * TILE;
+      fx.spawn(fireflySpawn(fx0, fy0));
+    }
+  }
+}
+
 function loop(): void {
   const now = performance.now();
   for (const d of display.values()) {
@@ -470,6 +507,7 @@ function loop(): void {
     }
   }
   fx.update(dt);
+  spawnAmbient(now);
   for (const [id, b] of bubbles) {
     if (now > b.until) bubbles.delete(id);
   }
@@ -540,7 +578,7 @@ function drawObjects(): void {
     if (o.type === 'building' && inside.has(o.id)) {
       drawInterior(ctx, o, childrenOf(o), now);
     } else {
-      drawObjectDetail(ctx, o, now);
+      drawObjectDetail(ctx, o, now, snap!.clock.minutesOfDay);
     }
   }
 }
