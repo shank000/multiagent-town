@@ -32,10 +32,23 @@ export interface Personality {
   patience: number;
 }
 
+export interface Appearance {
+  hairStyle: string;
+  hairColor: string;
+  skinTone: string;
+  outfit: string;
+}
+
 export interface Persona {
   name: string;
   age: number;
   occupation: string;
+  gender: '男' | '女';
+  appearance: Appearance;
+  hobbies: string[];              // 2~4 项
+  skills: Record<string, number>; // 0..10
+  values: string[];               // 2~4 条
+  motivation: string;             // 一句话动机
   background: string;
   traits: string[];
   goals: string[];
@@ -67,7 +80,7 @@ export interface Agent {
 
 export interface Tile { x: number; y: number }
 
-export type ObjectType = 'town' | 'building' | 'room' | 'furniture' | 'zone';
+export type ObjectType = 'town' | 'building' | 'room' | 'furniture' | 'zone' | 'water';
 
 export interface WorldObject {
   id: string;

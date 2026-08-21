@@ -5,7 +5,13 @@ import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 
 export function persona(over: Partial<Persona> = {}): Persona {
   return {
-    name: '测试员', age: 30, occupation: '测试', background: '无',
+    name: '测试员', age: 30, occupation: '测试', gender: '女',
+    appearance: { hairStyle: '短发', hairColor: '黑色', skinTone: '浅麦色', outfit: '常服' },
+    hobbies: ['测试', '读书'],
+    skills: { 测试: 5, 观察: 4, 沟通: 3 },
+    values: ['认真', '诚实'],
+    motivation: '完成测试用例。',
+    background: '无',
     traits: [], goals: [], speechStyle: '', routine: [],
     ...over,
   };

@@ -2,9 +2,15 @@
 
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
+import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
+import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn } from './effects';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
+  age: number; gender: string;
+  appearance: { hairStyle: string; hairColor: string; skinTone: string; outfit: string };
+  hobbies: string[]; skills: Record<string, number>; values: string[]; motivation: string;
+  personality: { extraversion: number; empathy: number; honesty: number; curiosity: number; patience: number };
   x: number; y: number; locationId: string; locationName: string;
   verb: string; thought: string | null; targetName: string | null;
   spriteIndex: number; background: string;
@@ -27,7 +33,7 @@ let selectedId: string | null = null;
 let selectedObjectId: string | null = null;
 
 const STATE_NAME: Record<string, string> = { idle: '待机', thinking: '思考中', moving: '赶路中', acting: '行动中' };
-const TYPE_NAME: Record<string, string> = { town: '小镇', building: '建筑', room: '房间', furniture: '家具', zone: '区域' };
+const TYPE_NAME: Record<string, string> = { town: '小镇', building: '建筑', room: '房间', furniture: '家具', zone: '区域', water: '水域' };
 
 // 玩家扮演：快照不含该信息，客户端本地记录正在被扮演的 NPC
 const playing = new Set<string>();
@@ -42,32 +48,43 @@ interface Bubble { kind: 'chat' | 'thought' | 'chat_summary'; speaker: string; t
 const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
+const fx = new ParticleSystem();
+const poses = new Map<string, { scaleY: number }>(); // agentId -> 姿态缩放（1 站 / 0.78 坐 / 0.5 躺）
+const lastActionKey = new Map<string, string>();     // agentId -> "targetName:verb"
+const zzzLast = new Map<string, number>();
+const steamLast = new Map<string, number>();
+let lastFx = performance.now();
 
-// —— 摄像机 ——
-const VIEW_W = 15; // 视口瓦片数
-const VIEW_H = 10;
-const camera = { x: 0, y: 0, zoom: 1 as 1 | 2 };
+const CHIMNEYS: [string, number, number][] = [
+  ['obj:cafe', 11, 8], ['obj:bakery', 35, 18],
+  ['obj:home_lin', 5, 2], ['obj:home_chen', 37, 2],
+  ['obj:home_shen', 5, 34], ['obj:home_zhou', 37, 34],
+];
+const FIREFLY_ZONES = [
+  { x: 16, y: 28, w: 4, h: 2 },  // 湖
+  { x: 6, y: 26, w: 10, h: 6 },  // 公园
+  { x: 42, y: 14, w: 6, h: 8 },  // 树林
+];
+let lastSmoke = 0;
+let lastFirefly = 0;
 
-// —— 拖拽平移（pointer）——
-let pointerDown = false;
-let lastX = 0;
-let lastY = 0;
-let startX = 0;
-let startY = 0;
-let dragged = false;
+// —— 全屏相机（fit-to-screen，无拖拽）——
+const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
+let fitScale = 1;
+// 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
+let lastGridW = 0;
+let lastGridH = 0;
 
 async function main(): Promise<void> {
   snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
-  initCanvas();
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
   for (const a of snap.agents) initDisplay(a);
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', onPointerCancel);
-  canvas.addEventListener('pointerleave', onPointerCancel);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => { tooltip = null; });
-  canvas.addEventListener('wheel', onWheel);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('dblclick', () => fitCamera());
+  canvas.addEventListener('click', onClick);
   bindControls();
   bindPlayBar();
   document.querySelectorAll('#panel-tabs .tab').forEach((tab) => {
@@ -87,25 +104,31 @@ async function main(): Promise<void> {
   requestAnimationFrame(loop);
 }
 
-function initCanvas(): void {
-  canvas.width = VIEW_W * TILE;
-  canvas.height = VIEW_H * TILE;
+function resizeCanvas(): void {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+  canvas.style.width = `${window.innerWidth}px`;
+  canvas.style.height = `${window.innerHeight}px`;
+  fitCamera();
 }
 
-function clampCam(): void {
-  const maxX = (snap ? snap.gridW : 40) - VIEW_W / camera.zoom;
-  const maxY = (snap ? snap.gridH : 40) - VIEW_H / camera.zoom;
-  camera.x = Math.max(0, Math.min(maxX, camera.x));
-  camera.y = Math.max(0, Math.min(maxY, camera.y));
+function fitCamera(): void {
+  if (!snap) return;
+  const dpr = window.devicePixelRatio || 1;
+  const f = computeFit(canvas.width / dpr, canvas.height / dpr, snap.gridW, snap.gridH, TILE);
+  fitScale = f.scale;
+  camera.scale = fitScale;
+  camera.offX = f.offX;
+  camera.offY = f.offY;
 }
 
 function applyCamera(): void {
-  ctx.setTransform(camera.zoom, 0, 0, camera.zoom, -camera.x * TILE * camera.zoom, -camera.y * TILE * camera.zoom);
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, camera.offX * dpr, camera.offY * dpr);
 }
 
-function resetCamera(): void {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-}
+function resetCamera(): void { ctx.setTransform(1, 0, 0, 1, 0, 0); }
 function initDisplay(a: AgentView): void {
   display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false });
 }
@@ -128,6 +151,11 @@ function applySnapshot(): void {
     }
   }
   updateHud();
+  if (snap.gridW !== lastGridW || snap.gridH !== lastGridH) {
+    lastGridW = snap.gridW;
+    lastGridH = snap.gridH;
+    fitCamera();
+  }
 }
 
 function onEvent(e: TownEvent): void {
@@ -159,7 +187,7 @@ function escapeHtml(s: string): string {
 }
 
 function bindControls(): void {
-  document.querySelectorAll('#controls button').forEach((btn) => {
+  document.querySelectorAll('#controls button[data-action]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const action = btn.getAttribute('data-action')!;
       const value = btn.getAttribute('data-value');
@@ -170,52 +198,22 @@ function bindControls(): void {
       });
     });
   });
+  document.getElementById('fit-view')!.addEventListener('click', () => fitCamera());
 }
 
-// —— 拖拽/缩放：pointerdown/move/up 区分点击与拖拽（位移 <4px 视为点击）——
-function onPointerDown(e: PointerEvent): void {
-  if (e.button !== 0) return;
-  pointerDown = true;
-  dragged = false;
-  lastX = e.clientX;
-  lastY = e.clientY;
-  startX = e.clientX;
-  startY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
-}
-
-function onPointerMove(e: PointerEvent): void {
-  if (!pointerDown) return;
-  // CSS 缩放系数：CSS 尺寸被放大（如 960px），换算回画布像素（480px）
-  const s = canvas.width / canvas.getBoundingClientRect().width;
-  // 累计本次按压位移：超过 4px 阈值才开始平移，未超阈值保持点击语义（不移动相机）
-  if (dragged || Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4) {
-    dragged = true;
-    camera.x -= (e.clientX - lastX) / camera.zoom * s / TILE;
-    camera.y -= (e.clientY - lastY) / camera.zoom * s / TILE;
-    clampCam();
-  }
-  lastX = e.clientX;
-  lastY = e.clientY;
-}
-
-function onPointerUp(e: PointerEvent): void {
-  pointerDown = false;
-  if (!dragged) onClick(e);
-}
-
-// pointercancel/leave：画布外松手时复位，防止幻影平移
-function onPointerCancel(): void {
-  pointerDown = false;
-  lastX = Number.NaN;
-  lastY = Number.NaN;
-}
-
-// 滚轮切换缩放：上滚放大视野（zoom=1），下滚贴近（zoom=2）
 function onWheel(e: WheelEvent): void {
-  if (e.deltaY < 0) camera.zoom = 1;
-  else if (e.deltaY > 0) camera.zoom = 2;
-  clampCam();
+  if (!snap) return;
+  e.preventDefault();
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const ax = e.clientX - rect.left;
+  const ay = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.25 : 0.8;
+  const next = zoomScale(camera.scale, factor, fitScale);
+  const off = zoomOffsets(ax, ay, camera.scale, next, camera.offX, camera.offY, TILE);
+  camera.scale = next;
+  camera.offX = off.offX;
+  camera.offY = off.offY;
 }
 
 function onClick(ev: MouseEvent): void {
@@ -253,13 +251,13 @@ function onMouseMove(ev: MouseEvent): void {
 
 function tileAt(ev: MouseEvent): { px: number; py: number; tx: number; ty: number } {
   const rect = canvas.getBoundingClientRect();
-  const px = (ev.clientX - rect.left) * (canvas.width / rect.width);
-  const py = (ev.clientY - rect.top) * (canvas.height / rect.height);
-  // 逆变换：屏幕像素 → 世界瓦片（含缩放与摄像机偏移）
+  const dpr = window.devicePixelRatio || 1;
+  const px = (ev.clientX - rect.left) * dpr;
+  const py = (ev.clientY - rect.top) * dpr;
   return {
     px, py,
-    tx: Math.floor(px / (TILE * camera.zoom) + camera.x),
-    ty: Math.floor(py / (TILE * camera.zoom) + camera.y),
+    tx: Math.floor((px - camera.offX * dpr) / (TILE * camera.scale * dpr)),
+    ty: Math.floor((py - camera.offY * dpr) / (TILE * camera.scale * dpr)),
   };
 }
 
@@ -294,6 +292,7 @@ function updatePanel(): void {
     return;
   }
   if (activeTab === 'detail') renderDetail(body, a);
+  else if (activeTab === 'profile') renderProfile(body, a);
   else void renderMind(body, a.id, activeTab);
 }
 
@@ -309,6 +308,28 @@ function renderDetail(body: HTMLElement, a: AgentView): void {
     <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>
     <button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button>`;
   document.getElementById('play-toggle')!.addEventListener('click', () => togglePlay(a.id));
+}
+
+function renderProfile(body: HTMLElement, a: AgentView): void {
+  const skillBars = Object.entries(a.skills).map(([k, v]) =>
+    `<div class="mem-item">${escapeHtml(k)}<div class="bar"><div class="bar-fill skill" style="width:${v * 10}%"></div><span>${v}/10</span></div></div>`).join('');
+  const dims: [string, number][] = [
+    ['外向', a.personality.extraversion], ['共情', a.personality.empathy], ['诚实', a.personality.honesty],
+    ['好奇', a.personality.curiosity], ['耐心', a.personality.patience],
+  ];
+  const persBars = dims.map(([k, v]) =>
+    `<div class="mem-item">${k}<div class="bar"><div class="bar-fill pers" style="width:${Math.round(v * 100)}%"></div></div></div>`).join('');
+  const tags = a.hobbies.map((h) => `<span class="tag">${escapeHtml(h)}</span>`).join('');
+  body.innerHTML = `
+    <h3>${escapeHtml(a.name)} 的档案</h3>
+    <p><span class="label">性别</span> ${escapeHtml(a.gender)} · <span class="label">年龄</span> ${a.age} · <span class="label">职业</span> ${escapeHtml(a.occupation)}</p>
+    <p><span class="label">外貌</span> ${escapeHtml(a.appearance.hairStyle)}，${escapeHtml(a.appearance.hairColor)}，${escapeHtml(a.appearance.skinTone)}肤色，常穿${escapeHtml(a.appearance.outfit)}</p>
+    <p class="label">爱好</p><p>${tags}</p>
+    <p class="label">技能</p>${skillBars}
+    <p class="label">性格五维</p>${persBars}
+    <div class="profile-card"><p class="label">价值观</p><p>${a.values.map((v) => `· ${escapeHtml(v)}`).join('<br>')}</p></div>
+    <div class="profile-card"><p class="label">动机</p><p>${escapeHtml(a.motivation)}</p></div>
+    <div class="profile-card"><p class="label">背景故事</p><p>${escapeHtml(a.background)}</p></div>`;
 }
 
 function renderObjectCard(body: HTMLElement, o: ObjectView): void {
@@ -420,6 +441,30 @@ function updateHud(): void {
   document.getElementById('clock')!.textContent = `第${c.day}天 ${hh}:${mm}${paused}`;
 }
 
+/** 环境粒子：白天炊烟（咖啡馆/面包店/住宅烟囱）、夜间萤火虫（湖/公园/树林，≤40 只） */
+function spawnAmbient(now: number): void {
+  if (!snap) return;
+  const m = snap.clock.minutesOfDay;
+  const night = m >= 1200 || m < 300;
+  if (!night && now - lastSmoke > 900) {
+    lastSmoke = now;
+    for (const [id, tx, ty] of CHIMNEYS) {
+      const o = snap.objects.find((x) => x.id === id);
+      if (o) fx.spawn(smokePuff(tx * TILE, ty * TILE - 6));
+    }
+  }
+  if (night && now - lastFirefly > 350) {
+    lastFirefly = now;
+    const count = fx.particles.filter((p) => p.kind === 'firefly').length;
+    if (count < 40) {
+      const z = FIREFLY_ZONES[Math.floor(Math.random() * FIREFLY_ZONES.length)];
+      const fx0 = (z.x + Math.random() * z.w) * TILE;
+      const fy0 = (z.y + Math.random() * z.h) * TILE;
+      fx.spawn(fireflySpawn(fx0, fy0));
+    }
+  }
+}
+
 function loop(): void {
   const now = performance.now();
   for (const d of display.values()) {
@@ -430,25 +475,51 @@ function loop(): void {
       d.y = d.ty;
     }
   }
+  const dt = now - lastFx;
+  lastFx = now;
+  for (const a of snap!.agents) {
+    const p = poses.get(a.id) ?? { scaleY: 1 };
+    poses.set(a.id, p);
+    const target = a.state === 'acting' && a.targetName
+      ? (a.targetName === '床' ? 0.5 : /沙发|咖啡桌|椅/.test(a.targetName) ? 0.78 : 1)
+      : 1;
+    p.scaleY += (target - p.scaleY) * 0.3; // 0.3s 级缓动
+    if (Math.abs(target - p.scaleY) < 0.02) p.scaleY = target;
+    const d = display.get(a.id);
+    if (!d) continue;
+    const key = `${a.targetName}:${a.verb}`;
+    if (a.state === 'acting' && a.targetName && lastActionKey.get(a.id) !== key) {
+      lastActionKey.set(a.id, key);
+      const cx = d.x + TILE / 2;
+      if (a.targetName === '床') { fx.spawn(zzzPuff(cx, d.y - 12)); zzzLast.set(a.id, now); }
+      else if (/沙发|咖啡桌|椅/.test(a.targetName)) fx.spawn(sitDust(cx, d.y + TILE));
+      if (/煮|咖啡|泡/.test(a.verb)) fx.spawn(steamPuff(cx, d.y - 6));
+      if (/煮|泡/.test(a.verb)) steamLast.set(a.id, now);
+      if (/写生|画|速写/.test(a.verb)) fx.spawn(sparkleBurst(cx, d.y - 8, '#ffd700'));
+      if (/信|分拣|送/.test(a.verb)) fx.spawn(paperFlutter(cx, d.y - 12));
+    }
+    if (a.state === 'acting' && a.targetName === '床' && now - (zzzLast.get(a.id) ?? 0) > 900) {
+      zzzLast.set(a.id, now);
+      fx.spawn(zzzPuff(d.x + TILE / 2, d.y - 12));
+    }
+    if (a.state === 'acting' && /煮|泡/.test(a.verb) && now - (steamLast.get(a.id) ?? 0) > 1200) {
+      steamLast.set(a.id, now);
+      fx.spawn(steamPuff(d.x + TILE / 2, d.y - 8));
+    }
+  }
+  fx.update(dt);
+  spawnAmbient(now);
   for (const [id, b] of bubbles) {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
-  // —— 跟随：选中 NPC 时摄像机平滑 lerp 至其瓦片中心 ——
-  if (selectedId) {
-    const d = display.get(selectedId);
-    if (d) {
-      camera.x += (d.x / TILE - VIEW_W / (2 * camera.zoom) - camera.x) * 0.08;
-      camera.y += (d.y / TILE - VIEW_H / (2 * camera.zoom) - camera.y) * 0.08;
-      clampCam();
-    }
-  }
   draw();
   requestAnimationFrame(loop);
 }
 
 function draw(): void {
   if (!snap) return;
+  const nowMs = performance.now();
   const worldW = snap.gridW * TILE;
   const worldH = snap.gridH * TILE;
   // 世界层：应用摄像机变换后绘制（地形/对象/agent/气泡）
@@ -456,6 +527,7 @@ function draw(): void {
   drawTerrain(ctx, worldW, worldH);
   drawObjects();
   drawAgents();
+  fx.draw(ctx, nowMs);
   drawBubbles();
   applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
   // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner）
@@ -507,7 +579,7 @@ function drawObjects(): void {
     if (o.type === 'building' && inside.has(o.id)) {
       drawInterior(ctx, o, childrenOf(o), now);
     } else {
-      drawObjectDetail(ctx, o, now);
+      drawObjectDetail(ctx, o, now, snap!.clock.minutesOfDay);
     }
   }
 }
@@ -518,11 +590,28 @@ function drawAgents(): void {
     const d = display.get(a.id)!;
     const dir: Dir = d.tx > d.x ? 'right' : d.tx < d.x ? 'left' : d.ty > d.y ? 'down' : d.ty < d.y ? 'up' : 'down';
     const frame = (d.moving ? Math.floor(performance.now() / 300) % 2 : 0) as 0 | 1;
-    drawNpc(ctx, d.x + TILE / 2, d.y + TILE / 2, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
+    const p = poses.get(a.id) ?? { scaleY: 1 };
+    const cx = d.x + TILE / 2;
+    const cy = d.y + TILE / 2;
+    ctx.save();
+    if (p.scaleY < 0.999) {
+      ctx.translate(cx, cy + 8);
+      ctx.scale(1, p.scaleY);
+      ctx.translate(-cx, -cy - 8);
+    }
+    drawNpc(ctx, cx, cy, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
+    ctx.restore();
+    // 躺床盖被
+    if (p.scaleY < 0.6 && a.targetName === '床') {
+      ctx.fillStyle = '#e8e0f0';
+      ctx.fillRect(cx - 8, cy - 2, 16, 6);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(cx - 6, cy - 8, 7, 5);
+    }
     // 正在被玩家扮演的 NPC：名字旁补 🎮 徽标
     if (playing.has(a.id)) {
       ctx.font = '10px monospace';
-      ctx.fillText('🎮', d.x + TILE / 2 + ctx.measureText(a.name).width / 2 + 2, d.y + TILE / 2 + 19);
+      ctx.fillText('🎮', cx + ctx.measureText(a.name).width / 2 + 2, cy + 19);
     }
   }
 }

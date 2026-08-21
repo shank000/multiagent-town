@@ -13,14 +13,16 @@
       <button data-action="speed" data-value="1">▶ 1x</button>
       <button data-action="speed" data-value="60">▶ 60x</button>
       <button data-action="speed" data-value="360">▶ 360x</button>
+      <button id="fit-view">🗺 全图</button>
     </div>
   </div>
   <main>
-    <canvas id="game" width="384" height="256"></canvas>
+    <canvas id="game"></canvas>
     <aside id="side">
       <div id="panel">
         <div id="panel-tabs">
           <button data-tab="detail" class="tab active">详情</button>
+          <button data-tab="profile" class="tab">档案</button>
           <button data-tab="memory" class="tab">记忆</button>
           <button data-tab="reflection" class="tab">反思</button>
           <button data-tab="dialogue" class="tab">对话</button>

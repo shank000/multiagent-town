@@ -8,6 +8,14 @@ export interface AgentView {
   id: string;
   name: string;
   occupation: string;
+  age: number;
+  gender: string;
+  appearance: { hairStyle: string; hairColor: string; skinTone: string; outfit: string };
+  hobbies: string[];
+  skills: Record<string, number>;
+  values: string[];
+  motivation: string;
+  personality: { extraversion: number; empathy: number; honesty: number; curiosity: number; patience: number };
   state: Agent['state'];
   x: number;
   y: number;
@@ -51,6 +59,14 @@ export function buildSnapshot(
       id: a.id,
       name: a.name,
       occupation: a.persona.occupation,
+      age: a.persona.age,
+      gender: a.persona.gender,
+      appearance: a.persona.appearance,
+      hobbies: a.persona.hobbies,
+      skills: a.persona.skills,
+      values: a.persona.values,
+      motivation: a.persona.motivation,
+      personality: a.persona.personality ?? { extraversion: 0.5, empathy: 0.5, honesty: 0.5, curiosity: 0.5, patience: 0.5 },
       state: a.state,
       x: a.x,
       y: a.y,

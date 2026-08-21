@@ -718,7 +718,8 @@ test('ParticleSystem 上限 512：超出时丢最旧粒子', () => {
   const sys = new ParticleSystem();
   for (let i = 0; i < 600; i++) sys.spawn(steamPuff(i, 0));
   assert.equal(sys.particles.length, 512);
-  assert.equal(sys.particles[0].x, 600 - 512);
+  // shift 丢弃前 88 个 → 存活最老的是 i=88 的粒子（x≈88±4）
+  assert.ok(sys.particles[0].x >= 84 && sys.particles[0].x <= 92);
 });
 
 test('update 衰减并清理死亡粒子', () => {
