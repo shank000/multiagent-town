@@ -101,7 +101,7 @@ export function zzzPuff(x: number, y: number): Particle[] {
   return [{ kind: 'zzz', x, y, vx: 4, vy: -10, life: 1400, maxLife: 1400, size: 8, color: '#ffffff', phase: 0 }];
 }
 
-/** 烟囱炊烟（Task 5 复用） */
+/** 烟囱炊烟 */
 export function smokePuff(x: number, y: number): Particle[] {
   return [{
     kind: 'smoke', x: x + (Math.random() * 4 - 2), y,
@@ -110,7 +110,7 @@ export function smokePuff(x: number, y: number): Particle[] {
   }];
 }
 
-/** 萤火虫（Task 5 复用） */
+/** 萤火虫 */
 export function fireflySpawn(x: number, y: number): Particle[] {
   return [{
     kind: 'firefly', x, y,

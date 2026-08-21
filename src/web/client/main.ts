@@ -438,7 +438,7 @@ function loop(): void {
     });
     for (const p of hitRain) fx.spawn(rainSplash(p.x, canvas.height / s - 14));
   }
-  // 雨天水面涟漪：每 ~500ms 在 lake/river 水面区域随机 spawn rainSplash（D3 裁定降级实现）
+  // 雨天水面涟漪：每 ~500ms 在 lake/river 水面区域随机生成 rainSplash
   if (snap!.weather === 'rain' && now - lastWaterRipple > 500) {
     lastWaterRipple = now;
     const waterObjs = snap!.objects.filter((o) => o.id === 'obj:lake' || o.id === 'obj:river');

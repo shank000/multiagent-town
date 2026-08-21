@@ -213,7 +213,7 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
         for (let i = 0; i < 8; i++) ctx.fillRect(px + ((i * 13) % pw), py + ((i * 7) % ph), 3, 3);
       }
     } else if (o.id === 'obj:pier') {
-      // 码头（zone，不走建筑渲染器，D1 裁定）：tiny16 木板砖平铺 4×2
+      // 码头（zone，不走建筑渲染器）：tiny16 木板砖平铺 4×2
       const [wx, wy] = TILE_MAP.buildings.pier.wall;
       if (sheetReady('tiny16')) {
         for (let y = py; y < py + ph; y += TILE) {

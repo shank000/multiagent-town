@@ -79,7 +79,7 @@ export interface TileMap {
   interior: { floor: number[]; wallTile: number[]; sheet: SheetId };
 }
 
-// 已确认（Task 2 程序化像素解码，平均色证据见 task-2-report.md）：
+// 已确认（程序化像素解码，平均色判定）：
 //   town   (medieval-town.png 384×256=24×16) 草地 r00c0-c3=#6d8c54/#6b8b53/#6f8d54/#6c8c53；墙=橄榄/棕石砖(r01-r14c0-c7)；屋顶=浅米色(r04-r14c8-c15)；门=暗红(r01-r03c12-c15)。无 path/plaza/dirt/crops 砖。
 //   forest (ansimuz-forest.png 544×512=34×32) 树冠=橄榄黄绿(r01c30=(480,16)=#928924 等)；树干(r02c02=(32,32)=#75432e)；粉色花(r18c2=(32,288)=#6e2746)。图集无水面砖、无草地砖（水/草为演示背景色）。
 //   interiors (medieval-interior.png 320×320=20×20) floor r00c00=(0,0)=#191919 深色地板；wall r01c00=(0,16)=#746772。
