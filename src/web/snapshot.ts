@@ -1,6 +1,7 @@
 // 世界快照序列化：把引擎状态转成浏览器可消费的纯 JSON
 
 import { TimeEngine, type ClockState } from '../core/time';
+import { weatherForDay } from '../core/weather';
 import { GRID_W, GRID_H, type WorldState } from '../core/world';
 import type { Agent, WorldObject } from '../core/types';
 
@@ -44,6 +45,7 @@ export interface WorldSnapshot {
   objects: ObjectView[];
   agents: AgentView[];
   seq: number;
+  weather: 'clear' | 'rain';
 }
 
 export function buildSnapshot(
@@ -90,5 +92,6 @@ export function buildSnapshot(
     })),
     agents,
     seq,
+    weather: weatherForDay(time.state.day),
   };
 }

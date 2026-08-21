@@ -1,5 +1,5 @@
 // 轻量粒子系统：尘土/蒸汽/星光/Zzz/炊烟/萤火虫/纸屑（星露谷风动作与环境特效，上限 512）
-export type ParticleKind = 'dust' | 'steam' | 'sparkle' | 'zzz' | 'smoke' | 'firefly' | 'paper';
+export type ParticleKind = 'dust' | 'steam' | 'sparkle' | 'zzz' | 'smoke' | 'firefly' | 'paper' | 'rain' | 'splash';
 
 export interface Particle {
   kind: ParticleKind;
@@ -50,6 +50,14 @@ export class ParticleSystem {
         ctx.rotate(p.phase + t * 2);
         ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.7);
         ctx.restore();
+      } else if (p.kind === 'rain') {
+        ctx.strokeStyle = p.color;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + 3, p.y + 10);
+        ctx.stroke();
+      } else if (p.kind === 'splash') {
+        ctx.fillRect(p.x - p.size / 2, p.y, p.size, 1);
       } else {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size * (0.6 + t * 0.8), 0, Math.PI * 2);
@@ -123,5 +131,23 @@ export function paperFlutter(x: number, y: number): Particle[] {
   return [{
     kind: 'paper', x, y, vx: 6, vy: -12,
     life: 900, maxLife: 900, size: 3, color: '#f7ecd8', phase: Math.random() * 3,
+  }];
+}
+
+/** 雨丝：斜向下落 */
+export function rainDrop(x: number, y: number): Particle[] {
+  return [{
+    kind: 'rain', x, y,
+    vx: -2, vy: 90,          // 单位 px/s（屏幕层）
+    life: 900, maxLife: 900, size: 1, color: 'rgba(160,190,230,0.8)', phase: Math.random() * 6,
+  }];
+}
+
+/** 落地水花 */
+export function rainSplash(x: number, y: number): Particle[] {
+  return [{
+    kind: 'splash', x, y,
+    vx: 0, vy: -6,
+    life: 350, maxLife: 350, size: 2, color: 'rgba(160,190,230,0.6)', phase: Math.random() * 6,
   }];
 }

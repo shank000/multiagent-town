@@ -3,7 +3,7 @@
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
 import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
-import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn } from './effects';
+import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop } from './effects';
 
 interface AgentView {
   id: string; name: string; occupation: string; state: string;
@@ -20,6 +20,7 @@ interface ClockState { day: number; minutesOfDay: number; totalMinutes: number }
 interface WorldSnapshot {
   clock: ClockState; speedPerRealSecond: number; paused: boolean;
   gridW: number; gridH: number; objects: ObjectView[]; agents: AgentView[]; seq: number;
+  weather: 'clear' | 'rain';
 }
 interface TownEvent {
   type: string; actorId: string | null; description: string;
@@ -67,6 +68,8 @@ const FIREFLY_ZONES = [
 ];
 let lastSmoke = 0;
 let lastFirefly = 0;
+const RAIN_CAP = 200;
+let lastRainSpawn = 0;
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
@@ -508,6 +511,16 @@ function loop(): void {
     }
   }
   fx.update(dt);
+  if (snap!.weather === 'rain' && now - lastRainSpawn > 40) {
+    lastRainSpawn = now;
+    const n = fx.particles.filter((p) => p.kind === 'rain').length;
+    if (n < RAIN_CAP) {
+      for (let i = 0; i < Math.min(8, RAIN_CAP - n); i++) {
+        // 屏幕层坐标即 canvas 设备像素（identity 变换），与 tooltip/banner 一致
+        fx.spawn(rainDrop(Math.random() * canvas.width, Math.random() * canvas.height * 0.9));
+      }
+    }
+  }
   spawnAmbient(now);
   for (const [id, b] of bubbles) {
     if (now > b.until) bubbles.delete(id);
@@ -527,13 +540,43 @@ function draw(): void {
   drawTerrain(ctx, worldW, worldH);
   drawObjects();
   drawAgents();
-  fx.draw(ctx, nowMs);
+  drawWorldFx(ctx, nowMs);
   drawBubbles();
   applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
-  // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner）
+  if (snap.weather === 'rain') {
+    ctx.fillStyle = 'rgba(70,90,130,0.12)';
+    ctx.fillRect(0, 0, worldW, worldH);
+  }
+  // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner + 雨丝）
   resetCamera();
+  if (snap.weather === 'rain') drawRainScreen(ctx);
   drawTooltip();
   drawBanner();
+}
+
+/** 世界层粒子绘制：跳过 rain/splash（屏幕层单独画） */
+function drawWorldFx(ctx: CanvasRenderingContext2D, nowMs: number): void {
+  const saved = fx.particles;
+  fx.particles = saved.filter((p) => p.kind !== 'rain' && p.kind !== 'splash');
+  fx.draw(ctx, nowMs);
+  fx.particles = saved;
+}
+
+/** 雨丝/水花：屏幕层绘制（resetCamera 后坐标即设备 px，与相机无关） */
+function drawRainScreen(ctx: CanvasRenderingContext2D): void {
+  for (const p of fx.particles) {
+    if (p.kind !== 'rain' && p.kind !== 'splash') continue;
+    if (p.kind === 'rain') {
+      ctx.strokeStyle = p.color;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + 3, p.y + 10);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y, p.size, 1);
+    }
+  }
 }
 
 // —— 屋顶剖切：含 NPC 的建筑改画内饰 ——

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, smokePuff, fireflySpawn, paperFlutter,
+  rainDrop, rainSplash,
 } from '../src/web/client/effects';
 
 function mockCtx() {
@@ -39,6 +40,16 @@ test('各发射器返回坐标/寿命合法的粒子', () => {
       assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
       assert.ok(p.life > 0 && p.maxLife >= p.life);
       assert.ok(Number.isFinite(p.vx) && Number.isFinite(p.vy));
+    }
+  }
+});
+
+test('rainDrop/rainSplash 返回合法雨粒子', () => {
+  for (const ps of [rainDrop(10, 20), rainSplash(10, 20)]) {
+    assert.ok(ps.length >= 1);
+    for (const p of ps) {
+      assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
+      assert.ok(p.life > 0 && p.maxLife >= p.life);
     }
   }
 });
