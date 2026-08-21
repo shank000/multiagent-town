@@ -28,7 +28,7 @@ export function drawNpc(
   cx: number,
   cy: number,
   dir: Dir,
-  frame: 0 | 1,
+  frame: 0 | 1 | 2,
   index: number,
   moving: boolean,
   selected: boolean,
@@ -45,10 +45,10 @@ export function drawNpc(
   if (sheetReady && sheet.complete && sheet.naturalWidth > 0) {
     const col = index % 4;
     const row = Math.floor(index / 4);
-    const sx = col * 96 + (frame === 0 ? 0 : 32);
+    // 每行 3 帧步态（0 站立/迈步 1/2），帧序列由调用方按 WALK_CYCLE 驱动
+    const sx = col * 96 + frame * 32;
     const sy = row * 128 + (DIR_ROW[dir] ?? 0);
-    const bob = moving ? Math.round(Math.sin(performance.now() / 150)) : 0;
-    ctx.drawImage(sheet, sx, sy, 32, 32, x - 16, y - 26 + bob, 32, 32);
+    ctx.drawImage(sheet, sx, sy, 32, 32, x - 16, y - 26, 32, 32);
   } else {
     drawNpcProcedural(ctx, x, y, dir, frame, index, moving);
   }
@@ -71,7 +71,7 @@ function drawNpcProcedural(
   x: number,
   y: number,
   dir: Dir,
-  frame: 0 | 1,
+  frame: 0 | 1 | 2,
   index: number,
   moving: boolean
 ): void {

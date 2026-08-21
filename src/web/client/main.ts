@@ -33,7 +33,10 @@ let playTargetId: string | null = null;
 let tooltip: { text: string; x: number; y: number } | null = null;
 let banner: { text: string; until: number } | null = null;
 
-interface Display { x: number; y: number; tx: number; ty: number; lastTileX: number; lastTileY: number; moving: boolean }
+interface Display { x: number; y: number; tx: number; ty: number; lastTileX: number; lastTileY: number; moving: boolean; dir: Dir }
+/** 3 帧步态循环：站立-迈步-迈步-迈步（经典四拍） */
+const WALK_CYCLE = [0, 1, 2, 1] as const;
+const WALK_SPEED = TILE * 5.5; // 像素/秒（匀速行走）
 const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
 const ticker: string[] = [];
@@ -43,6 +46,7 @@ const lastActionKey = new Map<string, string>();     // agentId -> "targetName:v
 const zzzLast = new Map<string, number>();
 const steamLast = new Map<string, number>();
 let lastFx = performance.now();
+let lastFrame = performance.now();
 
 const FIREFLY_ZONE_IDS = ['obj:lake', 'obj:park', 'obj:forest_ne'];
 let lastSmoke = 0;
@@ -108,7 +112,7 @@ function applyCamera(): void {
 
 function resetCamera(): void { ctx.setTransform(1, 0, 0, 1, 0, 0); }
 function initDisplay(a: AgentView): void {
-  display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false });
+  display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false, dir: 'down' });
 }
 function applySnapshot(): void {
   if (!snap) return;
@@ -372,12 +376,28 @@ function spawnAmbient(now: number): void {
 
 function loop(): void {
   const now = performance.now();
+  const dtSec = Math.min(0.05, (now - lastFrame) / 1000);
+  lastFrame = now;
+  // 匀速行走：按固定速度逼近目标，避免缓出插值导致的停顿感
   for (const d of display.values()) {
-    d.x += (d.tx - d.x) * 0.25;
-    d.y += (d.ty - d.y) * 0.25;
-    if (Math.abs(d.tx - d.x) < 0.4 && Math.abs(d.ty - d.y) < 0.4) {
+    const prevX = d.x;
+    const prevY = d.y;
+    const dx = d.tx - d.x;
+    const dy = d.ty - d.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 0.5) {
+      const step = Math.min(dist, WALK_SPEED * dtSec);
+      d.x += (dx / dist) * step;
+      d.y += (dy / dist) * step;
+    } else {
       d.x = d.tx;
       d.y = d.ty;
+    }
+    // 方向按本帧实际位移判定（主轴优先；位移过小时保持上一方向，避免拐角抖动）
+    const mdx = d.x - prevX;
+    const mdy = d.y - prevY;
+    if (Math.abs(mdx) + Math.abs(mdy) > 0.3) {
+      d.dir = Math.abs(mdx) >= Math.abs(mdy) ? (mdx > 0 ? 'right' : 'left') : (mdy > 0 ? 'down' : 'up');
     }
   }
   const dt = now - lastFx;
@@ -564,8 +584,9 @@ function drawAgents(): void {
   const sorted = [...snap!.agents].sort((a, b) => a.y - b.y);
   for (const a of sorted) {
     const d = display.get(a.id)!;
-    const dir: Dir = d.tx > d.x ? 'right' : d.tx < d.x ? 'left' : d.ty > d.y ? 'down' : d.ty < d.y ? 'up' : 'down';
-    const frame = (d.moving ? Math.floor(now / 250) % 2 : 0) as 0 | 1;
+    const dir: Dir = d.dir;
+    const walking = Math.abs(d.tx - d.x) > 1 || Math.abs(d.ty - d.y) > 1;
+    const frame = (walking ? WALK_CYCLE[Math.floor(now / 140) % 4] : 0) as 0 | 1 | 2;
     const p = poses.get(a.id) ?? { scaleY: 1 };
     const cx = d.x + TILE / 2;
     const cy = d.y + TILE / 2;
