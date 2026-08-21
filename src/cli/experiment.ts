@@ -22,7 +22,7 @@ function parseArgs(): { days: number; seeds: number } {
   return { days: get('days', 30), seeds: get('seeds', 3) };
 }
 
-async function runCondition(cond: PartnerExperimentConfig['historyAccess'], days: number, seed: number): Promise<Choice[]> {
+async function runCondition(cond: PartnerExperimentConfig['historyAccess'], gift: PartnerExperimentConfig['giftExchange'], days: number, seed: number): Promise<Choice[]> {
   // 独立内存库 + 固定随机种子控制复现
   const db = openDb(':memory:');
   db.raw.prepare('SELECT 1').run(); // 触达
@@ -34,7 +34,7 @@ async function runCondition(cond: PartnerExperimentConfig['historyAccess'], days
   const executor = new AgentExecutor(gateway, world, log, mind);
   // 对照组无邻近闲聊：全部对话来自伙伴选择，隔离自变量
   const loop = new WorldLoop(time, world, executor, log, db, {}, undefined, mind);
-  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: cond });
+  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: cond, giftExchange: gift });
   const choices: Choice[] = [];
   for (let d = 0; d < days; d++) {
     const target = d * 1440 + 1170;
@@ -163,26 +163,35 @@ function diversity(byDay: Map<number, Map<string, number>>, names: string[]): nu
 async function main(): Promise<void> {
   const { days, seeds } = parseArgs();
   const names = buildTown().allAgents().map((a) => a.id);
-  const results: Record<string, { repeat: number[]; recip: number[]; clus: number[]; div: number[] }> = {};
-  for (const cond of ['off', 'on'] as const) {
-    const acc = { repeat: [] as number[], recip: [] as number[], clus: [] as number[], div: [] as number[] };
-    for (let s = 0; s < seeds; s++) {
-      const choices = await runCondition(cond, days, s + 1);
-      const byDay = dailyMatrix(choices, names);
-      acc.repeat.push(...repeatRate(byDay));
-      acc.recip.push(...reciprocity(choices));
-      acc.clus.push(...clustering(byDay, names.length));
-      acc.div.push(...diversity(byDay, names));
+  interface Cell { mem: string; gift: string; repeat: number[]; recip: number[]; clus: number[]; div: number[] }
+  const cells: Cell[] = [];
+  for (const mem of ['off', 'on'] as const) {
+    for (const gift of ['off', 'on'] as const) {
+      const acc = { repeat: [] as number[], recip: [] as number[], clus: [] as number[], div: [] as number[] };
+      for (let s = 0; s < seeds; s++) {
+        const choices = await runCondition(mem, gift, days, s + 1);
+        const byDay = dailyMatrix(choices, names);
+        acc.repeat.push(...repeatRate(byDay));
+        acc.recip.push(...reciprocity(choices));
+        acc.clus.push(...clustering(byDay, names.length));
+        acc.div.push(...diversity(byDay, names));
+      }
+      cells.push({ mem, gift, ...acc });
     }
-    results[cond] = acc;
   }
   const fmt = (v: number[]) => `${avg(v).toFixed(3)}±${std(v).toFixed(3)}`;
-  console.log('伙伴选择预实验（关系记忆 off vs on）');
-  console.log(`  指标            off(记忆关)           on(记忆开)`);
-  console.log(`  同对重复率      ${fmt(results.off.repeat)}        ${fmt(results.on.repeat)}`);
-  console.log(`  互惠性(相对基线) ${fmt(results.off.recip)}        ${fmt(results.on.recip)}`);
-  console.log(`  聚类系数        ${fmt(results.off.clus)}        ${fmt(results.on.clus)}`);
-  console.log(`  伙伴多样性(熵)  ${fmt(results.off.div)}        ${fmt(results.on.div)}`);
-  console.log(`样本：days=${days} seeds=${seeds} 每条件 choices=${(results.on.repeat.length / seeds).toFixed(0)} 天×${seeds} 种子`);
+  const cell = (mem: string, gift: string) => cells.find((c) => c.mem === mem && c.gift === gift)!;
+  console.log('伙伴选择预实验（2×2 因子：记忆 × 馈礼）');
+  console.log('  指标                记忆关/无礼      记忆关/馈礼      记忆开/无礼      记忆开/馈礼');
+  const rows: [string, (c: Cell) => number[]][] = [
+    ['同对重复率', (c) => c.repeat],
+    ['互惠性(相对基线)', (c) => c.recip],
+    ['聚类系数', (c) => c.clus],
+    ['伙伴多样性(7日窗口)', (c) => c.div],
+  ];
+  for (const [label, fn] of rows) {
+    console.log(`  ${label.padEnd(16)} ${fmt(fn(cell('off', 'off')))}  ${fmt(fn(cell('off', 'on')))}  ${fmt(fn(cell('on', 'off')))}  ${fmt(fn(cell('on', 'on')))}`);
+  }
+  console.log(`样本：days=${days} seeds=${seeds} × 4 格子`);
 }
 void main();

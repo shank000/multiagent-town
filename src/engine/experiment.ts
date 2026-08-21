@@ -6,16 +6,21 @@ import type { Agent } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
 import type { MindEngine } from './mind';
+import { Economy, ITEMS } from './economy';
 
 export interface PartnerExperimentConfig {
-  /** on = 按关系记忆（亲密度 + 最近互动时间）打分选伙伴；off = 均匀随机选 */
+  /** 因子1：on = 按关系记忆（亲密度 + 最近互动时间）打分选伙伴；off = 均匀随机选 */
   historyAccess: 'on' | 'off';
+  /** 因子2：on = 每日购买鲜花赠予所择伙伴（馈礼→亲密度+0.1）；off = 无馈礼 */
+  giftExchange: 'on' | 'off';
 }
 
 const CHOICE_MINUTE = 1170; // 19:30
 
 export class PartnerChoiceExperiment {
   private lastMinute = 0;
+
+  private economy = new Economy();
 
   constructor(
     private log: EventLog,
@@ -31,11 +36,12 @@ export class PartnerChoiceExperiment {
     this.lastMinute = minute;
   }
 
-  /** 当日一轮：每位参与者独立选择一位伙伴并开始一对一对话 */
+  /** 当日一轮：每位参与者独立选择一位伙伴；馈礼组先买花赠礼再开始一对一对话 */
   round(now: number): void {
     for (const agent of this.world.allAgents()) {
       const partner = this.pickPartner(agent);
       if (!partner) continue;
+      if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
       this.log.addEvent({
         id: randomUUID(),
         type: 'chat',
@@ -48,6 +54,26 @@ export class PartnerChoiceExperiment {
       });
       if (!this.mind.dialogue.isActive(agent.id, partner.id)) this.mind.dialogue.start(agent, partner, now);
     }
+  }
+
+  /** 馈礼：每日工资入账 → 买鲜花 → 赠予伙伴（关系升温），事件与亲密度同步 */
+  private gift(gifter: Agent, receiver: Agent, now: number): void {
+    this.economy.earnDaily(gifter.id);
+    if (!this.economy.buy(gifter.id, 'flower')) return;
+    const delta = this.economy.give(gifter.id, receiver.id, 'flower');
+    if (delta === null) return;
+    this.mind.rels.update(gifter.id, receiver.id, { affectionDelta: delta }, now);
+    this.mind.rels.update(receiver.id, gifter.id, { affectionDelta: delta * 0.5 }, now);
+    this.log.addEvent({
+      id: randomUUID(),
+      type: 'system',
+      actorId: gifter.id,
+      targetIds: [receiver.id],
+      description: `「${gifter.name}」把一束${ITEMS.flower.name}送给了「${receiver.name}」`,
+      location: gifter.locationId,
+      gameTime: now,
+      payload: { kind: 'gift', fromId: gifter.id, toId: receiver.id, item: 'flower' },
+    });
   }
 
   /** 伙伴选择：on = 亲密度×权重 + 最近互动时间加成 + 微量扰动（避免永远同一人）；off = 均匀随机 */

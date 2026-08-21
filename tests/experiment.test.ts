@@ -19,7 +19,7 @@ function setup() {
 
 test('记忆关：选择均匀随机（分布覆盖多伙伴）', () => {
   const { db, log, world, mind } = setup();
-  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off' });
+  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off', giftExchange: 'off' });
   const agent = world.allAgents()[0];
   const picks = new Map<string, number>();
   for (let i = 0; i < 200; i++) {
@@ -38,7 +38,7 @@ test('记忆开：优先选择亲密度更高的伙伴', () => {
   const low = agents[2];
   mind.rels.update(me.id, high.id, { affectionDelta: 0.35 }, 1000);
   mind.rels.update(me.id, low.id, { affectionDelta: -0.2 }, 1000);
-  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'on' });
+  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'on', giftExchange: 'off' });
   const wins = { high: 0, low: 0 };
   for (let i = 0; i < 100; i++) {
     const p = exp.pickPartner(me)!;
@@ -50,8 +50,28 @@ test('记忆开：优先选择亲密度更高的伙伴', () => {
 
 test('round：全员各选一伙伴并记录 choice 事件', () => {
   const { db, log, world, mind } = setup();
-  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off' });
+  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off', giftExchange: 'off' });
   exp.round(1170);
   const ev = log.eventsBetween(0, 1e9).filter((e) => (e.payload as { kind?: string } | null)?.kind === 'experiment_pair_choice');
   assert.equal(ev.length, world.allAgents().length, '每位参与者一条选择事件');
+});
+
+test('经济系统：工资/购买/赠送/余额不足', async () => {
+  const { db, log, world } = setup();
+  void db; void log;
+  const { Economy, ITEMS } = await import('../src/engine/economy');
+  const eco = new Economy();
+  const a = world.allAgents()[0].id;
+  const b = world.allAgents()[1].id;
+  eco.earnDaily(a);
+  assert.equal(eco.getMoney(a), 10);
+  assert.equal(eco.buy(a, 'flower'), true);
+  assert.equal(eco.getMoney(a), 5);
+  assert.equal(eco.buy(a, 'flower'), true);
+  assert.equal(eco.getMoney(a), 0);
+  assert.equal(eco.buy(a, 'flower'), false, '余额不足不能购买');
+  const delta = eco.give(a, b, 'flower');
+  assert.equal(delta, ITEMS.flower.affectionDelta);
+  assert.equal(eco.give(a, b, 'flower'), ITEMS.flower.affectionDelta, '第二束花仍可赠送'); // 买了 2 束
+  assert.equal(eco.give(a, b, 'flower'), null, '无库存不能赠送');
 });
