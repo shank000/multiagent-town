@@ -22,7 +22,7 @@ test('未加载时所有 sheet ready=false，drawTile/drawTileW 不抛', () => {
 });
 
 test('TILE_MAP 结构完整：全部 terrain 键存在且坐标非负整数', () => {
-  for (const k of ['grass', 'dirt', 'path', 'plaza', 'flowers', 'crops', 'grassAlt', 'altGrass', 'tree2', 'flowerBed'] as const) {
+  for (const k of ['grass', 'dirt', 'path', 'plaza', 'flowers', 'crops', 'grassAlt', 'tree2', 'flowerBed'] as const) {
     assert.ok(Array.isArray(TILE_MAP.terrain[k]) && TILE_MAP.terrain[k].length === 2, k);
     for (const v of TILE_MAP.terrain[k]) assert.ok(Number.isInteger(v) && v >= 0, k + ' 坐标非法');
   }

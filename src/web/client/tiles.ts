@@ -35,6 +35,18 @@ if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
 export const TOWN_SHEET: 'town' | 'tiny16' | 'tinytown' = 'tiny16';
 export const INTERIOR_SHEET: 'interiors' | 'dungeon' = 'interiors';
 
+// 地形坐标键 → 所属图集：各键自描述所属图集，绘制方按 sheetReady 判定并回退（与 TILE_MAP.terrain 消费键一致）
+export const TERRAIN_SHEETS: Record<'grass' | 'dirt' | 'path' | 'plaza' | 'flowers' | 'crops' | 'tree2' | 'flowerBed', SheetId> = {
+  grass: 'town',       // town r00c0 草地
+  dirt: 'town',        // 占位砖坐标落在 town 范围
+  path: 'town',        // 占位砖坐标落在 town 范围
+  plaza: 'town',       // 占位砖坐标落在 town 范围
+  flowers: 'forest',   // forest r18c2 粉色花簇
+  crops: 'town',       // 占位砖坐标落在 town 范围
+  tree2: 'tiny16',     // tiny16 r01c21 树冠
+  flowerBed: 'tiny16', // tiny16 r03c19 黄花草地
+};
+
 export function sheetReady(id: SheetId): boolean {
   const s = SHEETS[id];
   return !!s && s.img.complete && s.img.naturalWidth > 0;
@@ -59,10 +71,10 @@ export function drawTileW(
 
 // —— 命名坐标映射（数值为 16px 网格像素坐标，依据见 task-1-report.md 的像素解码记录）——
 export interface TileMap {
-  terrain: { grass: number[]; grassAlt: number[]; altGrass: number[]; dirt: number[]; path: number[]; plaza: number[]; flowers: number[]; crops: number[]; tree2: number[]; flowerBed: number[] };
+  terrain: { grass: number[]; grassAlt: number[]; dirt: number[]; path: number[]; plaza: number[]; flowers: number[]; crops: number[]; tree2: number[]; flowerBed: number[] };
   water: { frames: number[][]; sheet: SheetId };
   tree: { frames: number[][]; sheet: SheetId };
-  buildings: Record<string, { wall: number[]; roof: number[]; door: number[]; window: number[] }>;
+  buildings: Record<string, { wall: number[]; roof: number[]; door: number[]; window: number[]; sheet: SheetId }>;
   furniture: Record<string, { frames: number[][]; sw: number; sh: number }>; // 键: bed/sofa/table/counter
   interior: { floor: number[]; wallTile: number[]; sheet: SheetId };
 }
@@ -77,7 +89,6 @@ export const TILE_MAP: TileMap = {
   terrain: {
     grass: [0, 0],      // town r00c0 草地（确认）
     grassAlt: [16, 0],  // town r00c1 草地变体（确认）
-    altGrass: [352, 0], // tiny16 r00c22 草地变体（黄白斑点草，avg #7ead3d，证据见 task-1-report.md）
     dirt: [0, 16],      // 占位（无独立土砖，drawTerrain 保持程序化）
     path: [0, 32],      // 占位（无独立路砖）
     plaza: [0, 48],     // 占位（无独立广场砖）
@@ -89,15 +100,15 @@ export const TILE_MAP: TileMap = {
   water: { frames: [[0, 32], [16, 32]], sheet: 'forest' }, // 占位（forest 无水面砖，水保持程序化）
   tree: { frames: [[480, 16]], sheet: 'forest' },          // forest r01c30 树冠（橄榄黄绿，确认）
   buildings: {
-    cafe:        { wall: [0, 16],   roof: [128, 64], door: [192, 16], window: [192, 64] },
-    bookstore:   { wall: [0, 32],   roof: [144, 64], door: [208, 16], window: [208, 64] },
-    post_office: { wall: [0, 48],   roof: [160, 64], door: [192, 32], window: [224, 64] },
-    bakery:      { wall: [0, 64],   roof: [176, 64], door: [208, 32], window: [240, 64] },
-    clinic:      { wall: [64, 16],  roof: [144, 80], door: [224, 32], window: [192, 80] },
-    home:        { wall: [0, 96],   roof: [160, 80], door: [240, 32], window: [240, 80] },
-    pier:        { wall: [64, 64],  roof: [64, 64],  door: [64, 64],  window: [64, 64] }, // tiny16 r04c04 木板（码头 dock 语义由 Task 3 接线确认）
-    flower_shop: { wall: [48, 16],  roof: [32, 16],  door: [64, 64],  window: [96, 16] },  // tiny16 灰石屋（证据见 task-3-report.md）
-    grocer:      { wall: [192, 16], roof: [176, 0],  door: [64, 64],  window: [160, 16] }, // tiny16 红砖屋（证据见 task-3-report.md）
+    cafe:        { wall: [0, 16],   roof: [128, 64], door: [192, 16], window: [192, 64], sheet: 'town' },
+    bookstore:   { wall: [0, 32],   roof: [144, 64], door: [208, 16], window: [208, 64], sheet: 'town' },
+    post_office: { wall: [0, 48],   roof: [160, 64], door: [192, 32], window: [224, 64], sheet: 'town' },
+    bakery:      { wall: [0, 64],   roof: [176, 64], door: [208, 32], window: [240, 64], sheet: 'town' },
+    clinic:      { wall: [64, 16],  roof: [144, 80], door: [224, 32], window: [192, 80], sheet: 'town' },
+    home:        { wall: [0, 96],   roof: [160, 80], door: [240, 32], window: [240, 80], sheet: 'town' },
+    pier:        { wall: [64, 64],  roof: [64, 64],  door: [64, 64],  window: [64, 64],  sheet: 'tiny16' }, // tiny16 r04c04 木板；zone 专用（building 分支不消费）
+    flower_shop: { wall: [48, 16],  roof: [32, 16],  door: [64, 64],  window: [96, 16],  sheet: 'tiny16' }, // tiny16 灰石屋（证据见 task-3-report.md）
+    grocer:      { wall: [192, 16], roof: [176, 0],  door: [64, 64],  window: [160, 16], sheet: 'tiny16' }, // tiny16 红砖屋（证据见 task-3-report.md）
   },
   furniture: {
     bed:     { frames: [[0, 0]], sw: 16, sh: 32 },  // 占位（内饰无家具砖，回退程序化）
