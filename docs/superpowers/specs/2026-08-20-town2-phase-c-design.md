@@ -47,6 +47,7 @@
   - 雨天色调：`applyDayNight` 后追加 `rainTint` 层（蓝灰 0.12 alpha）+ 水面涟漪高光增强
 - 纯视觉：不改变 agent 决策/路径/事件。
 - 测试：weatherForDay 周期单测；快照 weather 字段；rainDrop 粒子合法性冒烟。
+> 简化实现说明（终审记录）：雨丝实现为固定 10px 单段斜线（无 speed 参数/分段），雨天水面涟漪增强未实现——纯视觉抛光项，随 UI 迭代再补。
 
 ## C5 UI 全面美化
 

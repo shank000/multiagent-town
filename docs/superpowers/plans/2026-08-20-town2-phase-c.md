@@ -23,7 +23,7 @@
 
 ---
 
-### Task C1: 素材下载 + 许可复核 + tiles.ts 图集加载器
+### Task 1: 素材下载 + 许可复核 + tiles.ts 图集加载器
 
 **Files:**
 - Create: `src/web/client/tiles.ts`
@@ -173,7 +173,7 @@
   }
 
   export const TILE_MAP: TileMap = {
-    terrain: { grass: [0, 0], dirt: [16, 0], path: [32, 0], plaza: [48, 0] },
+    terrain: { grass: [0, 0], dirt: [16, 0], path: [32, 0], plaza: [48, 0], flowers: [64, 0], crops: [80, 0] },
     water: { frames: [[0, 32], [16, 32]], sheet: 'forest' },
     tree: { frames: [[32, 32]], sheet: 'forest' },
     buildings: {
@@ -212,7 +212,7 @@
 
 ---
 
-### Task C2: 外景素材替换（地形/水/树/农田/建筑）
+### Task 2: 外景素材替换（地形/水/树/农田/建筑）
 
 **Files:**
 - Modify: `src/web/client/render.ts`（drawTerrain/drawLake/drawObjectDetail 各分支）
@@ -333,7 +333,7 @@
 
 ---
 
-### Task C3: 内饰素材替换（LimeZu）
+### Task 3: 内饰素材替换（LimeZu）
 
 **Files:**
 - Modify: `src/web/client/render.ts`（drawFurniture/drawInterior）
@@ -396,7 +396,7 @@
 
 ---
 
-### Task C4: 天气系统（晴/雨）
+### Task 4: 天气系统（晴/雨）
 
 **Files:**
 - Create: `src/core/weather.ts`
@@ -596,7 +596,7 @@
 
 ---
 
-### Task C5: UI 全面美化（Kenney 皮肤 + 主题 + 动画 + 布局 + B 遗留 5 项）
+### Task 5: UI 全面美化（Kenney 皮肤 + 主题 + 动画 + 布局 + B 遗留 5 项）
 
 **Files:**
 - Create: `src/web/client/panel.ts`、`src/web/client/hud.ts`
@@ -651,15 +651,20 @@
 
   (a) `panel.ts`（新建）：把 `interface AgentView`、`TYPE_NAME`、`STATE_NAME`（如存在于 main.ts）、`escapeHtml`、`renderDetail`、`renderProfile`、`renderObjectCard`、`renderMind` 以及 panel 相关的 DOM 绑定逻辑（`#panel-tabs` 点击、`#panel-toggle` 折叠）整体搬入并导出 `renderDetail/renderProfile/renderObjectCard/renderMind/bindPanel(activeTab, updatePanel)`。main.ts 改为 import 使用。`AgentView` 从 panel.ts 导出（main.ts `import type { AgentView } from './panel'`）。
   
-  (b) `hud.ts`（新建）：把 `drawTooltip`、`drawBanner`、`drawBubbles`、`wrap`、`Bubble` 接口搬入并导出 `drawTooltip/drawBanner/drawBubbles/wrap`；气泡/提示/横幅绘制全部改像素风（圆角改直角 + 深色描边 + 角钉：四角 2px 色块），字体尺寸乘 dpr：
-  
+  (b) `hud.ts`（新建）：把 `drawTooltip`、`drawBanner`、`drawBubbles`、`wrap`、`Bubble` 接口搬入并导出。**跨模块集合一律以参数传入**（不访问 main.ts 模块级状态），签名如下：
+
   ```ts
-  // hud.ts 内
-  const dpr = () => window.devicePixelRatio || 1;
-  // 所有 ctx.font = '12px monospace' 改为 `12 * dpr()px monospace`；fillText 坐标按 CSS 尺寸（保持调用方传入值），
-  // 因为 resetCamera 后画布是设备像素：字号乘 dpr、坐标乘 dpr 才能保持 CSS 观感一致。
+  // hud.ts
+  import { TILE } from './render';
+  export interface Bubble { kind: 'chat' | 'thought' | 'chat_summary'; speaker: string; text: string; until: number }
+  export interface DisplayPos { x: number; y: number } // display 的像素坐标子集
+  export function drawTooltip(ctx: CanvasRenderingContext2D, tooltip: { text: string; x: number; y: number } | null, canvasW: number, canvasH: number): void;
+  export function drawBanner(ctx: CanvasRenderingContext2D, banner: { text: string; until: number } | null, nowMs: number, canvasW: number): void;
+  export function drawBubbles(ctx: CanvasRenderingContext2D, bubbles: Map<string, Bubble>, display: Map<string, DisplayPos>, nowMs: number): void;
+  export function wrap(text: string, max: number): string[];
   ```
-  > 具体做法：`drawTooltip/drawBanner/drawBubbles` 内部所有坐标与字号统一乘 dpr（调用方传 CSS px）。签名不变。
+
+  main.ts 调用点相应改为 `drawTooltip(ctx, tooltip, canvas.width, canvas.height)`、`drawBanner(ctx, banner, nowMs, canvas.width)`、`drawBubbles(ctx, bubbles, display as Map<string, DisplayPos>, nowMs)`（`bubbles`/`display`/`tooltip`/`banner` 状态仍留在 main.ts；`Bubble` 类型 main.ts 改从 hud.ts import）。气泡/提示/横幅绘制全部改像素风（圆角改直角 + 深色描边 + 角钉：四角 2px 色块），字体与坐标统一乘 dpr（`const dpr = window.devicePixelRatio || 1;`，resetCamera 后画布是设备像素）。
   
   (c) main.ts 清理：
   - 删除 `const dpr = window.devicePixelRatio || 1;` 死声明（onWheel 内，C5 前残留）
@@ -762,7 +767,7 @@
 
 ---
 
-### Task C6: 终审验收 + 合并发布
+### Task 6: 终审验收 + 合并发布
 
 - [ ] **Step 1: 全量验证**
 
