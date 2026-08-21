@@ -7,11 +7,16 @@
 //   tinytown  = kenney-tinytown.png    (Kenney "Tiny Town", CC0)
 //   tiny16    = sharm-tiny16.png       (Sharm/Lanea Zimmerman "Tiny 16: Basic", CC-BY 3.0)
 //   limezu    = limezu-interiors.png  (LimeZu "Modern Interiors" 免费版, CC-BY 4.0)
+//   sv_field  = sv-field.png      (LimeZu "Serene Village" 地形, CC-BY 4.0)
+//   sv_house  = sv-house.png      (LimeZu "Serene Village" 房屋, CC-BY 4.0)
+//   sv_nature = sv-nature.png     (LimeZu "Serene Village" 自然, CC-BY 4.0)
+//   sv_floor  = sv-floor.png      (LimeZu "Serene Village" 地板, CC-BY 4.0)
 //   dungeon   = (0x72 "DungeonTileset II" 仅 itch.io 发布，本环境不可达 → 未下载、未注册)
-export type SheetId = 'town' | 'forest' | 'interiors' | 'ui' | 'tinytown' | 'tiny16' | 'limezu' | 'dungeon';
+export type SheetId = 'town' | 'forest' | 'interiors' | 'ui' | 'tinytown' | 'tiny16' | 'limezu' | 'sv_field' | 'sv_house' | 'sv_nature' | 'sv_floor' | 'dungeon';
 
 const SHEETS: Record<SheetId, { img: HTMLImageElement; src: string } | null> = {
-  town: null, forest: null, interiors: null, ui: null, tinytown: null, tiny16: null, limezu: null, dungeon: null,
+  town: null, forest: null, interiors: null, ui: null, tinytown: null, tiny16: null, limezu: null,
+  sv_field: null, sv_house: null, sv_nature: null, sv_floor: null, dungeon: null,
 };
 // ui 素材暂无消费方、dungeon（0x72）不可达，均未注册以避免空载（对应 assets/ATTRIBUTION 条目按实际保留/标注）
 
@@ -24,6 +29,10 @@ if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
     tiny16: '/assets/sharm-tiny16.png',
     tinytown: '/assets/kenney-tinytown.png',
     limezu: '/assets/limezu-interiors.png',
+    sv_field: '/assets/sv-field.png',
+    sv_house: '/assets/sv-house.png',
+    sv_nature: '/assets/sv-nature.png',
+    sv_floor: '/assets/sv-floor.png',
   }) as [SheetId, string][]) {
     const img = new Image();
     img.onload = () => { SHEETS[id] = { img, src }; };
@@ -76,9 +85,9 @@ export interface TileMap {
   terrain: { grass: number[]; grassAlt: number[]; dirt: number[]; path: number[]; plaza: number[]; flowers: number[]; crops: number[]; tree2: number[]; flowerBed: number[] };
   water: { frames: number[][]; sheet: SheetId };
   tree: { frames: number[][]; sheet: SheetId };
-  buildings: Record<string, { wall: number[]; roof: number[]; door: number[]; window: number[]; sheet: SheetId }>;
+  buildings: Record<string, { sprite: number[]; sheet: SheetId }>; // 整房精灵 [sx, sy, sw, sh]
   furniture: Record<string, { frames: number[][]; sw: number; sh: number; sheet: SheetId }>; // 键: bed/sofa/table/counter
-  interior: { floor: number[]; wallTile: number[]; sheet: SheetId };
+  interior: { floor: number[]; floorSheet: SheetId; wallTile: number[]; wallSheet: SheetId };
 }
 
 // 坐标依据（目视核对图集网格 + 平均色矩阵，16px 单位）：
@@ -89,28 +98,28 @@ export interface TileMap {
 //   程序化回退：water 与家具（对应图集无语义砖）。
 export const TILE_MAP: TileMap = {
   terrain: {
-    grass: [0, 0],      // town 草地
-    grassAlt: [16, 0],  // town 草地变体
-    dirt: [64, 80],     // tiny16 沙土路
-    path: [160, 80],    // tiny16 沙土路
-    plaza: [176, 80],   // tiny16 沙土路
-    flowers: [0, 112],  // tiny16 白色花簇
-    crops: [192, 192],  // tiny16 深绿作物行
-    tree2: [0, 16],     // tiny16 针叶树
-    flowerBed: [0, 176], // tiny16 黄色花丛
+    grass: [0, 32],      // sv_field 浅绿草地
+    grassAlt: [32, 32],  // sv_field 深绿草地
+    dirt: [0, 0],        // sv_field 沙地
+    path: [0, 0],        // sv_field 沙地
+    plaza: [16, 0],      // sv_field 沙地变体
+    flowers: [0, 128],   // sv_nature 红花丛
+    crops: [0, 32],      // sv_field 浅绿草地（农田绿毯）
+    tree2: [48, 240],    // sv_nature 大树（64×48 冠+干）
+    flowerBed: [0, 128], // sv_nature 红花丛
   },
-  water: { frames: [[0, 32], [16, 32]], sheet: 'forest' }, // 图集无水面砖，水保持程序化
-  tree: { frames: [[480, 16]], sheet: 'forest' },          // forest 树冠
+  water: { frames: [[0, 32], [16, 32]], sheet: 'forest' }, // 水保持程序化
+  tree: { frames: [[480, 16]], sheet: 'forest' },          // forest 树冠（备选）
   buildings: {
-    cafe:        { wall: [144, 64], roof: [192, 16], door: [176, 80], window: [144, 64], sheet: 'town' }, // 白墙房
-    bookstore:   { wall: [272, 64], roof: [192, 16], door: [304, 80], window: [336, 80], sheet: 'town' }, // 灰石房
-    post_office: { wall: [144, 64], roof: [192, 16], door: [176, 80], window: [144, 64], sheet: 'town' },
-    bakery:      { wall: [272, 64], roof: [192, 16], door: [304, 80], window: [336, 80], sheet: 'town' },
-    clinic:      { wall: [144, 64], roof: [192, 16], door: [176, 80], window: [144, 64], sheet: 'town' },
-    home:        { wall: [272, 64], roof: [192, 16], door: [304, 80], window: [336, 80], sheet: 'town' },
-    pier:        { wall: [160, 176], roof: [160, 176], door: [160, 176], window: [160, 176], sheet: 'tiny16' }, // 木板桥砖；zone 专用（building 分支不消费）
-    flower_shop: { wall: [160, 16], roof: [160, 0],  door: [192, 48], window: [176, 32], sheet: 'tiny16' }, // 粉砖房
-    grocer:      { wall: [48, 16],  roof: [32, 16],  door: [48, 32],  window: [80, 16],  sheet: 'tiny16' }, // 蓝石房
+    cafe:        { sprite: [304, 80, 64, 64],  sheet: 'sv_house' }, // 橙墙两层房
+    bookstore:   { sprite: [304, 224, 64, 64], sheet: 'sv_house' }, // 棕墙两层房
+    post_office: { sprite: [304, 80, 64, 64],  sheet: 'sv_house' },
+    bakery:      { sprite: [304, 224, 64, 64], sheet: 'sv_house' },
+    clinic:      { sprite: [240, 64, 64, 48],  sheet: 'sv_house' }, // 黄褐平房
+    home:        { sprite: [304, 224, 64, 64], sheet: 'sv_house' },
+    pier:        { sprite: [160, 176, 16, 16], sheet: 'tiny16' },   // 木板砖；zone 专用
+    flower_shop: { sprite: [240, 64, 64, 48],  sheet: 'sv_house' },
+    grocer:      { sprite: [304, 80, 64, 64],  sheet: 'sv_house' },
   },
   furniture: {
     bed:     { frames: [[0, 192]], sw: 32, sh: 64, sheet: 'limezu' },   // 白床左列（床头+枕+被）
@@ -118,5 +127,6 @@ export const TILE_MAP: TileMap = {
     table:   { frames: [[32, 320]], sw: 32, sh: 32, sheet: 'limezu' },  // 木圆桌
     counter: { frames: [[384, 896]], sw: 64, sh: 32, sheet: 'limezu' }, // 厨房台面
   },
-  interior: { floor: [0, 0], wallTile: [0, 16], sheet: 'interiors' }, // 地板/墙砖
-};
+  interior: { floor: [0, 80], floorSheet: 'sv_floor', wallTile: [0, 16], wallSheet: 'interiors' }, // 木地板 + 中世纪墙砖
+}
+

@@ -31,12 +31,13 @@ test('TILE_MAP 结构完整：全部 terrain 键存在且坐标非负整数', ()
   assert.ok(TILE_MAP.tree.frames.length >= 1);
   for (const b of ['cafe', 'bookstore', 'post_office', 'bakery', 'clinic', 'home', 'pier', 'flower_shop', 'grocer']) {
     const s = TILE_MAP.buildings[b];
-    assert.ok(s && s.wall.length === 2 && s.roof.length === 2 && s.door.length === 2 && s.window.length === 2, b);
+    assert.ok(s && s.sprite.length === 4 && Number.isInteger(s.sprite[0]) && Number.isInteger(s.sprite[2]), b);
   }
   for (const f of ['bed', 'sofa', 'table', 'counter']) {
     assert.ok(TILE_MAP.furniture[f] && TILE_MAP.furniture[f].frames.length >= 1, f);
   }
   assert.ok(TILE_MAP.interior.floor.length === 2 && TILE_MAP.interior.wallTile.length === 2);
+  assert.ok(TILE_MAP.interior.floorSheet === 'sv_floor');
 });
 
 test('TOWN_SHEET/INTERIOR_SHEET 常量指向已下载包（tiny16 已下载、dungeon 未下载）', () => {

@@ -11,3 +11,4 @@
 
 地形/建筑外景/内饰地板墙砖来自以上像素素材；水面、家具、路灯与装饰物为程序绘制。
 - `public/assets/limezu-interiors.png`：Modern Interiors（免费版，32×32 内饰家具/门窗/厨房素材），作者 LimeZu（[limezu.itch.io · Modern Interiors](https://limezu.itch.io/moderninteriors)），CC-BY 4.0（署名：`Modern Interiors by LimeZu`，许可链接 https://creativecommons.org/licenses/by/4.0/ ）。
+- `public/assets/sv-field.png`、`public/assets/sv-house.png`、`public/assets/sv-nature.png`、`public/assets/sv-floor.png`：Serene Village - revamped（RPG Tileset [16x16]：地形/房屋/自然/地板），作者 LimeZu（[limezu.itch.io · Serene Village revamped](https://limezu.itch.io/serenevillagerevamped)），CC-BY 4.0（署名：`Serene Village by LimeZu`，许可链接 https://creativecommons.org/licenses/by/4.0/ ）。

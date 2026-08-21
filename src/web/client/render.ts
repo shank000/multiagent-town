@@ -75,31 +75,24 @@ export function drawLampGlow(ctx: CanvasRenderingContext2D, px: number, py: numb
 const ROOFS = ['#b35d45', '#8a5a3a', '#5a7a8a', '#6b4f6b', '#8a7a3a', '#4a6a4a'];
 
 export function drawTerrain(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  // 素材优先：草地按 grass 键所属图集铺底（town 有草地砖；forest 无草地砖）。
-  // path/plaza/dirt/flowers/crops 无对应语义砖，故小径/花点保留程序化。
-  if (sheetReady(TERRAIN_SHEETS.grass)) {
+  // Serene Village 画风：沙地铺底 + 确定性草地斑块（hash 伪随机，构成绿洲般的大地）
+  if (sheetReady(TERRAIN_SHEETS.dirt) && sheetReady(TERRAIN_SHEETS.grass)) {
+    const [dx, dy] = TILE_MAP.terrain.dirt;
     const [gx, gy] = TILE_MAP.terrain.grass;
+    const [gax, gay] = TILE_MAP.terrain.grassAlt;
     for (let y = 0; y < h; y += TILE) {
-      for (let x = 0; x < w; x += TILE) drawTile(ctx, TERRAIN_SHEETS.grass, gx, gy, x, y, TILE);
+      for (let x = 0; x < w; x += TILE) {
+        const v = hash(`${x},${y}`) % 10;
+        if (v < 1) drawTile(ctx, TERRAIN_SHEETS.grass, gx, gy, x, y, TILE);
+        else if (v < 2) drawTile(ctx, TERRAIN_SHEETS.grass, gax, gay, x, y, TILE);
+        else drawTile(ctx, TERRAIN_SHEETS.dirt, dx, dy, x, y, TILE);
+      }
     }
-  } else {
-    // —— 现有程序化草地 fallback 原样保留 ——
-    ctx.fillStyle = '#7fb069';
-    ctx.fillRect(0, 0, w, h);
+    return;
   }
-  // 石板小径：中央十字（无独立路砖，保留程序化）
-  ctx.fillStyle = '#c9b79c';
-  for (let x = 0; x < w; x += TILE) {
-    ctx.fillRect(x, 4 * TILE + 8, TILE, 8);
-    ctx.fillRect(x + 4, 4 * TILE, 8, TILE);
-  }
-  // 花点
-  ctx.fillStyle = '#e8d5a0';
-  for (let i = 0; i < 12; i++) {
-    const fx = (i * 37) % w;
-    const fy = ((i * 53) % h);
-    ctx.fillRect(fx, fy, 2, 2);
-  }
+  // —— 程序化 fallback ——
+  ctx.fillStyle = '#7fb069';
+  ctx.fillRect(0, 0, w, h);
 }
 
 export function drawLake(ctx: CanvasRenderingContext2D, px: number, py: number, pw: number, ph: number, nowMs: number): void {
@@ -154,17 +147,14 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
       ctx.fillStyle = '#6aa84f';
       ctx.fillRect(px, py, pw, ph);
       const dense = o.id === 'obj:forest_ne';
-      // 素材优先：树冠按 tree2 键所属图集（tiny16），未就绪回退 forest 树冠，再回退程序化
-      let treeTile: [number, number] | null = null;
-      let treeSheet: SheetId = TERRAIN_SHEETS.tree2;
-      if (sheetReady(TERRAIN_SHEETS.tree2)) treeTile = TILE_MAP.terrain.tree2 as [number, number];
-      else if (sheetReady(TILE_MAP.tree.sheet)) { treeTile = TILE_MAP.tree.frames[0] as [number, number]; treeSheet = TILE_MAP.tree.sheet; }
-      if (treeTile) {
-        for (let ty = py + 8; ty < py + ph - 8; ty += dense ? 20 : 26) {
-          for (let tx = px + 8; tx < px + pw - 8; tx += dense ? 20 : 26) {
-            const bx = tx + ((hash(o.id + tx + ty) % 8) - 4);
+      // 素材优先：Serene Village 大树精灵（64×48 冠+干），树干落于瓦片底部；未就绪回退程序化
+      const [tsx, tsy] = TILE_MAP.terrain.tree2;
+      if (sheetReady(TERRAIN_SHEETS.tree2)) {
+        for (let ty = py + 8; ty < py + ph - 8; ty += dense ? 40 : 52) {
+          for (let tx = px + 8; tx < px + pw - 8; tx += dense ? 40 : 52) {
+            const bx = tx + ((hash(o.id + tx + ty) % 16) - 8);
             const sway = Math.round(Math.sin(nowMs / 900 + (hash(o.id + tx + ty) % 6) * 1.1));
-            drawTile(ctx, treeSheet, treeTile[0], treeTile[1], bx + sway - 8, ty - 8, TILE);
+            drawTileW(ctx, TERRAIN_SHEETS.tree2, tsx, tsy, 64, 48, bx + sway - 32, ty - 20, 64, 48);
           }
         }
       } else {
@@ -214,7 +204,7 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
       }
     } else if (o.id === 'obj:pier') {
       // 码头（zone，不走建筑渲染器）：tiny16 木板砖平铺 4×2
-      const [wx, wy] = TILE_MAP.buildings.pier.wall;
+      const [wx, wy] = TILE_MAP.buildings.pier.sprite;
       if (sheetReady('tiny16')) {
         for (let y = py; y < py + ph; y += TILE) {
           for (let x = px; x < px + pw; x += TILE) drawTile(ctx, 'tiny16', wx, wy, x, y, TILE);
@@ -246,25 +236,19 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
     // 建筑条目自描述所属图集，图集就绪即绘制，未就绪回退程序化
     const sheet: SheetId = b.sheet;
     if (sheetReady(sheet)) {
-      // 素材优先：屋顶下整面墙（全宽 4 列 × 3 行），门/窗覆盖其上
-      for (let y = o.y + 1; y < o.y + o.h; y++) {
-        for (let x = o.x; x < o.x + o.w; x++) {
-          drawTile(ctx, sheet, b.wall[0], b.wall[1], x * TILE, y * TILE, TILE);
-        }
+      // 素材优先：整房精灵（原生尺寸绘制），精灵不足 4 行高时底部补沙地庭院
+      const [sx, sy, sw, sh] = b.sprite;
+      drawTileW(ctx, sheet, sx, sy, sw, sh, px, py, pw, sh);
+      if (sh < ph) {
+        const [gx, gy] = TILE_MAP.terrain.dirt;
+        drawTileW(ctx, TERRAIN_SHEETS.dirt, gx, gy, 16, 16, px, py + sh, pw, ph - sh);
       }
-      // 屋顶：顶行
-      for (let x = o.x; x < o.x + o.w; x++) drawTile(ctx, sheet, b.roof[0], b.roof[1], x * TILE, o.y * TILE, TILE);
-      // 门：底边中点（与可达性 door 一致）
-      drawTile(ctx, sheet, b.door[0], b.door[1], (o.x + Math.floor(o.w / 2)) * TILE, (o.y + o.h - 1) * TILE, TILE);
-      // 窗：内部两角
-      drawTile(ctx, sheet, b.window[0], b.window[1], (o.x + 1) * TILE, (o.y + 1) * TILE, TILE);
-      drawTile(ctx, sheet, b.window[0], b.window[1], (o.x + o.w - 2) * TILE, (o.y + 1) * TILE, TILE);
-      // 夜间窗户点亮：无夜间窗帧，用半透明暖色覆盖两窗
+      // 夜间窗户点亮：暖色覆盖房体两侧窗位
       const night = minuteOfDay >= 1200 || (minuteOfDay >= 0 && minuteOfDay < 300);
       if (night) {
-        ctx.fillStyle = 'rgba(255,217,138,0.35)';
-        ctx.fillRect((o.x + 1) * TILE + 2, (o.y + 1) * TILE + 2, TILE - 4, TILE - 4);
-        ctx.fillRect((o.x + o.w - 2) * TILE + 2, (o.y + 1) * TILE + 2, TILE - 4, TILE - 4);
+        ctx.fillStyle = 'rgba(255,217,138,0.30)';
+        ctx.fillRect(px + 10, py + 26, 10, 8);
+        ctx.fillRect(px + pw - 20, py + 26, 10, 8);
       }
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.font = '11px monospace';
@@ -369,16 +353,15 @@ export function drawInterior(
   nowMs: number
 ): void {
   const px = building.x * TILE, py = building.y * TILE, pw = building.w * TILE, ph = building.h * TILE;
-  if (sheetReady(INTERIOR_SHEET)) {
-    // 素材优先：地板用内饰图集 floor 砖平铺
+  if (sheetReady(TILE_MAP.interior.floorSheet) && sheetReady(TILE_MAP.interior.wallSheet)) {
+    // 素材优先：木地板（Serene Village）平铺 + 顶部墙砖行
     const [fx, fy] = TILE_MAP.interior.floor;
     for (let y = py; y < py + ph; y += TILE) {
-      for (let x = px; x < px + pw; x += TILE) drawTile(ctx, INTERIOR_SHEET, fx, fy, x, y, TILE);
+      for (let x = px; x < px + pw; x += TILE) drawTile(ctx, TILE_MAP.interior.floorSheet, fx, fy, x, y, TILE);
     }
-    // 顶部墙砖行（屋顶剖切后的后墙）
     const [wx, wy] = TILE_MAP.interior.wallTile;
-    for (let x = px; x < px + pw; x += TILE) drawTile(ctx, INTERIOR_SHEET, wx, wy, x, py, TILE);
-    // 家具无对应砖（medieval 内饰图集无床/沙发/桌/柜），保持程序化 drawFurniture
+    for (let x = px; x < px + pw; x += TILE) drawTile(ctx, TILE_MAP.interior.wallSheet, wx, wy, x, py, TILE);
+    // 家具素材优先（LimeZu），未就绪回退程序化 drawFurniture
     for (const c of children) {
       if (c.type === 'furniture' || c.type === 'room') drawFurniture(ctx, c);
     }
