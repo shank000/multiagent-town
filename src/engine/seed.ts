@@ -1,4 +1,4 @@
-// 小镇种子数据：对象树（48×44 瓦片）+ 4 个 persona（M0 用结构化作息代替规划引擎）
+// 小镇种子数据：对象树（48×44 瓦片）+ 6 个 persona（M0 用结构化作息代替规划引擎）
 
 import type { Agent, Persona, WorldObject } from '../core/types';
 import { WorldState, GRID_W, GRID_H } from '../core/world';
@@ -47,6 +47,19 @@ export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:lamp_street1', name: '主街路灯', type: 'zone', parentId: 'obj:town', x: 10, y: 16, w: 1, h: 1 },
   { id: 'obj:lamp_street2', name: '主街路灯', type: 'zone', parentId: 'obj:town', x: 29, y: 16, w: 1, h: 1 },
   { id: 'obj:lamp_lake', name: '湖边路灯', type: 'zone', parentId: 'obj:town', x: 16, y: 27, w: 1, h: 1 },
+  // 阶段 D：白露花店 / 杂货店 / 湖边码头与装饰
+  { id: 'obj:flower_shop', name: '白露花店', type: 'building', parentId: 'obj:town', x: 12, y: 18, w: 4, h: 4 },
+  { id: 'obj:grocer', name: '小镇杂货店', type: 'building', parentId: 'obj:town', x: 24, y: 12, w: 4, h: 4 },
+  { id: 'obj:pier', name: '湖边码头', type: 'zone', parentId: 'obj:town', x: 16, y: 26, w: 4, h: 2 },
+  { id: 'obj:boat', name: '小船', type: 'furniture', parentId: 'obj:pier', x: 17, y: 27, w: 2, h: 1 },
+  { id: 'obj:flowerbed', name: '广场花坛', type: 'zone', parentId: 'obj:town', x: 20, y: 20, w: 2, h: 2 },
+  { id: 'obj:fence_lake', name: '湖边栅栏', type: 'zone', parentId: 'obj:town', x: 14, y: 26, w: 2, h: 1 },
+  { id: 'obj:home_bailu', name: '白露的家', type: 'building', parentId: 'obj:town', x: 12, y: 34, w: 4, h: 4 },
+  { id: 'obj:home_zhoulao', name: '老周的家', type: 'building', parentId: 'obj:town', x: 18, y: 34, w: 4, h: 4 },
+  { id: 'obj:bed_bailu', name: '床', type: 'furniture', parentId: 'obj:home_bailu', x: 13, y: 34, w: 1, h: 2 },
+  { id: 'obj:sofa_bailu', name: '沙发', type: 'furniture', parentId: 'obj:home_bailu', x: 12, y: 36, w: 2, h: 1 },
+  { id: 'obj:bed_zhoulao', name: '床', type: 'furniture', parentId: 'obj:home_zhoulao', x: 19, y: 34, w: 1, h: 2 },
+  { id: 'obj:sofa_zhoulao', name: '沙发', type: 'furniture', parentId: 'obj:home_zhoulao', x: 18, y: 36, w: 2, h: 1 },
 ];
 
 export const LIN_PERSONA: Persona = {
@@ -143,11 +156,58 @@ export const ZHOU_PERSONA: Persona = {
   personality: { extraversion: 0.9, empathy: 0.8, honesty: 0.4, curiosity: 0.7, patience: 0.6 },
 };
 
+export const BAILU_PERSONA: Persona = {
+  name: '白露', age: 26, occupation: '花店老板', gender: '女',
+  appearance: { hairStyle: '丸子头', hairColor: '浅棕色', skinTone: '白皙', outfit: '浅绿围裙配白衬衫' },
+  hobbies: ['园艺', '插花', '收集种子'],
+  skills: { 插花: 9, 园艺: 8, 记账: 5, 聊天: 7 },
+  values: ['每一束花都有收花人', '小镇值得被装点', '勤恳经营'],
+  motivation: '把花店开成小镇最香的地方，让每一个路过的人都带一束花回家。',
+  background: '从小在祖母的花圃里长大，三年前在小镇开了「白露花店」。她能记住每位客人的喜好，周岚送信路过时总爱顺一束花。最近她在湖边码头旁种了一片野花，说是要送给小镇的夏天。',
+  traits: ['温柔', '勤快', '有点害羞'],
+  goals: ['把花店经营成小镇的风景', '在湖边种满野花'],
+  speechStyle: '轻声细语，爱聊花草',
+  routine: [
+    { from: 480, to: 720, type: 'interact', target: 'obj:flower_shop', verb: '在花店理花插花' },
+    { from: 780, to: 840, type: 'interact', target: 'obj:park', verb: '到公园赏花' },
+    { from: 1080, to: 1140, type: 'interact', target: 'obj:sofa_bailu', verb: '坐在沙发上看园艺书' },
+    { from: 1320, to: 1440, type: 'interact', target: 'obj:bed_bailu', verb: '睡觉' },
+    { from: 0, to: 420, type: 'interact', target: 'obj:bed_bailu', verb: '睡觉' },
+  ],
+  greetingPool: ['今天的玫瑰开得正好。', '要带一束花回家吗？', '湖边那片野花快开了。'],
+  personality: { extraversion: 0.6, empathy: 0.9, honesty: 0.9, curiosity: 0.6, patience: 0.8 },
+};
+
+export const ZHOU_LAO_PERSONA: Persona = {
+  name: '老周', age: 60, occupation: '渔夫', gender: '男',
+  appearance: { hairStyle: '花白短发', hairColor: '灰白色', skinTone: '古铜色', outfit: '旧渔夫背心配草帽' },
+  hobbies: ['钓鱼', '讲古', '修船'],
+  skills: { 钓鱼: 9, 讲古: 8, 修船: 7, 看天气: 8 },
+  values: ['湖里永远有鱼', '年轻人多出去走走', '慢工出细活'],
+  motivation: '每天在码头钓鱼，把小镇的老故事讲给愿意听的人。',
+  background: '在湖边钓了一辈子鱼的老渔夫，认识小镇上每一个人，连每片水面的脾气都摸得清。他白天在码头钓鱼修船，傍晚爱到广场给年轻人讲小镇的老故事。他总说白露花店的那片野花，是他见过最像春天的东西。',
+  traits: ['豁达', '爱讲故事', '慢性子'],
+  goals: ['钓上湖里最大的鱼', '把小镇的老故事传下去'],
+  speechStyle: '慢悠悠，爱用俗语',
+  routine: [
+    { from: 480, to: 660, type: 'interact', target: 'obj:pier', verb: '在码头钓鱼' },
+    { from: 660, to: 780, type: 'interact', target: 'obj:boat', verb: '划船巡湖' },
+    { from: 1140, to: 1200, type: 'interact', target: 'obj:plaza', verb: '在广场讲古' },
+    { from: 1230, to: 1290, type: 'interact', target: 'obj:sofa_zhoulao', verb: '坐在沙发上打盹' },
+    { from: 1320, to: 1440, type: 'interact', target: 'obj:bed_zhoulao', verb: '睡觉' },
+    { from: 0, to: 420, type: 'interact', target: 'obj:bed_zhoulao', verb: '睡觉' },
+  ],
+  greetingPool: ['今天湖面风平浪静。', '年轻人，坐会儿听个故事？', '这天气，鱼都懒得上钩咯。'],
+  personality: { extraversion: 0.7, empathy: 0.7, honesty: 0.9, curiosity: 0.5, patience: 0.9 },
+};
+
 const HOME_BY_NAME: Record<string, string> = {
   '林晚晴': 'obj:home_lin',
   '陈默': 'obj:home_chen',
   '沈屿': 'obj:home_shen',
   '周岚': 'obj:home_zhou',
+  '白露': 'obj:home_bailu',
+  '老周': 'obj:home_zhoulao',
 };
 
 export interface TownSeed {
@@ -157,7 +217,7 @@ export interface TownSeed {
 
 export const DEFAULT_SEED: TownSeed = {
   objects: TOWN_OBJECTS,
-  personas: [LIN_PERSONA, CHEN_PERSONA, SHEN_PERSONA, ZHOU_PERSONA],
+  personas: [LIN_PERSONA, CHEN_PERSONA, SHEN_PERSONA, ZHOU_PERSONA, BAILU_PERSONA, ZHOU_LAO_PERSONA],
 };
 
 export function buildTown(seed: TownSeed = DEFAULT_SEED): WorldState {

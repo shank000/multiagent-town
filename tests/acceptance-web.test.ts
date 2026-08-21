@@ -60,9 +60,9 @@ test('像素小镇 e2e：一天内快照推进 + NPC 闲聊 + 调速 + SSE', asy
       agents: { id: string; name: string }[];
     };
     assert.equal(snap.clock.day, 2);
-    assert.equal(snap.agents.length, 4);
+    assert.equal(snap.agents.length, 6);
 
-    // 4 个 agent 一整天里至少发生一次 NPC 闲聊
+    // 6 个 agent 一整天里至少发生一次 NPC 闲聊
     const chats = log.eventsForDay(1).filter((e) => e.type === 'chat');
     assert.ok(chats.length >= 1, `闲聊事件应为 ≥1，实际 ${chats.length}`);
     assert.match(chats[0].description, /对「.+」说：「.+」/);

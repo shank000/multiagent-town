@@ -31,7 +31,7 @@ test('town-web 启动后可访问快照接口', async () => {
   child.stderr.on('data', (d: Buffer) => { out += d.toString(); });
   try {
     const snap = (await waitForState(port, 15_000)) as { agents: unknown[] };
-    assert.equal(snap.agents.length, 4);
+    assert.equal(snap.agents.length, 6);
     assert.ok(out.includes('浏览器打开'));
   } finally {
     child.kill('SIGTERM');

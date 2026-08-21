@@ -8,9 +8,9 @@ import { EventLog } from '../src/store/events';
 import { LLMGateway } from '../src/llm/gateway';
 import { AgentExecutor } from '../src/core/state-machine';
 
-test('种子小镇：4 个 agent、对象树完整、出生在家', () => {
+test('种子小镇：6 个 agent、对象树完整、出生在家', () => {
   const world = buildTown();
-  assert.equal(world.allAgents().length, 4);
+  assert.equal(world.allAgents().length, 6);
   assert.ok(world.hasObject('obj:cafe_counter'));
   assert.ok(world.hasObject('obj:post_office'));
   for (const a of world.allAgents()) {
