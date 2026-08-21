@@ -283,7 +283,7 @@ export function drawFurniture(ctx: CanvasRenderingContext2D, o: ObjectView): voi
   }
 }
 
-// 建筑内饰：浅木色地板 + 木纹点 + 内部家具 + 墙边框
+// 建筑内饰：素材优先（内饰图集地板平铺 + 顶部墙砖行），家具保持程序化（内饰图集无家具砖），回退程序化
 export function drawInterior(
   ctx: CanvasRenderingContext2D,
   building: ObjectView,
@@ -291,6 +291,27 @@ export function drawInterior(
   nowMs: number
 ): void {
   const px = building.x * TILE, py = building.y * TILE, pw = building.w * TILE, ph = building.h * TILE;
+  if (sheetReady('interiors')) {
+    // 素材优先：地板用内饰图集 floor 砖平铺
+    const [fx, fy] = TILE_MAP.interior.floor;
+    for (let y = py; y < py + ph; y += TILE) {
+      for (let x = px; x < px + pw; x += TILE) drawTile(ctx, 'interiors', fx, fy, x, y, TILE);
+    }
+    // 顶部墙砖行（屋顶剖切后的后墙）
+    const [wx, wy] = TILE_MAP.interior.wallTile;
+    for (let x = px; x < px + pw; x += TILE) drawTile(ctx, 'interiors', wx, wy, x, py, TILE);
+    // 家具无对应砖（medieval 内饰图集无床/沙发/桌/柜），保持程序化 drawFurniture
+    for (const c of children) {
+      if (c.type === 'furniture' || c.type === 'room') drawFurniture(ctx, c);
+    }
+    // 墙边框
+    ctx.strokeStyle = '#7a5a3a';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(px + 2, py + 2, pw - 4, ph - 4);
+    void nowMs;
+    return;
+  }
+  /* 现有程序化内饰原样保留为 fallback */
   ctx.fillStyle = '#d9b48f';
   ctx.fillRect(px, py, pw, ph);
   ctx.fillStyle = '#c9a06a';
