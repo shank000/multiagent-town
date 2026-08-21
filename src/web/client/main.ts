@@ -3,9 +3,9 @@
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
 import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
-import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop } from './effects';
+import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop, rainSplash, type Particle } from './effects';
 import { escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind, bindPanel, updatePanelDeps, type AgentView } from './panel';
-import { drawTooltip, drawBanner, drawBubbles, type Bubble, type DisplayPos } from './hud';
+import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 
 interface ClockState { day: number; minutesOfDay: number; totalMinutes: number }
@@ -49,6 +49,7 @@ let lastSmoke = 0;
 let lastFirefly = 0;
 const RAIN_CAP = 200;
 let lastRainSpawn = 0;
+let lastWaterRipple = 0;
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
@@ -416,10 +417,35 @@ function loop(): void {
     lastRainSpawn = now;
     const n = fx.particles.filter((p) => p.kind === 'rain').length;
     if (n < RAIN_CAP) {
+      const s = dprScale();
       for (let i = 0; i < Math.min(8, RAIN_CAP - n); i++) {
-        // 屏幕层坐标即 canvas 设备像素（identity 变换），与 tooltip/banner 一致
-        fx.spawn(rainDrop(Math.random() * canvas.width, Math.random() * canvas.height * 0.9));
+        // 屏幕层坐标即 CSS px（drawRainScreen 内乘 dpr 转设备像素），与 tooltip/banner 一致
+        fx.spawn(rainDrop(Math.random() * canvas.width / s, Math.random() * (canvas.height / s) * 0.9));
       }
+    }
+  }
+  // 雨花接线：雨滴落地（接近屏幕底）生成水花并移除该雨滴（坐标 CSS px）
+  {
+    const s = dprScale();
+    const rainBottomCss = canvas.height / s - 20;
+    const hitRain: Particle[] = [];
+    fx.particles = fx.particles.filter((p) => {
+      if (p.kind === 'rain' && p.y > rainBottomCss) {
+        hitRain.push(p);
+        return false;
+      }
+      return true;
+    });
+    for (const p of hitRain) fx.spawn(rainSplash(p.x, canvas.height / s - 14));
+  }
+  // 雨天水面涟漪：每 ~500ms 在 lake/river 水面区域随机 spawn rainSplash（D3 裁定降级实现）
+  if (snap!.weather === 'rain' && now - lastWaterRipple > 500) {
+    lastWaterRipple = now;
+    const waterObjs = snap!.objects.filter((o) => o.id === 'obj:lake' || o.id === 'obj:river');
+    for (const o of waterObjs) {
+      const wx = (o.x + Math.random() * o.w) * TILE;
+      const wy = (o.y + Math.random() * o.h) * TILE;
+      fx.spawn(rainSplash(wx * camera.scale + camera.offX, wy * camera.scale + camera.offY));
     }
   }
   spawnAmbient(now);
@@ -463,20 +489,24 @@ function drawWorldFx(ctx: CanvasRenderingContext2D, nowMs: number): void {
   fx.particles = saved;
 }
 
-/** 雨丝/水花：屏幕层绘制（resetCamera 后坐标即设备 px，与相机无关） */
+/** 雨丝/水花：屏幕层绘制（resetCamera 后坐标即 CSS px，乘 dpr 转设备像素，与相机无关） */
 function drawRainScreen(ctx: CanvasRenderingContext2D): void {
+  const s = dprScale();
   for (const p of fx.particles) {
     if (p.kind !== 'rain' && p.kind !== 'splash') continue;
     if (p.kind === 'rain') {
       ctx.lineWidth = 1; // 复位：drawInterior 残留 lineWidth=4 会让雨丝变粗
       ctx.strokeStyle = p.color;
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + 3, p.y + 10);
+      // 分段雨丝：2 段（8px 总长，CSS px）
+      ctx.moveTo(p.x * s, p.y * s);
+      ctx.lineTo((p.x + 2) * s, (p.y + 5) * s);
+      ctx.moveTo((p.x + 3) * s, (p.y + 7) * s);
+      ctx.lineTo((p.x + 5) * s, (p.y + 12) * s);
       ctx.stroke();
     } else {
       ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - p.size / 2, p.y, p.size, 1);
+      ctx.fillRect((p.x - p.size / 2) * s, p.y * s, p.size * s, s);
     }
   }
 }
@@ -530,11 +560,12 @@ function drawObjects(): void {
 }
 
 function drawAgents(): void {
+  const now = performance.now();
   const sorted = [...snap!.agents].sort((a, b) => a.y - b.y);
   for (const a of sorted) {
     const d = display.get(a.id)!;
     const dir: Dir = d.tx > d.x ? 'right' : d.tx < d.x ? 'left' : d.ty > d.y ? 'down' : d.ty < d.y ? 'up' : 'down';
-    const frame = (d.moving ? Math.floor(performance.now() / 300) % 2 : 0) as 0 | 1;
+    const frame = (d.moving ? Math.floor(now / 250) % 2 : 0) as 0 | 1;
     const p = poses.get(a.id) ?? { scaleY: 1 };
     const cx = d.x + TILE / 2;
     const cy = d.y + TILE / 2;
@@ -546,6 +577,15 @@ function drawAgents(): void {
     }
     drawNpc(ctx, cx, cy, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
     ctx.restore();
+    // 动作图标：acting 且映射到图标时，头顶 y-44 处弹跳（世界层，不随坐/躺压缩）
+    if (a.state === 'acting') {
+      const icon = actionIconFor(a.verb, a.targetName);
+      if (icon) {
+        const bounce = Math.sin(now / 250) * 2;
+        ctx.font = '14px monospace';
+        ctx.fillText(icon, cx - 7, cy - 44 + bounce);
+      }
+    }
     // 躺床盖被
     if (p.scaleY < 0.6 && a.targetName === '床') {
       ctx.fillStyle = '#e8e0f0';

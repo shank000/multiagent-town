@@ -59,9 +59,9 @@ test('M3 验收：关系/活动/谣言/声望', async () => {
     const carriers = mind.rumors.carriersOf(seedRow.id);
     assert.ok(carriers.length >= 2, `谣言传播不足: ${carriers.join(',')}`);
 
-    // ④ 声望榜：4 项有限值
+    // ④ 声望榜：6 项有限值
     const st = (await (await fetch(`${base}/api/status`)).json()) as { id: string; score: number }[];
-    assert.equal(st.length, 4);
+    assert.equal(st.length, 6);
     assert.ok(st.every((s) => Number.isFinite(s.score)));
   } finally {
     rmSync(dir, { recursive: true, force: true });

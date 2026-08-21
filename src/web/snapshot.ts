@@ -25,7 +25,7 @@ export interface AgentView {
   verb: string;             // 当前动作动词；无动作时为空串
   thought: string | null;
   targetName: string | null; // 当前动作目标对象名
-  spriteIndex: number;       // 客户端配色索引（0..3，按 allAgents 顺序）
+  spriteIndex: number;       // 客户端配色索引（0..5，按 allAgents 顺序）
   background: string;
 }
 

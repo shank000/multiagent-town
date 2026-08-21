@@ -41,4 +41,15 @@ test('绘制函数冒烟：mock ctx 不抛异常', () => {
   const bed: ObjectView = { id: 'obj:bed_lin', name: '床', type: 'furniture', x: 3, y: 2, w: 1, h: 2 };
   drawFurniture(ctx, bed);
   applyDayNight(ctx, 100, 100, 1350);
+  // 终审修复波新增分支：zone(码头/花坛/栅栏)、furniture(小船)、building(花店，node 下 sheet 未就绪→程序化回退)
+  const pier: ObjectView = { id: 'obj:pier', name: '湖边码头', type: 'zone', x: 16, y: 26, w: 4, h: 2 };
+  drawObjectDetail(ctx, pier, 1000, 1350);
+  const boat: ObjectView = { id: 'obj:boat', name: '小船', type: 'furniture', x: 17, y: 27, w: 2, h: 1 };
+  drawObjectDetail(ctx, boat, 1000, 1350);
+  const flowerbed: ObjectView = { id: 'obj:flowerbed', name: '广场花坛', type: 'zone', x: 20, y: 20, w: 2, h: 2 };
+  drawObjectDetail(ctx, flowerbed, 1000, 1350);
+  const flowerShop: ObjectView = { id: 'obj:flower_shop', name: '白露花店', type: 'building', x: 12, y: 18, w: 4, h: 4 };
+  drawObjectDetail(ctx, flowerShop, 1000, 1350);
+  const fence: ObjectView = { id: 'obj:fence_lake', name: '湖边栅栏', type: 'zone', x: 14, y: 26, w: 2, h: 1 };
+  drawObjectDetail(ctx, fence, 1000, 1350);
 });

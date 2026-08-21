@@ -131,7 +131,7 @@ export function paperFlutter(x: number, y: number): Particle[] {
 export function rainDrop(x: number, y: number): Particle[] {
   return [{
     kind: 'rain', x, y,
-    vx: -2, vy: 90,          // 单位 px/s（屏幕层）
+    vx: -2, vy: 90,          // 单位 CSS px/s（屏幕层，落速 90）
     life: 900, maxLife: 900, size: 1, color: 'rgba(160,190,230,0.8)', phase: Math.random() * 6,
   }];
 }

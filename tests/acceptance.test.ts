@@ -10,7 +10,7 @@ import { EventLog } from '../src/store/events';
 import { LLMGateway } from '../src/llm/gateway';
 import { AgentExecutor } from '../src/core/state-machine';
 
-test('M0 验收：4 agent 连续跑 1 游戏日不崩，日志可回放', async () => {
+test('M0 验收：6 agent 连续跑 1 游戏日不崩，日志可回放', async () => {
   const db = openDb(':memory:');
   const log = new EventLog(db);
   const world = buildTown();
@@ -24,9 +24,9 @@ test('M0 验收：4 agent 连续跑 1 游戏日不崩，日志可回放', async 
   // ① 跑满一天：时钟翻到第 2 天
   assert.equal(time.state.day, 2);
 
-  // ② 4 个 agent 存活、无挂起决策、位置合法
+  // ② 6 个 agent 存活、无挂起决策、位置合法
   const agents = world.allAgents();
-  assert.equal(agents.length, 4);
+  assert.equal(agents.length, 6);
   for (const a of agents) {
     assert.notEqual(a.state, 'thinking', `${a.name} 卡在 thinking`);
     assert.ok(world.getObject(a.locationId), `${a.name} 位置非法: ${a.locationId}`);

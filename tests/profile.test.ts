@@ -1,4 +1,4 @@
-// 阶段 B：4 份 persona 全属性档案完整性 + 快照 AgentView 档案字段
+// 阶段 B：6 份 persona 全属性档案完整性 + 快照 AgentView 档案字段
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_SEED } from '../src/engine/seed';
