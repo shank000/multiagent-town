@@ -102,6 +102,8 @@ export class WorldState {
   allObjects(): WorldObject[] { return [...this.objects.values()]; }
   allAgents(): Agent[] { return [...this.agents.values()]; }
 
+  addAgent(a: Agent): void { this.agents.set(a.id, a); }
+
   getAgent(id: string): Agent {
     const a = this.agents.get(id);
     if (!a) throw new Error(`agent 不存在: ${id}`);

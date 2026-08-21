@@ -245,3 +245,34 @@ export function buildTown(seed: TownSeed = DEFAULT_SEED): WorldState {
   });
   return new WorldState(seed.objects, agents);
 }
+
+/** 协议访客：外部 AI 通过 town-agent CLI 驱动的临时角色（无作息，指令驱动） */
+export function createGuestAgent(name: string): Agent {
+  return {
+    id: `agent:${name}`,
+    name,
+    persona: {
+      name,
+      age: 25,
+      occupation: '访客',
+      gender: '男',
+      appearance: { hairStyle: '短发', hairColor: '黑色', skinTone: '浅麦色', outfit: '旅行者外套' },
+      hobbies: ['漫游'],
+      skills: {},
+      values: ['友善'],
+      motivation: '',
+      background: '一位刚刚来到小镇的旅人。',
+      traits: [],
+      goals: [],
+      speechStyle: '简短的招呼',
+      routine: [],
+      greetingPool: ['你好呀。', '镇上的人真热心。', '这里真不错。'],
+      personality: { extraversion: 0.6, empathy: 0.6, honesty: 0.7, curiosity: 0.7, patience: 0.6 },
+    },
+    homeObjectId: 'obj:town',
+    state: 'idle',
+    locationId: 'obj:plaza',
+    x: 22, y: 22, path: [], pathProgress: 0,
+    action: null, actionEndsAt: 0, lastDecisionAt: 0, thought: null,
+  };
+}

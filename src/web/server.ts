@@ -15,6 +15,7 @@ import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import { computeStanding } from '../engine/status';
+import { createGuestAgent } from '../engine/seed';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -155,6 +156,75 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(body));
+        return;
+      }
+      if (url.pathname.startsWith('/api/guest/login') && req.method === 'POST') {
+        const body = (await readBody(req)) as { name?: unknown };
+        const name = typeof body.name === 'string' ? body.name.trim().slice(0, 20) : '';
+        if (!name) { res.writeHead(400); res.end('名字不能为空'); return; }
+        let guest = world.allAgents().find((a) => a.id === `agent:${name}`);
+        if (!guest) {
+          guest = createGuestAgent(name);
+          world.addAgent(guest);
+          log.addEvent({
+            id: randomUUID(), type: 'system', actorId: guest.id, targetIds: [],
+            description: `访客「${name}」登录了小镇。`, location: 'obj:plaza',
+            gameTime: time.state.totalMinutes, payload: { kind: 'guest_login', name },
+          });
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, id: guest.id, x: guest.x, y: guest.y }));
+        return;
+      }
+      if (url.pathname === '/api/guest/look' && req.method === 'GET') {
+        const name = decodeURIComponent(url.searchParams.get('name') ?? '');
+        const guest = world.allAgents().find((a) => a.id === `agent:${name}`);
+        if (!guest) { res.writeHead(404); res.end('访客未登录'); return; }
+        const nearby = world.allAgents()
+          .filter((a) => a.id !== guest.id && Math.max(Math.abs(a.x - guest.x), Math.abs(a.y - guest.y)) <= 3)
+          .map((a) => ({ id: a.id, name: a.name, state: a.state, verb: a.action?.action.verb ?? '' }));
+        const spot = world.objectAt({ x: guest.x, y: guest.y });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, x: guest.x, y: guest.y, location: `${spot?.name ?? '小镇'}`, nearby }));
+        return;
+      }
+      if (url.pathname.startsWith('/api/guest/act') && req.method === 'POST') {
+        const body = (await readBody(req)) as { name?: unknown; action?: unknown; target?: unknown; text?: unknown };
+        const name = typeof body.name === 'string' ? body.name : '';
+        const action = typeof body.action === 'string' ? body.action : '';
+        const target = typeof body.target === 'string' ? body.target : '';
+        const text = typeof body.text === 'string' ? body.text.slice(0, 120) : '';
+        const guest = world.allAgents().find((a) => a.id === `agent:${name}`);
+        if (!guest) { res.writeHead(404); res.end('访客未登录'); return; }
+        if (!opts.player) { res.writeHead(404); res.end('扮演未启用'); return; }
+        const now = time.state.totalMinutes;
+        if (action === 'say' && text) {
+          log.addEvent({
+            id: randomUUID(), type: 'chat', actorId: guest.id, targetIds: [],
+            description: `「${guest.name}」说：「${text}」`, location: guest.locationId,
+            gameTime: now, payload: { kind: 'chat', line: text, fromId: guest.id, toId: null },
+          });
+          const other = world.allAgents()
+            .filter((a) => a.id !== guest.id && Math.max(Math.abs(a.x - guest.x), Math.abs(a.y - guest.y)) <= 3)
+            .sort((a, b) => (Math.abs(a.x - guest.x) + Math.abs(a.y - guest.y)) - (Math.abs(b.x - guest.x) + Math.abs(b.y - guest.y)))[0];
+          if (other && opts.mind && !opts.mind.dialogue.isActive(guest.id, other.id)) {
+            opts.mind.dialogue.start(guest, other, now);
+            void other;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if ((action === 'walk' || action === 'interact') && target) {
+          const obj = world.allObjects().find((o) => o.id === target || o.name === target);
+          const instruction = obj ? `去${obj.name}（${obj.id}）` : `去${target}`;
+          opts.player.act(guest.id, instruction, now);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        res.writeHead(400);
+        res.end('action 需为 walk/interact（含 target）或 say（含 text）');
         return;
       }
       if (url.pathname.startsWith('/api/player/') && url.pathname.endsWith('/act')) {

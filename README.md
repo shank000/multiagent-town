@@ -39,6 +39,20 @@ pnpm replay --day 1              # 回放第 1 天事件时间线
 pnpm interview -- --agent 林晚晴 --question "今天做了什么"   # 上帝视角访谈
 ```
 
+## 让 AI 住进小镇（town-agent）
+
+小镇支持 Alicization 式「灵魂-物理分离」接入——外部 AI（Claude Code / OpenClaw / 任意智能体）通过一组命令驱动一位访客角色在镇里行动：
+
+```bash
+pnpm town-agent login --name 爱丽丝            # 登录（第 7 位居民）
+pnpm town-agent look --name 爱丽丝             # 环顾：位置 + 附近居民在做什么
+pnpm town-agent walk --name 爱丽丝 --target 湖边公园
+pnpm town-agent interact --name 爱丽丝 --target 林间咖啡馆
+pnpm town-agent say --name 爱丽丝 --text 大家好！
+```
+
+服务端接口：`POST /api/guest/login`、`GET /api/guest/look`、`POST /api/guest/act`。详见 [skills/town-agent/SKILL.md](skills/town-agent/SKILL.md)。访客的对话与互动与其他居民共用同一套事件/记忆/关系系统。
+
 ## 目录结构
 
 ```
