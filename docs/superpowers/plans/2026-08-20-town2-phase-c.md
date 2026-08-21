@@ -23,7 +23,7 @@
 
 ---
 
-### Task C1: 素材下载 + 许可复核 + tiles.ts 图集加载器
+### Task 1: 素材下载 + 许可复核 + tiles.ts 图集加载器
 
 **Files:**
 - Create: `src/web/client/tiles.ts`
@@ -212,7 +212,7 @@
 
 ---
 
-### Task C2: 外景素材替换（地形/水/树/农田/建筑）
+### Task 2: 外景素材替换（地形/水/树/农田/建筑）
 
 **Files:**
 - Modify: `src/web/client/render.ts`（drawTerrain/drawLake/drawObjectDetail 各分支）
@@ -333,7 +333,7 @@
 
 ---
 
-### Task C3: 内饰素材替换（LimeZu）
+### Task 3: 内饰素材替换（LimeZu）
 
 **Files:**
 - Modify: `src/web/client/render.ts`（drawFurniture/drawInterior）
@@ -396,7 +396,7 @@
 
 ---
 
-### Task C4: 天气系统（晴/雨）
+### Task 4: 天气系统（晴/雨）
 
 **Files:**
 - Create: `src/core/weather.ts`
@@ -596,7 +596,7 @@
 
 ---
 
-### Task C5: UI 全面美化（Kenney 皮肤 + 主题 + 动画 + 布局 + B 遗留 5 项）
+### Task 5: UI 全面美化（Kenney 皮肤 + 主题 + 动画 + 布局 + B 遗留 5 项）
 
 **Files:**
 - Create: `src/web/client/panel.ts`、`src/web/client/hud.ts`
@@ -767,7 +767,7 @@
 
 ---
 
-### Task C6: 终审验收 + 合并发布
+### Task 6: 终审验收 + 合并发布
 
 - [ ] **Step 1: 全量验证**
 
