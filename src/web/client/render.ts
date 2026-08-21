@@ -5,16 +5,16 @@ import { sheetReady, drawTile, drawTileW, TILE_MAP } from './tiles';
 
 export const TILE = 32;
 
-/** 昼夜着色状态（纯函数）：黎明 300~480 淡橙；黄昏 1020~1200 渐深橙；夜 1200~1440/0~300 蓝 */
+/** 昼夜着色状态（纯函数）：夜→昼（300~480）连续降、昼→夜（1020~1200）连续升，边界无跳变；夜 1200~1440/0~300 蓝 */
 export function dayNightState(minuteOfDay: number): { color: string; alpha: number } {
   const m = minuteOfDay;
   if (m >= 300 && m < 480) {
     const t = (m - 300) / 180;
-    return { color: '#ff9a3c', alpha: Math.sin(t * Math.PI) * 0.12 };
+    return { color: '#1a2a4a', alpha: 0.32 * (1 - t) };   // 夜→昼连续降
   }
   if (m >= 1020 && m < 1200) {
     const t = (m - 1020) / 180;
-    return { color: '#ff7a3c', alpha: 0.04 + t * 0.16 };
+    return { color: '#1a2a4a', alpha: 0.32 * t };         // 昼→夜连续升
   }
   if (m >= 1200 || m < 300) return { color: '#1a2a4a', alpha: 0.32 };
   return { color: '#000000', alpha: 0 };

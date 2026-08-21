@@ -15,14 +15,14 @@ function mockCtx() {
   } as unknown as CanvasRenderingContext2D;
 }
 
-test('dayNightState：白天无着色，夜间蓝色覆盖，黄昏渐入', () => {
+test('dayNightState：无跳变连续过渡', () => {
   assert.equal(dayNightState(600).alpha, 0);
-  assert.equal(dayNightState(300).alpha, 0);
-  assert.ok(dayNightState(1350).alpha > 0.25);
-  assert.ok(dayNightState(100).alpha > 0.25);
-  const dusk = dayNightState(1100);
-  assert.ok(dusk.alpha > 0 && dusk.alpha < 0.2);
-  for (const m of [0, 100, 300, 480, 600, 1020, 1100, 1200, 1300, 1400]) {
+  assert.equal(dayNightState(300).alpha, 0.32);       // 黎明起点=夜值
+  assert.equal(dayNightState(480).alpha, 0);           // 黎明终点=昼值
+  assert.equal(dayNightState(1020).alpha, 0);          // 黄昏起点=昼值
+  assert.ok(Math.abs(dayNightState(1200).alpha - 0.32) < 1e-9); // 黄昏终点=夜值
+  assert.equal(dayNightState(1350).alpha, 0.32);
+  for (const m of [0, 100, 300, 390, 480, 600, 1020, 1100, 1199, 1200, 1300, 1400]) {
     const s = dayNightState(m);
     assert.ok(s.alpha >= 0 && s.alpha <= 1, `alpha 越界 at ${m}`);
   }
