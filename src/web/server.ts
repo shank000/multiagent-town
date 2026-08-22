@@ -31,7 +31,7 @@ export interface TownWebOptions {
   rumors?: RumorTracker;  // M3 谣言追踪（种子 API 数据源）
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
-  experiment?: { state(): unknown; setConfig(cfg: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number): void; stop(): void };
+  experiment?: { state(): unknown; setConfig(cfg: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number, now: number): void; stop(): void };
   worlds?: unknown[]; // ManagedWorld[]；结构由 hubWorlds 适配器按需取字段
   port?: number;        // 默认 0 = 系统随机端口
 }
@@ -62,7 +62,7 @@ interface HubAccess {
   log: EventLog;
   mind: MindEngine;
   player: PlayerDirector | undefined;
-  experiment: { state(): unknown; setConfig(c: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(d: number): void; stop(): void } | null | undefined;
+  experiment: { state(): unknown; setConfig(c: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number, now: number): void; stop(): void } | null | undefined;
 }
 
 export async function createTownServer(opts: TownWebOptions): Promise<TownWebServer> {
@@ -353,7 +353,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         if (url.pathname === '/api/experiment/start' && req.method === 'POST') {
           const body = (await readBody(req)) as { days?: unknown };
           const days = typeof body.days === 'number' && body.days > 0 ? Math.min(365, Math.floor(body.days)) : 30;
-          hub().experiment?.start(days);
+          hub().experiment?.start(days, hub().time.state.totalMinutes);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ ok: true }));
           return;

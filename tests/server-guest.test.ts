@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TimeEngine } from '../src/core/time';
+import { MINUTES_PER_DAY, TimeEngine } from '../src/core/time';
 import { buildTown } from '../src/engine/seed';
 import { WorldLoop } from '../src/engine/loop';
 import { AgentExecutor } from '../src/core/state-machine';
@@ -33,7 +33,7 @@ async function boot() {
   const server = await createTownServer({
     world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, experiment, publicDir: dir,
   });
-  return { base: `http://127.0.0.1:${server.port}`, server, world, log };
+  return { base: `http://127.0.0.1:${server.port}`, server, world, time, log, experiment };
 }
 
 test('访客协议：login → look → walk → say 全链路', async () => {
@@ -119,9 +119,10 @@ test('感知系统：say 后的 look 返回环境感知（注意力分级）', a
 });
 
 test('涌现控制台 API：config/start/metrics 全链路', async () => {
-  const { base, server, world } = await boot();
+  const { base, server, world, time, experiment } = await boot();
   try {
     void world;
+    while (time.state.totalMinutes < MINUTES_PER_DAY + 60) time.tick();
     const cfg = await (await fetch(`${base}/api/experiment/config`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mem: 'on', gift: 'off' }),
@@ -137,6 +138,10 @@ test('涌现控制台 API：config/start/metrics 全链路', async () => {
     const st = await (await fetch(`${base}/api/experiment/state`)).json() as { running: boolean; remainingDays: number };
     assert.equal(st.running, true);
     assert.equal(st.remainingDays, 30);
+
+    experiment.tick(2 * MINUTES_PER_DAY);
+    const nextDay = await (await fetch(`${base}/api/experiment/state`)).json() as { remainingDays: number };
+    assert.equal(nextDay.remainingDays, 29, 'start 使用当前世界时刻建立日界线基准');
 
     const met = await (await fetch(`${base}/api/experiment/metrics`)).json() as { ok: boolean; repeat: number[] };
     assert.equal(met.ok, true);
