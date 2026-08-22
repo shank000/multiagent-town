@@ -16,6 +16,19 @@ interface RawEventRow {
   payload_json: string | null;
 }
 
+function toEvent(r: RawEventRow): GameEvent {
+  return {
+    id: r.id,
+    type: r.type,
+    actorId: r.actor_id,
+    targetIds: JSON.parse(r.target_ids_json ?? '[]') as string[],
+    description: r.description,
+    location: r.location,
+    gameTime: r.game_time,
+    payload: r.payload_json ? (JSON.parse(r.payload_json) as Record<string, unknown>) : null,
+  };
+}
+
 export class EventLog {
   private subscribers = new Set<Subscriber>();
 
@@ -44,18 +57,34 @@ export class EventLog {
 
   eventsBetween(startGameTime: number, endGameTimeExclusive: number): GameEvent[] {
     const rows = this.db.raw.prepare(
-      'SELECT * FROM events WHERE game_time >= ? AND game_time < ? ORDER BY game_time ASC'
+      'SELECT * FROM events WHERE game_time >= ? AND game_time < ? ORDER BY game_time ASC, rowid ASC'
     ).all(startGameTime, endGameTimeExclusive) as unknown as RawEventRow[];
-    return rows.map((r) => ({
-      id: r.id,
-      type: r.type,
-      actorId: r.actor_id,
-      targetIds: JSON.parse(r.target_ids_json ?? '[]') as string[],
-      description: r.description,
-      location: r.location,
-      gameTime: r.game_time,
-      payload: r.payload_json ? (JSON.parse(r.payload_json) as Record<string, unknown>) : null,
-    }));
+    return rows.map(toEvent);
+  }
+
+  /** 截止指定时刻的最近事件，返回顺序仍为时间升序；查询结果始终受 limit 约束。 */
+  recent(limit: number, endGameTimeExclusive = Number.MAX_SAFE_INTEGER): GameEvent[] {
+    const safeLimit = Math.max(0, Math.floor(limit));
+    if (safeLimit === 0) return [];
+    const rows = this.db.raw.prepare(
+      `SELECT * FROM events
+       WHERE game_time < ?
+       ORDER BY game_time DESC, rowid DESC
+       LIMIT ?`
+    ).all(endGameTimeExclusive, safeLimit) as unknown as RawEventRow[];
+    rows.reverse();
+    return rows.map(toEvent);
+  }
+
+  /** 按结构化 payload.kind 查询事件，供指标计算避免扫描无关叙事事件。 */
+  eventsOfKind(kind: string, startGameTime = 0, endGameTimeExclusive = Number.MAX_SAFE_INTEGER): GameEvent[] {
+    const rows = this.db.raw.prepare(
+      `SELECT * FROM events
+       WHERE game_time >= ? AND game_time < ?
+         AND json_extract(payload_json, '$.kind') = ?
+       ORDER BY game_time ASC, rowid ASC`
+    ).all(startGameTime, endGameTimeExclusive, kind) as unknown as RawEventRow[];
+    return rows.map(toEvent);
   }
 
   count(): number {

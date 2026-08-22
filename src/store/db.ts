@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS events (
   payload_json    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_time ON events(game_time);
+CREATE INDEX IF NOT EXISTS idx_events_payload_kind_time
+  ON events(json_extract(payload_json, '$.kind'), game_time);
 
 -- M1 记忆层：记忆流 / 反思树 / 计划 / 对话消息
 CREATE TABLE IF NOT EXISTS memories (

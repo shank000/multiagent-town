@@ -16,12 +16,51 @@ import { ExperimentRunner } from './experiment-runner';
 
 export type WorldKind = 'mem-on' | 'mem-off' | 'rumor';
 
-export interface WorldMeta { id: string; kind: WorldKind; name: string; desc: string }
+export interface WorldBadge {
+  label: string;
+  value: string;
+  tone: 'on' | 'off' | 'neutral';
+}
+
+export interface WorldMeta {
+  id: string;
+  kind: WorldKind;
+  name: string;
+  desc: string;
+  badges: WorldBadge[];
+}
 
 const KINDS: Record<WorldKind, Omit<WorldMeta, 'id'>> = {
-  'mem-on': { kind: 'mem-on', name: '关系记忆 · 开', desc: '伙伴选择可访问互动历史 + 馈礼交换（实验组）' },
-  'mem-off': { kind: 'mem-off', name: '关系记忆 · 关', desc: '伙伴选择无历史记忆（对照/零模型）' },
-  rumor: { kind: 'rumor', name: '谣言传播', desc: '秘密注入后的传播链与选择性披露观察' },
+  'mem-on': {
+    kind: 'mem-on',
+    name: '关系记忆 · 开',
+    desc: '关系记忆与馈礼同时开启的本地联合处理展示；正式主实验按 2×2 条件分别估计效应。',
+    badges: [
+      { label: '历史', value: '可见', tone: 'on' },
+      { label: '馈礼', value: '开启', tone: 'on' },
+      { label: '用途', value: '联合处理展示', tone: 'neutral' },
+    ],
+  },
+  'mem-off': {
+    kind: 'mem-off',
+    name: '关系记忆 · 关',
+    desc: '关系记忆与馈礼均关闭的本地零处理参考；正式实验仍使用相同 LLM 决策流程。',
+    badges: [
+      { label: '历史', value: '隐藏', tone: 'off' },
+      { label: '馈礼', value: '关闭', tone: 'off' },
+      { label: '用途', value: '零处理参考', tone: 'neutral' },
+    ],
+  },
+  rumor: {
+    kind: 'rumor',
+    name: '谣言传播',
+    desc: '秘密注入后的传播链与选择性披露观察。',
+    badges: [
+      { label: '处理', value: '秘密注入', tone: 'on' },
+      { label: '观测', value: '传播链', tone: 'neutral' },
+      { label: '伙伴实验', value: '不适用', tone: 'off' },
+    ],
+  },
 };
 
 export interface ManagedWorld {

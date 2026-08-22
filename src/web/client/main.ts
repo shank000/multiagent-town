@@ -20,6 +20,13 @@ interface TownEvent { id: string;
   payload: { kind?: string; line?: string; thought?: string; fromId?: string } | null;
 }
 
+interface WorldListItem {
+  id: string;
+  name: string;
+  desc: string;
+  badges?: { label: string; value: string; tone: 'on' | 'off' | 'neutral' }[];
+}
+
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 let snap: WorldSnapshot | null = null;
@@ -359,27 +366,46 @@ function bindControls(): void {
   pollExperiment();
   setInterval(() => void pollNarrative(), 2000);
   // 平行世界：列出世界并切换（服务端切换活跃世界，事件带 worldId 过滤）
-  void fetch('/api/worlds').then((r) => r.json()).then((w) => {
+  void fetch('/api/worlds').then((r) => r.json()).then((w: { active?: string; worlds: WorldListItem[] }) => {
     const sel = document.getElementById('world-select') as HTMLSelectElement;
-    const desc = document.getElementById('world-desc')!;
-    sel.innerHTML = w.worlds.map((x: { id: string; name: string }) => `<option value="${x.id}">${x.name}</option>`).join('');
+    sel.replaceChildren(...w.worlds.map((x) => {
+      const option = document.createElement('option');
+      option.value = x.id;
+      option.textContent = x.name;
+      return option;
+    }));
     activeWorldId = w.active ?? 'w1';
     sel.value = activeWorldId;
-    const cur = w.worlds.find((x: { id: string }) => x.id === activeWorldId);
-    if (cur) desc.textContent = cur.desc;
+    const cur = w.worlds.find((x) => x.id === activeWorldId);
+    if (cur) renderWorldMeta(cur);
     sel.addEventListener('change', () => {
       activeWorldId = sel.value;
       void fetch('/api/world/switch', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: activeWorldId }),
       }).then(() => {
-        const c = w.worlds.find((x: { id: string }) => x.id === activeWorldId);
-        if (c) desc.textContent = c.desc;
+        const c = w.worlds.find((x) => x.id === activeWorldId);
+        if (c) renderWorldMeta(c);
         lastNarrativeAt = 0;
       });
     });
   }).catch(() => { /* 单世界模式无 worlds 时静默 */ });
   document.getElementById('side')!.addEventListener('click', () => { /* 面板区点击不动视图 */ });
+}
+
+function renderWorldMeta(world: WorldListItem): void {
+  const desc = document.getElementById('world-desc')!;
+  const badges = document.getElementById('world-badges')!;
+  desc.textContent = world.desc;
+  badges.replaceChildren(...(world.badges ?? []).map((badge) => {
+    const el = document.createElement('span');
+    el.className = `world-badge ${badge.tone}`;
+    el.append(document.createTextNode(`${badge.label} `));
+    const value = document.createElement('b');
+    value.textContent = badge.value;
+    el.appendChild(value);
+    return el;
+  }));
 }
 
 function onWheel(e: WheelEvent): void {

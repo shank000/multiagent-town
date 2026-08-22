@@ -33,6 +33,15 @@ canvas { display: block; }
   display: flex; flex-direction: column; gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 10px; padding: 12px; }
 .card h4 { font-size: 11px; letter-spacing: 1.5px; color: var(--ink-dim); margin-bottom: 10px; font-weight: 600; }
+#world-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.world-badge { display: inline-flex; gap: 4px; align-items: center; padding: 3px 7px; border-radius: 12px;
+  border: 1px solid var(--panel-edge); background: var(--bg-2); color: var(--ink-dim); font-size: 10px; }
+.world-badge b { color: var(--ink); font-weight: 600; }
+.world-badge.on { border-color: rgba(79, 209, 197, .45); background: rgba(79, 209, 197, .08); }
+.world-badge.on b { color: var(--teal); }
+.world-badge.off { border-color: rgba(154, 168, 189, .35); opacity: .82; }
+.world-badge.neutral { border-color: rgba(227, 178, 60, .38); background: rgba(227, 178, 60, .06); }
+.world-badge.neutral b { color: var(--accent); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; font-size: 12px; }
 .switch-row label { color: var(--ink-dim); }
 .switch { position: relative; width: 34px; height: 18px; cursor: pointer; }

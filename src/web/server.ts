@@ -49,7 +49,13 @@ const MIME: Record<string, string> = {
 };
 
 interface HubAccess {
-  meta: { id: string; kind: string; name: string; desc: string };
+  meta: {
+    id: string;
+    kind: string;
+    name: string;
+    desc: string;
+    badges?: { label: string; value: string; tone: 'on' | 'off' | 'neutral' }[];
+  };
   world: import('../core/world').WorldState;
   time: TimeEngine;
   loop: WorldLoop;
@@ -86,7 +92,10 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       };
     }
     return {
-      meta: { id: 'w1', kind: 'legacy', name: '小镇', desc: '' },
+      meta: {
+        id: 'w1', kind: 'legacy', name: '小镇', desc: '单世界模式',
+        badges: [{ label: '模式', value: '单世界', tone: 'neutral' }],
+      },
       world: opts.world, time: opts.time, loop: opts.loop, log: opts.log,
       mind: opts.mind!, player: opts.player, experiment: opts.experiment,
     };
@@ -280,7 +289,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       if (url.pathname === '/api/worlds' && req.method === 'GET') {
         const list = hubWorlds
           ? hubWorlds.map((x) => ({ ...x.meta, clock: `${x.time.state.day}天 ${x.time.state.minutesOfDay}分` }))
-          : [{ id: 'w1', kind: 'legacy', name: '小镇', desc: '单世界模式', clock: `${hub().time.state.day}天 ${hub().time.state.minutesOfDay}分` }];
+          : [{ ...hub().meta, clock: `${hub().time.state.day}天 ${hub().time.state.minutesOfDay}分` }];
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true, active: activeId, worlds: list }));
         return;
@@ -298,7 +307,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         const limit = Math.min(500, Math.max(10, Number(url.searchParams.get('limit')) || 200));
         const from = hub().world.allAgents();
         const nameOf = (id: string | null) => from.find((a) => a.id === id)?.name ?? id ?? '';
-        const recent = hub().log.eventsBetween(0, hub().time.state.totalMinutes + 1).slice(-limit);
+        const recent = hub().log.recent(limit, hub().time.state.totalMinutes + 1);
         const items = recent.map((e, i) => {
           const p = (e.payload ?? {}) as Record<string, unknown>;
           const kind = String(p.kind ?? '');
@@ -358,7 +367,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         if (url.pathname === '/api/experiment/metrics' && req.method === 'GET') {
           const ids = hub().world.allAgents().map((a) => a.id);
           const choices: Choice[] = [];
-          for (const e of hub().log.eventsBetween(0, hub().time.state.totalMinutes + 1)) {
+          for (const e of hub().log.eventsOfKind('experiment_pair_choice', 0, hub().time.state.totalMinutes + 1)) {
             const p = e.payload as { kind?: string; fromId?: string; toId?: string } | null;
             if (p?.kind === 'experiment_pair_choice' && p.fromId && p.toId) {
               choices.push({ day: Math.floor(e.gameTime / 1440) + 1, from: p.fromId, to: p.toId });
