@@ -31,7 +31,13 @@ async function runCondition(cond: PartnerExperimentConfig['historyAccess'], gift
   const mind = new MindEngine({ db, llm: gateway, log });
   const executor = new AgentExecutor(gateway, world, log, mind);
   const loop = new WorldLoop(time, world, executor, log, db, {}, undefined, mind);
-  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: cond, giftExchange: gift });
+  const exp = new PartnerChoiceExperiment(
+    log,
+    world,
+    mind,
+    { historyAccess: cond, giftExchange: gift },
+    { seed }
+  );
   const choices: Choice[] = [];
   for (let d = 0; d < days; d++) {
     const target = d * 1440 + 1170;

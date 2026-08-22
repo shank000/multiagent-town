@@ -1,7 +1,7 @@
 // 伙伴选择预实验：每晚 19:30 全员各选一名伙伴一对一交流（关系记忆开/关两组对照）
 // 研究假设：可访问伙伴历史互动记忆时，选择变为历史依赖 → 随时间形成持久的互动结构
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Agent } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
@@ -15,21 +15,57 @@ export interface PartnerExperimentConfig {
   giftExchange: 'on' | 'off';
 }
 
+export type LabelledRandom = (label: string) => number;
+
+export interface PartnerChoiceExperimentOptions {
+  /** Pilot/reference policy seed. Identical labels under an identical seed produce identical draws. */
+  seed?: number | string;
+  /** Optional injected draw function for focused tests or alternate deterministic backends. */
+  random?: LabelledRandom;
+}
+
+export const RECENCY_WINDOW_MINUTES = 2400;
+
+/** A stateless labelled draw prevents one policy branch from shifting another branch's random stream. */
+export function createLabelledRandom(seed: number | string): LabelledRandom {
+  const namespace = `${typeof seed}:${String(seed)}`;
+  return (label: string): number => {
+    const digest = createHash('sha256').update(namespace).update('\0').update(label).digest();
+    const high27 = digest.readUInt32BE(0) >>> 5;
+    const low26 = digest.readUInt32BE(4) >>> 6;
+    return (high27 * 67_108_864 + low26) / 9_007_199_254_740_992;
+  };
+}
+
+/** Recent relationships receive a linearly decaying bonus; an absent relationship has no bonus. */
+export function recencyBonus(
+  now: number,
+  lastInteraction: number | null | undefined,
+  window = RECENCY_WINDOW_MINUTES
+): number {
+  if (lastInteraction === null || lastInteraction === undefined) return 0;
+  return Math.max(0, 1 - (now - lastInteraction) / window);
+}
+
 const CHOICE_MINUTE = 1170; // 19:30
 
 export class PartnerChoiceExperiment {
   private lastMinute = 0;
+  private manualDecisionIndex = new Map<string, number>();
 
   private economy = new Economy();
+  private random: LabelledRandom;
   cfg: PartnerExperimentConfig;
 
   constructor(
     private log: EventLog,
     private world: WorldState,
     private mind: MindEngine,
-    cfg: PartnerExperimentConfig
+    cfg: PartnerExperimentConfig,
+    options: PartnerChoiceExperimentOptions = {}
   ) {
     this.cfg = cfg;
+    this.random = options.random ?? createLabelledRandom(options.seed ?? randomUUID());
   }
 
   /** 由主循环每 tick 调用；跨过 19:30 触发当日一轮选择 */
@@ -39,13 +75,17 @@ export class PartnerChoiceExperiment {
     this.lastMinute = minute;
   }
 
-  /** 当日一轮：每位参与者独立选择一位伙伴；馈礼组先买花赠礼再开始一对一对话 */
+  /** 当日一轮：先冻结全员候选状态并独立选择，再执行馈礼与一对一对话。 */
   round(now: number): void {
-    for (const agent of this.world.allAgents()) {
-      const partner = this.pickPartner(agent);
-      if (!partner) continue;
+    const decisions = this.world.allAgents().map((agent) => ({
+      agent,
+      snapshot: this.pickSnapshot(agent),
+      partner: this.pickPartner(agent, now, `round:${now}:agent:${agent.id}`),
+    }));
+
+    for (const { agent, partner, snapshot } of decisions) {
+      if (partner === null) continue;
       if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
-      const snap = this.pickSnapshot(agent);
       this.log.addEvent({
         id: randomUUID(),
         type: 'chat',
@@ -57,7 +97,7 @@ export class PartnerChoiceExperiment {
         payload: {
           kind: 'experiment_pair_choice', fromId: agent.id, toId: partner.id,
           mode: this.cfg.historyAccess,
-          candidates: snap,
+          candidates: snapshot,
           chosen: partner.id,
         },
       });
@@ -100,25 +140,30 @@ export class PartnerChoiceExperiment {
       });
   }
 
-  /** 伙伴选择：on = 亲密度×权重 + 最近互动时间加成 + 微量扰动（避免永远同一人）；off = 均匀随机 */
-  pickPartner(agent: Agent): Agent | null {
+  /** Pilot/reference policy: on = 亲密度 + 相对近因 + 标记扰动；off = 标记均匀抽样。 */
+  pickPartner(agent: Agent, now = 0, decisionLabel?: string): Agent | null {
     const others = this.world.allAgents().filter((a) => a.id !== agent.id);
     if (!others.length) return null;
+    const label = decisionLabel ?? this.nextManualDecisionLabel(agent.id);
     if (this.cfg.historyAccess === 'off') {
-      return others[Math.floor(Math.random() * others.length)];
+      return others[Math.floor(this.random(`${label}:uniform`) * others.length)];
     }
     const rels = this.mind.rels.allFor(agent.id);
-    const score = (a: Agent): number => {
-      const rel = rels.find((r) => r.agentB === a.id);
-      const affection = rel ? rel.affection : 0;
-      const lastInteraction = rel ? rel.updatedGameTime : 0;
-      const recency = Math.max(0, 1 - lastInteraction / 2400); // 近 40 游戏小时内的互动视为新鲜
-      return affection + recency * 0.5 + Math.random() * 0.3;
-    };
-    let best = others[0];
-    for (const a of others.slice(1)) {
-      if (score(a) > score(best)) best = a;
-    }
-    return best;
+    const scored = others.map((candidate) => {
+      const rel = rels.find((r) => r.agentB === candidate.id);
+      const affection = rel?.affection ?? 0;
+      const recency = recencyBonus(now, rel?.updatedGameTime);
+      const jitter = this.random(`${label}:candidate:${candidate.id}:jitter`) * 0.3;
+      return { candidate, score: affection + recency * 0.5 + jitter };
+    });
+    return scored.slice(1).reduce((best, current) => (
+      current.score > best.score ? current : best
+    ), scored[0]).candidate;
+  }
+
+  private nextManualDecisionLabel(agentId: string): string {
+    const index = this.manualDecisionIndex.get(agentId) ?? 0;
+    this.manualDecisionIndex.set(agentId, index + 1);
+    return `manual:${agentId}:${index}`;
   }
 }
