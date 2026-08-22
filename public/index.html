@@ -7,39 +7,74 @@
 </head>
 <body>
   <div id="hud">
+    <div id="brand"><b>EMERGENCE</b> CONSOLE</div>
     <div id="clock">第1天 00:00</div>
-    <div id="controls">
+    <div class="spacer"></div>
+    <div class="seg">
+      <button id="view-world" class="active">🏘 世界</button>
+      <button id="view-net">🕸 网络</button>
+      <button id="view-metrics">📈 指标</button>
+    </div>
+    <div class="seg" id="controls">
       <button data-action="pause">⏸ 暂停</button>
-      <button data-action="speed" data-value="1">▶ 1x</button>
-      <button data-action="speed" data-value="60">▶ 60x</button>
-      <button data-action="speed" data-value="360">▶ 360x</button>
-      <button id="fit-view">🗺 全图</button>
+      <button data-action="speed" data-value="1">1x</button>
+      <button data-action="speed" data-value="60">60x</button>
+      <button data-action="speed" data-value="360">360x</button>
     </div>
-    <button id="panel-toggle">◀</button>
-    <button id="ticker-toggle">📜</button>
   </div>
-  <main>
-    <canvas id="game"></canvas>
-    <aside id="side">
-      <div id="panel">
-        <div id="panel-tabs">
-          <button data-tab="detail" class="tab active">详情</button>
-          <button data-tab="profile" class="tab">档案</button>
-          <button data-tab="memory" class="tab">记忆</button>
-          <button data-tab="reflection" class="tab">反思</button>
-          <button data-tab="dialogue" class="tab">对话</button>
-          <button data-tab="relation" class="tab">关系</button>
-        </div>
-        <div id="panel-body"><p id="panel-empty">点击小镇里的角色查看详情</p></div>
+
+  <aside id="rail">
+    <div class="card" id="run-status"><div class="dot"></div>实验：<b>未运行</b></div>
+    <div class="card">
+      <h4>实验配置</h4>
+      <div class="switch-row"><label>关系记忆</label>
+        <label class="switch"><input type="checkbox" id="exp-mem" checked /><span class="knob"></span></label></div>
+      <div class="switch-row"><label>馈礼交换</label>
+        <label class="switch"><input type="checkbox" id="exp-gift" checked /><span class="knob"></span></label></div>
+      <div class="field-row" style="margin-bottom:10px"><span>天数</span>
+        <input id="exp-days" type="number" value="30" min="1" max="365" /></div>
+      <div class="rail-actions">
+        <button class="icon-btn primary" id="exp-start">▶ 开始</button>
+        <button class="icon-btn danger" id="exp-stop">■ 停止</button>
+        <button class="icon-btn" id="exp-export" style="grid-column:1/-1">💾 导出指标 JSON</button>
       </div>
-    </aside>
-    <div id="play-bar" hidden>
-      <input id="play-input" placeholder="输入指令，如：去告诉陈默今晚派对" maxlength="120" />
-      <button id="play-send">执行</button>
-      <button id="play-exit">退出扮演</button>
     </div>
+    <div class="card">
+      <h4>居民名册</h4>
+      <div id="roster"></div>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <div id="stage-tip">点选 NPC 看详情 · 滚轮缩放 · 双击复位</div>
+    <canvas id="game" width="384" height="256"></canvas>
+    <canvas id="net-canvas"></canvas>
+    <canvas id="metrics-canvas"></canvas>
   </main>
-  <div id="ticker"><p id="ticker-empty">事件流：等待小镇苏醒……</p></div>
+
+  <aside id="feed">
+    <h4>事件流</h4>
+    <div id="feed-filters"></div>
+    <div id="feed-list"><p style="color:var(--ink-dim);font-size:12px">等待事件……</p></div>
+  </aside>
+
+  <div id="side">
+    <div id="panel">
+      <div id="panel-tabs">
+        <button data-tab="detail" class="tab active">详情</button>
+        <button data-tab="profile" class="tab">档案</button>
+        <button data-tab="memory" class="tab">记忆</button>
+        <button data-tab="reflection" class="tab">反思</button>
+        <button data-tab="dialogue" class="tab">对话</button>
+        <button data-tab="relation" class="tab">关系</button>
+      </div>
+      <div id="panel-body"><p id="panel-empty" style="color:var(--ink-dim)">点击小镇里的角色查看详情</p></div>
+    </div>
+  </div>
+  <div id="play-bar" hidden>
+    <input id="play-input" placeholder="输入指令，如：去告诉陈默今晚派对" maxlength="120" />
+    <button id="play-send">执行</button>
+    <button id="play-exit">退出扮演</button>
+  </div>
   <script src="/client.js"></script>
 </body>
-</html>

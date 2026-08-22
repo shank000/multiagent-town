@@ -15,7 +15,7 @@ interface WorldSnapshot {
   gridW: number; gridH: number; objects: ObjectView[]; agents: AgentView[]; seq: number;
   weather: 'clear' | 'rain';
 }
-interface TownEvent {
+interface TownEvent { id: string;
   type: string; actorId: string | null; description: string;
   payload: { kind?: string; line?: string; thought?: string; fromId?: string } | null;
 }
@@ -145,9 +145,9 @@ function applySnapshot(): void {
 }
 
 function onEvent(e: TownEvent): void {
-  ticker.unshift(e.description);
-  if (ticker.length > 5) ticker.pop();
-  updateTicker();
+  feed.unshift({ kind: e.payload?.kind ?? '', text: e.description, id: e.id });
+  if (feed.length > 200) feed.pop();
+  renderFeed();
   const kind = e.payload?.kind;
   // 广播事件 → 顶部横幅（6 秒后淡出）
   if (kind === 'broadcast') {
@@ -164,10 +164,68 @@ function onEvent(e: TownEvent): void {
   }
 }
 
-function updateTicker(): void {
-  const box = document.getElementById('ticker')!;
-  box.innerHTML = ticker.map((t) => `<p>${escapeHtml(t)}</p>`).join('') || '<p>事件流：等待小镇苏醒……</p>';
+interface FeedItem { kind: string; text: string; id: string }
+const feed: FeedItem[] = [];
+const FEED_KINDS: [string, string][] = [
+  ['chat', '💬 对话'], ['chat_summary', '📜 小结'], ['gift', '💐 馈礼'], ['rumor', '🗣 谣言'],
+  ['town_event', '🎪 活动'], ['broadcast', '📢 广播'], ['interact', '🛠 互动'], ['move', '🚶 移动'],
+];
+let activeFilter = '全部';
+function renderFeed(): void {
+  const list = document.getElementById('feed-list');
+  if (!list) return;
+  const chipsBox = document.getElementById('feed-filters');
+  if (chipsBox && !chipsBox.dataset.built) {
+    chipsBox.dataset.built = '1';
+    const chips = ['全部', ...FEED_KINDS.map(([k]) => k)];
+    for (const c of chips) {
+      const chip = document.createElement('button');
+      chip.className = `filter-chip${c === activeFilter ? ' on' : ''}`;
+      chip.textContent = c === '全部' ? '全部' : FEED_KINDS.find(([k]) => k === c)![1];
+      chip.addEventListener('click', () => {
+        activeFilter = c;
+        chipsBox.querySelectorAll('.filter-chip').forEach((x) => x.classList.toggle('on', (x as HTMLElement).textContent === chip.textContent));
+        renderFeed();
+      });
+      chipsBox.appendChild(chip);
+    }
+  }
+  const rows = (activeFilter === '全部' ? feed : feed.filter((f) => f.kind === activeFilter)).slice(0, 60);
+  list.innerHTML = rows.map((f) => {
+    const tag = FEED_KINDS.find(([k]) => k === f.kind)?.[1] ?? '·';
+    return `<div class="feed-item"><span class="t">${tag}</span> ${escapeHtml(f.text)}</div>`;
+  }).join('') || '<p style="color:var(--ink-dim)">等待事件……</p>';
 }
+
+/** 左栏居民名册：点击选中查看详情 */
+function renderRoster(): void {
+  const box = document.getElementById('roster');
+  if (!box || !snap) return;
+  box.innerHTML = snap.agents.map((a) => {
+    const hot = a.id === selectedId ? ' hot' : '';
+    return `<div class="roster-item${hot}" data-id="${escapeHtml(a.id)}"><span>${escapeHtml(a.name)}</span><span class="v">${escapeHtml(STATE_NAME[a.state] ?? a.state)}</span></div>`;
+  }).join('');
+  box.querySelectorAll('.roster-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      selectedId = (el as HTMLElement).dataset.id ?? null;
+      selectedObjectId = null;
+      renderRoster();
+      updatePanel();
+    });
+  });
+}
+
+/** 实验运行状态轮询 */
+function pollExperiment(): void {
+  void fetch('/api/experiment/state').then((r) => r.json()).then((st) => {
+    const el = document.getElementById('run-status');
+    if (!el) return;
+    const live = !!st.running;
+    el.classList.toggle('live', live);
+    el.innerHTML = `<div class="dot"></div>实验：${live ? `<b>运行中（余 ${st.remainingDays} 天）</b>` : '<b>未运行</b>'}<br><span style="font-size:11px">记忆${st.mem === 'on' ? '开' : '关'} · 馈礼${st.gift === 'on' ? '开' : '关'}</span>`;
+  }).catch(() => { /* 服务未就绪时静默 */ });
+}
+setInterval(pollExperiment, 2000);
 
 function bindControls(): void {
   document.querySelectorAll('#controls button[data-action]').forEach((btn) => {
@@ -181,7 +239,6 @@ function bindControls(): void {
       });
     });
   });
-  document.getElementById('fit-view')!.addEventListener('click', () => fitCamera());
   const setView = (v: 'world' | 'net' | 'metrics') => {
     viewMode = v;
     const g = document.getElementById('game')!;
@@ -198,22 +255,15 @@ function bindControls(): void {
   document.getElementById('view-net')!.addEventListener('click', () => setView('net'));
   document.getElementById('view-metrics')!.addEventListener('click', () => setView('metrics'));
   document.getElementById('exp-start')!.addEventListener('click', () => {
-    const mem = (document.getElementById('exp-mem') as HTMLSelectElement).value;
-    const gift = (document.getElementById('exp-gift') as HTMLSelectElement).value;
+    const mem = (document.getElementById('exp-mem') as HTMLInputElement).checked ? 'on' : 'off';
+    const gift = (document.getElementById('exp-gift') as HTMLInputElement).checked ? 'on' : 'off';
     const days = Number((document.getElementById('exp-days') as HTMLInputElement).value || 30);
     void controlExperiment('config', { mem, gift }).then(() => controlExperiment('start', { days }));
   });
   document.getElementById('exp-stop')!.addEventListener('click', () => void controlExperiment('stop'));
   document.getElementById('exp-export')!.addEventListener('click', () => exportMetrics(metricsCache));
-  const side = document.getElementById('side')!;
-  document.getElementById('panel-toggle')!.addEventListener('click', (e) => {
-    side.classList.toggle('collapsed');
-    (e.target as HTMLButtonElement).textContent = side.classList.contains('collapsed') ? '▶' : '◀';
-  });
-  const ticker = document.getElementById('ticker')!;
-  document.getElementById('ticker-toggle')!.addEventListener('click', () => {
-    ticker.classList.toggle('hidden');
-  });
+  renderFeed();
+  pollExperiment();
 }
 
 function onWheel(e: WheelEvent): void {
@@ -520,12 +570,15 @@ function loop(): void {
 
 /** 控制台画布铺满窗口（与游戏画布同规格） */
 function resizeConsole(c: HTMLCanvasElement): void {
+  const stage = document.getElementById('stage')!;
   const dpr = window.devicePixelRatio || 1;
-  if (c.width === Math.floor(window.innerWidth * dpr) && c.height === Math.floor(window.innerHeight * dpr)) return;
-  c.width = Math.floor(window.innerWidth * dpr);
-  c.height = Math.floor(window.innerHeight * dpr);
-  c.style.width = `${window.innerWidth}px`;
-  c.style.height = `${window.innerHeight}px`;
+  const w = Math.floor(stage.clientWidth * dpr);
+  const h = Math.floor(stage.clientHeight * dpr);
+  if (c.width === w && c.height === h) return;
+  c.width = w;
+  c.height = h;
+  c.style.width = `${stage.clientWidth}px`;
+  c.style.height = `${stage.clientHeight}px`;
 }
 
 function draw(): void {
