@@ -168,3 +168,45 @@ export function exportMetrics(m: MetricsPayload): void {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+/** 小地图：极简像素块示意（建筑色块 + 区域 + agent 彩点 + 活动指示） */
+export function drawMiniWorld(
+  ctx: CanvasRenderingContext2D,
+  snap: { gridW: number; gridH: number; objects: { id: string; name: string; type: string; x: number; y: number; w: number; h: number }[]; agents: AgentView[] },
+  w: number,
+  h: number
+): void {
+  ctx.fillStyle = '#101a12';
+  ctx.fillRect(0, 0, w, h);
+  const ts = Math.max(2, Math.floor(Math.min((w - 40) / snap.gridW, (h - 40) / snap.gridH)));
+  const ox = (w - snap.gridW * ts) / 2;
+  const oy = (h - snap.gridH * ts) / 2;
+  ctx.fillStyle = '#22331f';
+  ctx.fillRect(ox, oy, snap.gridW * ts, snap.gridH * ts);
+  const palette: Record<string, string> = {
+    building: '#b08968', zone: '#3f7d3a', water: '#3a6ea8', furniture: '#8a6f4d', room: '#c9a06a',
+  };
+  for (const o of snap.objects) {
+    if (o.type === 'town') continue;
+    ctx.fillStyle = palette[o.type] ?? '#666';
+    ctx.fillRect(ox + o.x * ts, oy + o.y * ts, o.w * ts, o.h * ts);
+  }
+  for (const a of snap.agents) {
+    const cx = ox + (a.x + 0.5) * ts;
+    const cy = oy + (a.y + 0.5) * ts;
+    ctx.fillStyle = a.state === 'acting' ? '#e3b23c' : '#4fd1c5';
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(2.5, ts * 0.45), 0, Math.PI * 2);
+    ctx.fill();
+    if (a.state === 'acting') {
+      ctx.strokeStyle = '#e3b23c';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(4.5, ts * 0.8), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.fillStyle = '#9aa8bd';
+  ctx.font = '10px monospace';
+  ctx.fillText(`${snap.gridW}×${snap.gridH} · 实心=行动中`, 8, h - 6);
+}

@@ -12,6 +12,7 @@
     <div class="spacer"></div>
     <div class="seg">
       <button id="view-narrative" class="active">🎭 叙事</button>
+      <button id="view-map">🗺 地图</button>
       <button id="view-net">🕸 网络</button>
       <button id="view-metrics">📈 指标</button>
     </div>
@@ -24,6 +25,11 @@
   </div>
 
   <aside id="rail">
+    <div class="card">
+      <h4>平行世界</h4>
+      <select id="world-select" style="width:100%;background:var(--bg-2);border:1px solid var(--panel-edge);border-radius:6px;color:var(--ink);padding:6px;font-family:var(--mono)"></select>
+      <div style="font-size:11px;color:var(--ink-dim);margin-top:6px" id="world-desc"></div>
+    </div>
     <div class="card" id="run-status"><div class="dot"></div>实验：<b>未运行</b></div>
     <div class="card">
       <h4>实验配置</h4>

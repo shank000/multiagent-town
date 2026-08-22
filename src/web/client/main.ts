@@ -5,7 +5,7 @@ import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from
 import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
 import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop, rainSplash, type Particle } from './effects';
 import { escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind, bindPanel, updatePanelDeps, type AgentView } from './panel';
-import { drawNetwork, drawMetrics, fetchMetrics, controlExperiment, exportMetrics, type MetricsPayload } from './console';
+import { drawNetwork, drawMetrics, drawMiniWorld, fetchMetrics, controlExperiment, exportMetrics, type MetricsPayload } from './console';
 import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 
@@ -58,7 +58,8 @@ let lastWaterRipple = 0;
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
-let viewMode: 'narrative' | 'net' | 'metrics' = 'narrative';
+let viewMode: 'narrative' | 'map' | 'net' | 'metrics' = 'narrative';
+let activeWorldId = 'w1';
 let metricsCache: MetricsPayload = { repeat: [], recip: [], clus: [], div: [], pairs: [] };
 let lastMetricsAt = 0;
 let fitScale = 1;
@@ -144,7 +145,8 @@ function applySnapshot(): void {
   }
 }
 
-function onEvent(e: TownEvent): void {
+function onEvent(e: TownEvent & { worldId?: string }): void {
+  if (e.worldId && e.worldId !== activeWorldId) return;
   feed.unshift({ kind: e.payload?.kind ?? '', text: e.description, id: e.id });
   if (feed.length > 200) feed.pop();
   renderFeed();
@@ -170,6 +172,8 @@ interface NarrativeItem {
   id: string; seq: number; time: number; day: number; minute: number; type: string; kind: string;
   actor: string | null; actorName: string; target: string | null; targetName: string | null;
   text: string; line: string | null; thought: string | null;
+  mode: string | null; chosen: string | null;
+  candidates: { id: string; name: string; affection: number; lastInteraction: number }[] | null;
 }
 let lastNarrativeId = 0;
 let lastNarrativeAt = 0;
@@ -197,6 +201,20 @@ function renderNarrative(items: NarrativeItem[]): void {
     } else if (it.kind === 'thought' || ((it.kind.startsWith('thought')) && it.thought)) {
       card.className = 'nar-card thought';
       card.innerHTML = `${meta}<span class="nar-title">💭 ${escapeHtml(it.actorName)} 的内心独白</span><div class="nar-italic">${escapeHtml(it.thought ?? it.text)}</div>`;
+    } else if (it.kind === 'experiment_pair_choice') {
+      card.className = 'nar-card scene';
+      const cands = (it.candidates ?? []).map((c) => {
+        const id = c.name;
+        const rel = c.affection !== 0 ? `💗${c.affection >= 0 ? '+' : ''}${c.affection}` : '';
+        const hist = c.lastInteraction > 0 ? ` · 上次互动${Math.round(c.lastInteraction / 1440)}天` : '';
+        const chosenCls = c.name === (it.candidates ?? []).find((x) => x.id === it.chosen)?.name ? ' chosen' : '';
+        return `<span class="cand${chosenCls}"><b>${escapeHtml(id)}</b> ${rel}${hist}</span>`;
+      }).join(' ');
+      const reason = it.mode === 'on'
+        ? `她让回忆牵引着脚步——走向了 ${escapeHtml(it.targetName ?? '')}。`
+        : `这一次没有特别的回忆，她随意地走向了 ${escapeHtml(it.targetName ?? '')}。`;
+      card.innerHTML = `${meta}<div class="nar-prose"><span class="nar-title">🌆 黄昏 · 选择时刻</span><br>${escapeHtml(it.actorName)} 的目光在几位同样熟识的伙伴之间停留——</div>
+        <div class="cands">${cands}</div><div class="nar-reason">${reason}</div>`;
     } else if (it.kind === 'gift') {
       card.className = 'nar-card gift';
       card.innerHTML = `${meta}<span class="nar-title">💐 馈礼</span><span class="nar-text">${escapeHtml(it.text)} <em class="nar-tag">💗 +0.10 关系升温</em></span>`;
@@ -311,21 +329,22 @@ function bindControls(): void {
       });
     });
   });
-  const setView = (v: 'narrative' | 'net' | 'metrics') => {
+  const setView = (v: 'narrative' | 'map' | 'net' | 'metrics') => {
     viewMode = v;
     const nar = document.getElementById('narrative')!;
     const g = document.getElementById('game')!;
     const net = document.getElementById('net-canvas')!;
     const met = document.getElementById('metrics-canvas')!;
     nar.style.display = v === 'narrative' ? 'block' : 'none';
-    g.style.display = 'none';
+    g.style.display = v === 'map' ? 'block' : 'none';
     net.style.display = v === 'net' ? 'block' : 'none';
     met.style.display = v === 'metrics' ? 'block' : 'none';
-    for (const [id, mode] of [['view-narrative', 'narrative'], ['view-net', 'net'], ['view-metrics', 'metrics']] as const) {
+    for (const [id, mode] of [['view-narrative', 'narrative'], ['view-map', 'map'], ['view-net', 'net'], ['view-metrics', 'metrics']] as const) {
       document.getElementById(id)!.classList.toggle('active', mode === v);
     }
   };
   document.getElementById('view-narrative')!.addEventListener('click', () => setView('narrative'));
+  document.getElementById('view-map')!.addEventListener('click', () => setView('map'));
   document.getElementById('view-net')!.addEventListener('click', () => setView('net'));
   document.getElementById('view-metrics')!.addEventListener('click', () => setView('metrics'));
   document.getElementById('exp-start')!.addEventListener('click', () => {
@@ -339,6 +358,27 @@ function bindControls(): void {
   renderFeed();
   pollExperiment();
   setInterval(() => void pollNarrative(), 2000);
+  // 平行世界：列出世界并切换（服务端切换活跃世界，事件带 worldId 过滤）
+  void fetch('/api/worlds').then((r) => r.json()).then((w) => {
+    const sel = document.getElementById('world-select') as HTMLSelectElement;
+    const desc = document.getElementById('world-desc')!;
+    sel.innerHTML = w.worlds.map((x: { id: string; name: string }) => `<option value="${x.id}">${x.name}</option>`).join('');
+    activeWorldId = w.active ?? 'w1';
+    sel.value = activeWorldId;
+    const cur = w.worlds.find((x: { id: string }) => x.id === activeWorldId);
+    if (cur) desc.textContent = cur.desc;
+    sel.addEventListener('change', () => {
+      activeWorldId = sel.value;
+      void fetch('/api/world/switch', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: activeWorldId }),
+      }).then(() => {
+        const c = w.worlds.find((x: { id: string }) => x.id === activeWorldId);
+        if (c) desc.textContent = c.desc;
+        lastNarrativeAt = 0;
+      });
+    });
+  }).catch(() => { /* 单世界模式无 worlds 时静默 */ });
   document.getElementById('side')!.addEventListener('click', () => { /* 面板区点击不动视图 */ });
 }
 
@@ -630,7 +670,11 @@ function loop(): void {
     lastMetricsAt = now;
     void fetchMetrics().then((m) => { metricsCache = m; });
   }
-  if (viewMode === 'net') {
+  if (viewMode === 'map') {
+    const g = document.getElementById('game') as HTMLCanvasElement;
+    resizeConsole(g);
+    if (snap) drawMiniWorld(g.getContext('2d')!, snap, g.width, g.height);
+  } else if (viewMode === 'net') {
     const net = document.getElementById('net-canvas') as HTMLCanvasElement;
     resizeConsole(net);
     drawNetwork(net.getContext('2d')!, snap?.agents ?? [], metricsCache.pairs, net.width, net.height, now);

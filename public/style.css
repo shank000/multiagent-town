@@ -134,3 +134,14 @@ canvas { display: block; }
 .char-row { font-size: 12px; margin: 6px 0; color: var(--ink-dim); }
 .char-row span { color: var(--ink); margin-right: 6px; }
 .char-divider { height: 1px; background: var(--panel-edge); margin: 8px 0; }
+
+/* —— 选择场景（废都物语式散文卡）—— */
+.nar-card.scene { max-width: 84%; border: 1px solid rgba(227, 178, 60, 0.35); background: rgba(227, 178, 60, 0.05); }
+.nar-prose { color: var(--ink); font-size: 13px; line-height: 1.75; margin: 4px 0 8px; }
+.cands { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.cand { font-size: 12px; color: var(--ink-dim); background: var(--bg-2); border: 1px solid var(--panel-edge);
+  border-radius: 16px; padding: 3px 10px; }
+.cand b { color: var(--ink); }
+.cand.chosen { background: rgba(227, 178, 60, 0.16); border-color: var(--accent); color: var(--ink); }
+.cand.chosen b { color: var(--accent); }
+.nar-reason { color: var(--teal); font-size: 12px; font-style: italic; }

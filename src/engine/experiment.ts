@@ -45,6 +45,7 @@ export class PartnerChoiceExperiment {
       const partner = this.pickPartner(agent);
       if (!partner) continue;
       if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
+      const snap = this.pickSnapshot(agent);
       this.log.addEvent({
         id: randomUUID(),
         type: 'chat',
@@ -53,7 +54,12 @@ export class PartnerChoiceExperiment {
         description: `「${agent.name}」选择了「${partner.name}」一对一交流`,
         location: agent.locationId,
         gameTime: now,
-        payload: { kind: 'experiment_pair_choice', fromId: agent.id, toId: partner.id },
+        payload: {
+          kind: 'experiment_pair_choice', fromId: agent.id, toId: partner.id,
+          mode: this.cfg.historyAccess,
+          candidates: snap,
+          chosen: partner.id,
+        },
       });
       if (!this.mind.dialogue.isActive(agent.id, partner.id)) this.mind.dialogue.start(agent, partner, now);
     }
@@ -77,6 +83,21 @@ export class PartnerChoiceExperiment {
       gameTime: now,
       payload: { kind: 'gift', fromId: gifter.id, toId: receiver.id, item: 'flower' },
     });
+  }
+
+  /** 候选者快照：等量可用伙伴 + 各自关系痕迹（供叙事呈现「历史依赖选择」） */
+  private pickSnapshot(agent: Agent): { id: string; name: string; affection: number; lastInteraction: number }[] {
+    return this.world.allAgents()
+      .filter((a) => a.id !== agent.id)
+      .map((a) => {
+        const rel = this.mind.rels.allFor(agent.id).find((r) => r.agentB === a.id);
+        return {
+          id: a.id,
+          name: a.name,
+          affection: rel ? Math.round(rel.affection * 100) / 100 : 0,
+          lastInteraction: rel ? Math.round(rel.updatedGameTime) : 0,
+        };
+      });
   }
 
   /** 伙伴选择：on = 亲密度×权重 + 最近互动时间加成 + 微量扰动（避免永远同一人）；off = 均匀随机 */

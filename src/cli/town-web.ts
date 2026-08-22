@@ -12,7 +12,7 @@ import { SocialTicker } from '../engine/social';
 import { MindEngine } from '../engine/mind';
 import { PlayerDirector } from '../engine/player';
 import { createTownServer } from '../web/server';
-import { ExperimentRunner } from '../engine/experiment-runner';
+import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../engine/world-factory';
 
 export interface TownWebArgs {
   speed: number; // 游戏分钟/现实秒（默认 1 = 60x）
@@ -46,14 +46,20 @@ async function main(): Promise<void> {
   const player = new PlayerDirector();
   const executor = new AgentExecutor(gateway, world, log, mind, player);
   const social = new SocialTicker(log, {}, mind.dialogue);
-  const experiment = new ExperimentRunner(log, world, mind, { historyAccess: 'on', giftExchange: 'on' });
-  const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind, experiment);
-  const server = await createTownServer({ world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, experiment, port: args.port });
+  // 平行世界：三种社会实验各一世界（极简像素块示意见客户端小地图）
+  const worlds = [
+    createManagedWorld('w1', 'mem-on'),
+    createManagedWorld('w2', 'mem-off'),
+    createManagedWorld('w3', 'rumor'),
+  ];
+  void time; void world; void executor; void social; void mind; void player;
+  const main = worlds[0];
+  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
-  loop.start();
+  startAllWorlds(worlds);
   process.on('SIGINT', () => {
-    loop.stop();
+    stopAllWorlds(worlds);
     void server.close().then(() => process.exit(0));
   });
 }
