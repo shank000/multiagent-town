@@ -17,6 +17,7 @@ import type { PlayerDirector } from '../engine/player';
 import { computeStanding } from '../engine/status';
 import { createGuestAgent } from '../engine/seed';
 import { PerceptionEngine } from '../engine/perception';
+import { metricsOf, type Choice } from '../engine/metrics';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
 export interface TownWebOptions {
@@ -30,6 +31,7 @@ export interface TownWebOptions {
   rumors?: RumorTracker;  // M3 谣言追踪（种子 API 数据源）
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
+  experiment?: { state(): unknown; setConfig(cfg: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number): void; stop(): void };
   port?: number;        // 默认 0 = 系统随机端口
 }
 
@@ -229,6 +231,51 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.writeHead(400);
         res.end('action 需为 walk/interact（含 target）或 say（含 text）');
         return;
+      }
+      if (url.pathname.startsWith('/api/experiment/') && opts.experiment) {
+        if (url.pathname === '/api/experiment/state' && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(opts.experiment.state()));
+          return;
+        }
+        if (url.pathname === '/api/experiment/config' && req.method === 'POST') {
+          const body = (await readBody(req)) as { mem?: unknown; gift?: unknown };
+          const mem = body.mem === 'on' ? 'on' : 'off';
+          const gift = body.gift === 'on' ? 'on' : 'off';
+          opts.experiment.setConfig({ historyAccess: mem, giftExchange: gift });
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (url.pathname === '/api/experiment/start' && req.method === 'POST') {
+          const body = (await readBody(req)) as { days?: unknown };
+          const days = typeof body.days === 'number' && body.days > 0 ? Math.min(365, Math.floor(body.days)) : 30;
+          opts.experiment.start(days);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (url.pathname === '/api/experiment/stop' && req.method === 'POST') {
+          opts.experiment.stop();
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (url.pathname === '/api/experiment/metrics' && req.method === 'GET') {
+          const ids = world.allAgents().map((a) => a.id);
+          const choices: Choice[] = [];
+          for (const e of log.eventsBetween(0, time.state.totalMinutes + 1)) {
+            const p = e.payload as { kind?: string; fromId?: string; toId?: string } | null;
+            if (p?.kind === 'experiment_pair_choice' && p.fromId && p.toId) {
+              choices.push({ day: Math.floor(e.gameTime / 1440) + 1, from: p.fromId, to: p.toId });
+            }
+          }
+          const m = metricsOf(choices, ids);
+          const pairs = [...m.pairs.entries()].map(([k, v]) => ({ pair: k, count: v }));
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, repeat: m.repeat, recip: m.recip, clus: m.clus, div: m.div, pairs }));
+          return;
+        }
       }
       if (url.pathname === '/api/guest/map' && req.method === 'GET') {
         const dir = world.allObjects()

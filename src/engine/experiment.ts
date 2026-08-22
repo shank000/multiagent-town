@@ -21,13 +21,16 @@ export class PartnerChoiceExperiment {
   private lastMinute = 0;
 
   private economy = new Economy();
+  cfg: PartnerExperimentConfig;
 
   constructor(
     private log: EventLog,
     private world: WorldState,
     private mind: MindEngine,
-    private cfg: PartnerExperimentConfig
-  ) {}
+    cfg: PartnerExperimentConfig
+  ) {
+    this.cfg = cfg;
+  }
 
   /** 由主循环每 tick 调用；跨过 19:30 触发当日一轮选择 */
   tick(now: number): void {

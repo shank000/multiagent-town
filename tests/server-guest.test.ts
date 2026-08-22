@@ -15,6 +15,7 @@ import { MindEngine } from '../src/engine/mind';
 import { SocialTicker } from '../src/engine/social';
 import { PlayerDirector } from '../src/engine/player';
 import { createTownServer } from '../src/web/server';
+import { ExperimentRunner } from '../src/engine/experiment-runner';
 
 async function boot() {
   const dir = mkdtempSync(join(tmpdir(), 'town-srv-'));
@@ -28,8 +29,9 @@ async function boot() {
   const executor = new AgentExecutor(gateway, world, log, mind, player);
   const social = new SocialTicker(log, {}, mind.dialogue);
   const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
+  const experiment = new ExperimentRunner(log, world, mind, { historyAccess: 'on', giftExchange: 'off' });
   const server = await createTownServer({
-    world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, publicDir: dir,
+    world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, experiment, publicDir: dir,
   });
   return { base: `http://127.0.0.1:${server.port}`, server, world, log };
 }
@@ -111,6 +113,37 @@ test('感知系统：say 后的 look 返回环境感知（注意力分级）', a
       perceptions: { type: string }[];
     };
     assert.ok(look2.perceptions.some((p) => p.type === 'join'), '新居民加入应被感知');
+  } finally {
+    await server.close();
+  }
+});
+
+test('涌现控制台 API：config/start/metrics 全链路', async () => {
+  const { base, server, world } = await boot();
+  try {
+    void world;
+    const cfg = await (await fetch(`${base}/api/experiment/config`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mem: 'on', gift: 'off' }),
+    })).json() as { ok: boolean };
+    assert.equal(cfg.ok, true);
+
+    const start = await (await fetch(`${base}/api/experiment/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ days: 30 }),
+    })).json() as { ok: boolean };
+    assert.equal(start.ok, true);
+
+    const st = await (await fetch(`${base}/api/experiment/state`)).json() as { running: boolean; remainingDays: number };
+    assert.equal(st.running, true);
+    assert.equal(st.remainingDays, 30);
+
+    const met = await (await fetch(`${base}/api/experiment/metrics`)).json() as { ok: boolean; repeat: number[] };
+    assert.equal(met.ok, true);
+    assert.ok(Array.isArray(met.repeat));
+
+    const stop = await (await fetch(`${base}/api/experiment/stop`, { method: 'POST' })).json() as { ok: boolean };
+    assert.equal(stop.ok, true);
   } finally {
     await server.close();
   }

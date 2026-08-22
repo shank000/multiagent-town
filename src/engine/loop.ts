@@ -27,7 +27,8 @@ export class WorldLoop {
     private db: DbHandle,
     private hooks: LoopHooks = {},
     private social?: SocialTicker,
-    private mind?: MindEngine
+    private mind?: MindEngine,
+    private experiment?: { tick(now: number): void }
   ) {
     this.log.subscribe((e) => this.hooks.onEvent?.(e));
     this.log.addEvent(systemEvent(0, '第1天开始，小镇从晨光中醒来。'));
@@ -42,6 +43,7 @@ export class WorldLoop {
     }
     this.social?.tick(this.world.allAgents(), dt, clock.totalMinutes);
     this.mind?.tick(this.world, dt, clock.totalMinutes);
+    this.experiment?.tick(clock.totalMinutes);
     if (clock.day !== this.lastDay) {
       this.lastDay = clock.day;
       this.log.addEvent(systemEvent(clock.totalMinutes, `第${clock.day}天开始。`));

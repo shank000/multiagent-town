@@ -5,6 +5,7 @@ import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from
 import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
 import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop, rainSplash, type Particle } from './effects';
 import { escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind, bindPanel, updatePanelDeps, type AgentView } from './panel';
+import { drawNetwork, drawMetrics, fetchMetrics, controlExperiment, exportMetrics, type MetricsPayload } from './console';
 import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 
@@ -57,6 +58,9 @@ let lastWaterRipple = 0;
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
+let viewMode: 'world' | 'net' | 'metrics' = 'world';
+let metricsCache: MetricsPayload = { repeat: [], recip: [], clus: [], div: [], pairs: [] };
+let lastMetricsAt = 0;
 let fitScale = 1;
 // 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
 let lastGridW = 0;
@@ -178,6 +182,29 @@ function bindControls(): void {
     });
   });
   document.getElementById('fit-view')!.addEventListener('click', () => fitCamera());
+  const setView = (v: 'world' | 'net' | 'metrics') => {
+    viewMode = v;
+    const g = document.getElementById('game')!;
+    const net = document.getElementById('net-canvas')!;
+    const met = document.getElementById('metrics-canvas')!;
+    g.style.display = v === 'world' ? 'block' : 'none';
+    net.style.display = v === 'net' ? 'block' : 'none';
+    met.style.display = v === 'metrics' ? 'block' : 'none';
+    for (const [id, mode] of [['view-world', 'world'], ['view-net', 'net'], ['view-metrics', 'metrics']] as const) {
+      document.getElementById(id)!.classList.toggle('active', mode === v);
+    }
+  };
+  document.getElementById('view-world')!.addEventListener('click', () => setView('world'));
+  document.getElementById('view-net')!.addEventListener('click', () => setView('net'));
+  document.getElementById('view-metrics')!.addEventListener('click', () => setView('metrics'));
+  document.getElementById('exp-start')!.addEventListener('click', () => {
+    const mem = (document.getElementById('exp-mem') as HTMLSelectElement).value;
+    const gift = (document.getElementById('exp-gift') as HTMLSelectElement).value;
+    const days = Number((document.getElementById('exp-days') as HTMLInputElement).value || 30);
+    void controlExperiment('config', { mem, gift }).then(() => controlExperiment('start', { days }));
+  });
+  document.getElementById('exp-stop')!.addEventListener('click', () => void controlExperiment('stop'));
+  document.getElementById('exp-export')!.addEventListener('click', () => exportMetrics(metricsCache));
   const side = document.getElementById('side')!;
   document.getElementById('panel-toggle')!.addEventListener('click', (e) => {
     side.classList.toggle('collapsed');
@@ -473,8 +500,32 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
-  draw();
+  if (viewMode !== 'world' && now - lastMetricsAt > 2000) {
+    lastMetricsAt = now;
+    void fetchMetrics().then((m) => { metricsCache = m; });
+  }
+  if (viewMode === 'net') {
+    const net = document.getElementById('net-canvas') as HTMLCanvasElement;
+    resizeConsole(net);
+    drawNetwork(net.getContext('2d')!, snap?.agents ?? [], metricsCache.pairs, net.width, net.height, now);
+  } else if (viewMode === 'metrics') {
+    const met = document.getElementById('metrics-canvas') as HTMLCanvasElement;
+    resizeConsole(met);
+    drawMetrics(met.getContext('2d')!, metricsCache, met.width, met.height);
+  } else {
+    draw();
+  }
   requestAnimationFrame(loop);
+}
+
+/** 控制台画布铺满窗口（与游戏画布同规格） */
+function resizeConsole(c: HTMLCanvasElement): void {
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width === Math.floor(window.innerWidth * dpr) && c.height === Math.floor(window.innerHeight * dpr)) return;
+  c.width = Math.floor(window.innerWidth * dpr);
+  c.height = Math.floor(window.innerHeight * dpr);
+  c.style.width = `${window.innerWidth}px`;
+  c.style.height = `${window.innerHeight}px`;
 }
 
 function draw(): void {

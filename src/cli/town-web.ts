@@ -12,6 +12,7 @@ import { SocialTicker } from '../engine/social';
 import { MindEngine } from '../engine/mind';
 import { PlayerDirector } from '../engine/player';
 import { createTownServer } from '../web/server';
+import { ExperimentRunner } from '../engine/experiment-runner';
 
 export interface TownWebArgs {
   speed: number; // 游戏分钟/现实秒（默认 1 = 60x）
@@ -45,8 +46,9 @@ async function main(): Promise<void> {
   const player = new PlayerDirector();
   const executor = new AgentExecutor(gateway, world, log, mind, player);
   const social = new SocialTicker(log, {}, mind.dialogue);
-  const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
-  const server = await createTownServer({ world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, port: args.port });
+  const experiment = new ExperimentRunner(log, world, mind, { historyAccess: 'on', giftExchange: 'on' });
+  const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind, experiment);
+  const server = await createTownServer({ world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, experiment, port: args.port });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   loop.start();
