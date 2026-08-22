@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "partner-choice.study/v1",
+  "platform": {
+    "package": "agentsociety2",
+    "version": "2.8.4",
+    "python": ">=3.11,<3.14"
+  },
+  "participantCount": 24,
+  "days": 60,
+  "seeds": [101, 211, 307, 401, 503],
+  "roundMinute": 1170,
+  "candidatePolicy": "all_other_participants",
+  "candidateOrderPolicy": "paired_seeded_shuffle",
+  "decision": {
+    "policy": "llm",
+    "promptVersion": "partner-choice.prompt/v1",
+    "fallback": "seeded_uniform",
+    "modelRole": "primary",
+    "temperature": 0.2,
+    "topP": 1,
+    "maxTokens": 256,
+    "maxAttempts": 2
+  },
+  "coreConditions": [
+    {
+      "id": "memory-none__gift-off",
+      "historyMode": "none",
+      "giftExchange": false
+    },
+    {
+      "id": "memory-none__gift-on",
+      "historyMode": "none",
+      "giftExchange": true
+    },
+    {
+      "id": "memory-full__gift-off",
+      "historyMode": "full",
+      "giftExchange": false
+    },
+    {
+      "id": "memory-full__gift-on",
+      "historyMode": "full",
+      "giftExchange": true
+    }
+  ],
+  "robustnessConditions": [
+    {
+      "id": "memory-recent3__gift-off",
+      "historyMode": "recent_k",
+      "recentK": 3,
+      "giftExchange": false
+    },
+    {
+      "id": "memory-recent3__gift-on",
+      "historyMode": "recent_k",
+      "recentK": 3,
+      "giftExchange": true
+    }
+  ],
+  "replay": {
+    "choiceDatasetId": "partner_choice.choice_event",
+    "defaultOrder": ["day", "round_id", "chooser_id", "event_seq"]
+  }
+}
