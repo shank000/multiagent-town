@@ -58,7 +58,7 @@ let lastWaterRipple = 0;
 
 // —— 全屏相机（fit-to-screen，无拖拽）——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
-let viewMode: 'world' | 'net' | 'metrics' = 'world';
+let viewMode: 'narrative' | 'net' | 'metrics' = 'narrative';
 let metricsCache: MetricsPayload = { repeat: [], recip: [], clus: [], div: [], pairs: [] };
 let lastMetricsAt = 0;
 let fitScale = 1;
@@ -166,11 +166,82 @@ function onEvent(e: TownEvent): void {
 
 interface FeedItem { kind: string; text: string; id: string }
 const feed: FeedItem[] = [];
+interface NarrativeItem {
+  id: string; seq: number; time: number; day: number; minute: number; type: string; kind: string;
+  actor: string | null; actorName: string; target: string | null; targetName: string | null;
+  text: string; line: string | null; thought: string | null;
+}
+let lastNarrativeId = 0;
+let lastNarrativeAt = 0;
+
+/** 叙事流：SillyTavern 式时间轴卡片 + 对话气泡 + 内心独白 */
+function renderNarrative(items: NarrativeItem[]): void {
+  const box = document.getElementById('narrative');
+  if (!box) return;
+  const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const frag = document.createDocumentFragment();
+  let lastDay = -1;
+  for (const it of items) {
+    if (it.day !== lastDay) {
+      lastDay = it.day;
+      const sep = document.createElement('div');
+      sep.className = 'nar-day';
+      sep.textContent = `── 第 ${it.day} 天 ──`;
+      frag.appendChild(sep);
+    }
+    const card = document.createElement('div');
+    const meta = `<span class="nar-meta">${hhmm(it.minute)}</span>`;
+    if (it.kind.startsWith('chat')) {
+      card.className = 'nar-bubble';
+      card.innerHTML = `<div class="nar-head"><span class="nar-ava">${escapeHtml(it.actorName.slice(0, 1))}</span><span class="nar-name">${escapeHtml(it.actorName)}</span>${meta}</div><div class="nar-text">${escapeHtml(it.line ?? it.text)}</div>`;
+    } else if (it.kind === 'thought' || ((it.kind.startsWith('thought')) && it.thought)) {
+      card.className = 'nar-card thought';
+      card.innerHTML = `${meta}<span class="nar-title">💭 ${escapeHtml(it.actorName)} 的内心独白</span><div class="nar-italic">${escapeHtml(it.thought ?? it.text)}</div>`;
+    } else if (it.kind === 'gift') {
+      card.className = 'nar-card gift';
+      card.innerHTML = `${meta}<span class="nar-title">💐 馈礼</span><span class="nar-text">${escapeHtml(it.text)} <em class="nar-tag">💗 +0.10 关系升温</em></span>`;
+    } else {
+      const icon = it.kind.startsWith('town_event') ? '🎪' : it.kind === 'rumor' ? '🗣' : it.type === 'move' ? '🚶' : it.kind === 'experiment_pair_choice' ? '🤝' : '🛠';
+      card.className = 'nar-card';
+      card.innerHTML = `${meta}<span class="nar-title">${icon} ${escapeHtml(it.text)}</span>`;
+    }
+    frag.appendChild(card);
+  }
+  box.innerHTML = '';
+  box.appendChild(frag);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function pollNarrative(): Promise<void> {
+  const now = performance.now();
+  if (now - lastNarrativeAt < 2000) return;
+  lastNarrativeAt = now;
+  try {
+    const res = await fetch('/api/narrative?limit=300');
+    const r = (await res.json()) as { items: NarrativeItem[] };
+    const fresh = r.items.filter((x) => (x.id ?? '') !== '' && x.seq >= 0).slice(-120);
+    if (fresh.length) renderNarrative(fresh);
+    void lastNarrativeId;
+  } catch { /* 静默 */ }
+}
 const FEED_KINDS: [string, string][] = [
   ['chat', '💬 对话'], ['chat_summary', '📜 小结'], ['gift', '💐 馈礼'], ['rumor', '🗣 谣言'],
   ['town_event', '🎪 活动'], ['broadcast', '📢 广播'], ['interact', '🛠 互动'], ['move', '🚶 移动'],
 ];
 let activeFilter = '全部';
+function renderCharacterCard(id: string | null): void {
+  const box = document.getElementById('character-card');
+  if (!box || !snap) return;
+  const a = snap.agents.find((x) => x.id === id);
+  if (!a) { box.innerHTML = '点击左侧名册或对话头像查看角色'; return; }
+  box.innerHTML = `<div class="char-head"><span class="char-ava">${escapeHtml(a.name.slice(0, 1))}</span>
+    <div><div class="char-name">${escapeHtml(a.name)}</div><div class="char-sub">${escapeHtml(a.occupation)}</div></div></div>
+    <div class="char-row"><span>状态</span>${escapeHtml(STATE_NAME[a.state] ?? a.state)}${a.verb ? ` · ${escapeHtml(a.verb)}` : ''}</div>
+    <div class="char-row"><span>想法</span>${a.thought ? escapeHtml(a.thought) : '（暂无）'}</div>
+    <div class="char-divider"></div>
+    <div class="char-row"><span>坐标</span>(${a.x}, ${a.y}) · ${escapeHtml(a.locationName)}</div>`;
+}
+
 function renderFeed(): void {
   const list = document.getElementById('feed-list');
   if (!list) return;
@@ -211,6 +282,7 @@ function renderRoster(): void {
       selectedObjectId = null;
       renderRoster();
       updatePanel();
+      renderCharacterCard(selectedId);
     });
   });
 }
@@ -239,19 +311,21 @@ function bindControls(): void {
       });
     });
   });
-  const setView = (v: 'world' | 'net' | 'metrics') => {
+  const setView = (v: 'narrative' | 'net' | 'metrics') => {
     viewMode = v;
+    const nar = document.getElementById('narrative')!;
     const g = document.getElementById('game')!;
     const net = document.getElementById('net-canvas')!;
     const met = document.getElementById('metrics-canvas')!;
-    g.style.display = v === 'world' ? 'block' : 'none';
+    nar.style.display = v === 'narrative' ? 'block' : 'none';
+    g.style.display = 'none';
     net.style.display = v === 'net' ? 'block' : 'none';
     met.style.display = v === 'metrics' ? 'block' : 'none';
-    for (const [id, mode] of [['view-world', 'world'], ['view-net', 'net'], ['view-metrics', 'metrics']] as const) {
+    for (const [id, mode] of [['view-narrative', 'narrative'], ['view-net', 'net'], ['view-metrics', 'metrics']] as const) {
       document.getElementById(id)!.classList.toggle('active', mode === v);
     }
   };
-  document.getElementById('view-world')!.addEventListener('click', () => setView('world'));
+  document.getElementById('view-narrative')!.addEventListener('click', () => setView('narrative'));
   document.getElementById('view-net')!.addEventListener('click', () => setView('net'));
   document.getElementById('view-metrics')!.addEventListener('click', () => setView('metrics'));
   document.getElementById('exp-start')!.addEventListener('click', () => {
@@ -264,6 +338,8 @@ function bindControls(): void {
   document.getElementById('exp-export')!.addEventListener('click', () => exportMetrics(metricsCache));
   renderFeed();
   pollExperiment();
+  setInterval(() => void pollNarrative(), 2000);
+  document.getElementById('side')!.addEventListener('click', () => { /* 面板区点击不动视图 */ });
 }
 
 function onWheel(e: WheelEvent): void {
@@ -550,7 +626,7 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
-  if (viewMode !== 'world' && now - lastMetricsAt > 2000) {
+  if (viewMode !== 'narrative' && now - lastMetricsAt > 2000) {
     lastMetricsAt = now;
     void fetchMetrics().then((m) => { metricsCache = m; });
   }
@@ -563,7 +639,7 @@ function loop(): void {
     resizeConsole(met);
     drawMetrics(met.getContext('2d')!, metricsCache, met.width, met.height);
   } else {
-    draw();
+    void 0; // 叙事视图：由 SSE 事件 + 2s 轮询驱动渲染
   }
   requestAnimationFrame(loop);
 }

@@ -148,3 +148,28 @@ test('涌现控制台 API：config/start/metrics 全链路', async () => {
     await server.close();
   }
 });
+
+test('叙事 API：返回结构化事件（对话/馈礼/内心）', async () => {
+  const { base, server } = await boot();
+  try {
+    await fetch(`${base}/api/guest/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '叙事者' }),
+    });
+    await fetch(`${base}/api/guest/act`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '叙事者', action: 'say', text: '记录这一刻！' }),
+    });
+    const r = await (await fetch(`${base}/api/narrative?limit=100`)).json() as {
+      ok: boolean; items: { kind: string; actorName: string; text: string; day: number; minute: number }[];
+    };
+    assert.equal(r.ok, true);
+    assert.ok(r.items.length > 0);
+    const say = r.items.find((x) => x.kind === 'chat' && x.text.includes('记录这一刻'));
+    assert.ok(say, 'say 事件应进入叙事流');
+    assert.equal(say.actorName, '叙事者');
+    assert.ok(say.day >= 1 && say.minute >= 0 && say.minute < 1440);
+  } finally {
+    await server.close();
+  }
+});

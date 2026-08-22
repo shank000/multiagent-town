@@ -11,7 +11,7 @@
     <div id="clock">第1天 00:00</div>
     <div class="spacer"></div>
     <div class="seg">
-      <button id="view-world" class="active">🏘 世界</button>
+      <button id="view-narrative" class="active">🎭 叙事</button>
       <button id="view-net">🕸 网络</button>
       <button id="view-metrics">📈 指标</button>
     </div>
@@ -46,16 +46,15 @@
   </aside>
 
   <main id="stage">
-    <div id="stage-tip">点选 NPC 看详情 · 滚轮缩放 · 双击复位</div>
-    <canvas id="game" width="384" height="256"></canvas>
+    <div id="narrative"></div>
+    <canvas id="game" style="display:none"></canvas>
     <canvas id="net-canvas"></canvas>
     <canvas id="metrics-canvas"></canvas>
   </main>
 
   <aside id="feed">
-    <h4>事件流</h4>
-    <div id="feed-filters"></div>
-    <div id="feed-list"><p style="color:var(--ink-dim);font-size:12px">等待事件……</p></div>
+    <h4>角色详情</h4>
+    <div id="character-card" style="color:var(--ink-dim);font-size:12px">点击左侧名册或对话头像查看角色</div>
   </aside>
 
   <div id="side">

@@ -232,6 +232,36 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.end('action 需为 walk/interact（含 target）或 say（含 text）');
         return;
       }
+      if (url.pathname === '/api/narrative' && req.method === 'GET') {
+        // 叙事流：结构化事件（对话/行动/内心/馈礼/移动），供涌现酒馆前端渲染
+        const limit = Math.min(500, Math.max(10, Number(url.searchParams.get('limit')) || 200));
+        const from = world.allAgents();
+        const nameOf = (id: string | null) => from.find((a) => a.id === id)?.name ?? id ?? '';
+        const recent = log.eventsBetween(0, time.state.totalMinutes + 1).slice(-limit);
+        const items = recent.map((e, i) => {
+          const p = (e.payload ?? {}) as Record<string, unknown>;
+          const kind = String(p.kind ?? '');
+          return {
+            seq: i,
+            id: e.id,
+            time: e.gameTime,
+            day: Math.floor(e.gameTime / 1440) + 1,
+            minute: e.gameTime % 1440,
+            type: e.type,
+            kind,
+            actor: e.actorId,
+            actorName: nameOf(e.actorId),
+            target: e.targetIds[0] ?? null,
+            targetName: nameOf(e.targetIds[0] ?? null),
+            text: e.description,
+            line: typeof p.line === 'string' ? p.line : null,
+            thought: typeof p.thought === 'string' ? p.thought : null,
+          };
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, items }));
+        return;
+      }
       if (url.pathname.startsWith('/api/experiment/') && opts.experiment) {
         if (url.pathname === '/api/experiment/state' && req.method === 'GET') {
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
