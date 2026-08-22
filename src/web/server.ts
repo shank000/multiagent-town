@@ -376,7 +376,17 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           const m = metricsOf(choices, ids);
           const pairs = [...m.pairs.entries()].map(([k, v]) => ({ pair: k, count: v }));
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true, repeat: m.repeat, recip: m.recip, clus: m.clus, div: m.div, pairs }));
+          res.end(JSON.stringify({
+            ok: true,
+            repeat: m.repeat,
+            recip: m.recip,
+            clus: m.clus,
+            div: m.div,
+            hhi: m.hhi,
+            persistence: m.persistence,
+            hub: m.hub,
+            pairs,
+          }));
           return;
         }
       }

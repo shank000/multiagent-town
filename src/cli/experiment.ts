@@ -12,7 +12,7 @@ import { EventLog } from '../store/events';
 import { MindEngine } from '../engine/mind';
 import { PartnerChoiceExperiment, type PartnerExperimentConfig } from '../engine/experiment';
 
-import { dailyMatrix, repeatRate, reciprocity, clustering, diversity, avg, std, type Choice } from '../engine/metrics';
+import { metricsOf, avg, std, type Choice } from '../engine/metrics';
 
 function parseArgs(): { days: number; seeds: number } {
   const get = (k: string, d: number) => {
@@ -57,18 +57,39 @@ async function runCondition(cond: PartnerExperimentConfig['historyAccess'], gift
 async function main(): Promise<void> {
   const { days, seeds } = parseArgs();
   const names = buildTown().allAgents().map((a) => a.id);
-  interface Cell { mem: string; gift: string; repeat: number[]; recip: number[]; clus: number[]; div: number[] }
+  interface Cell {
+    mem: string;
+    gift: string;
+    repeat: number[];
+    recip: number[];
+    clus: number[];
+    div: number[];
+    hhi: number[];
+    persistence: number[];
+    hub: number[];
+  }
   const cells: Cell[] = [];
   for (const mem of ['off', 'on'] as const) {
     for (const gift of ['off', 'on'] as const) {
-      const acc = { repeat: [] as number[], recip: [] as number[], clus: [] as number[], div: [] as number[] };
+      const acc = {
+        repeat: [] as number[],
+        recip: [] as number[],
+        clus: [] as number[],
+        div: [] as number[],
+        hhi: [] as number[],
+        persistence: [] as number[],
+        hub: [] as number[],
+      };
       for (let s = 0; s < seeds; s++) {
         const choices = await runCondition(mem, gift, days, s + 1);
-        const byDay = dailyMatrix(choices, names);
-        acc.repeat.push(...repeatRate(byDay));
-        acc.recip.push(...reciprocity(choices));
-        acc.clus.push(...clustering(byDay, names.length));
-        acc.div.push(...diversity(byDay, names.length));
+        const metrics = metricsOf(choices, names);
+        acc.repeat.push(...metrics.repeat);
+        acc.recip.push(...metrics.recip);
+        acc.clus.push(...metrics.clus);
+        acc.div.push(...metrics.div);
+        acc.hhi.push(...metrics.hhi);
+        acc.persistence.push(...metrics.persistence);
+        acc.hub.push(...metrics.hub);
       }
       cells.push({ mem, gift, ...acc });
     }
@@ -82,6 +103,9 @@ async function main(): Promise<void> {
     ['互惠性(相对基线)', (c) => c.recip],
     ['聚类系数', (c) => c.clus],
     ['伙伴多样性(7日窗口)', (c) => c.div],
+    ['伙伴集中度 HHI(7日窗口)', (c) => c.hhi],
+    ['跨日有向矩阵持续性', (c) => c.persistence],
+    ['加权入度枢纽集中度', (c) => c.hub],
   ];
   for (const [label, fn] of rows) {
     console.log(`  ${label.padEnd(16)} ${fmt(fn(cell('off', 'off')))}  ${fmt(fn(cell('off', 'on')))}  ${fmt(fn(cell('on', 'off')))}  ${fmt(fn(cell('on', 'on')))}`);

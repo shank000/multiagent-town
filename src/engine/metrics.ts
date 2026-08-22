@@ -112,8 +112,130 @@ export function diversity(byDay: Map<number, Map<string, number>>, n: number, wi
   return out;
 }
 
+/**
+ * Rolling partner concentration (HHI).
+ * For active sender i in the window, HHI_i = sum_j (w_ij / sum_k w_ik)^2;
+ * the daily value is the mean HHI_i across active senders. Directed choices are
+ * used, inactive senders are excluded, and an empty window has concentration 0.
+ */
+export function partnerHhi(byDay: Map<number, Map<string, number>>, n: number, window = 7): number[] {
+  const days = [...byDay.keys()].sort((a, b) => a - b);
+  const width = Math.max(1, Math.floor(window));
+  const out: number[] = [];
+  for (let d = 0; d < days.length; d++) {
+    const outgoing = Array.from({ length: Math.max(0, n) }, () => new Map<number, number>());
+    const firstDay = days[d] - width + 1;
+    for (let w = 0; w <= d; w++) {
+      if (days[w] < firstDay) continue;
+      for (const [key, count] of byDay.get(days[w]) ?? []) {
+        const [from, to] = key.split(':').map(Number);
+        if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from >= n || to < 0 || to >= n || count <= 0) continue;
+        outgoing[from].set(to, (outgoing[from].get(to) ?? 0) + count);
+      }
+    }
+    const perAgent: number[] = [];
+    for (const partners of outgoing) {
+      const total = [...partners.values()].reduce((sum, count) => sum + count, 0);
+      if (total > 0) perAgent.push([...partners.values()].reduce((sum, count) => sum + (count / total) ** 2, 0));
+    }
+    out.push(Math.max(0, Math.min(1, avg(perAgent))));
+  }
+  return out;
+}
+
+function directedVector(matrix: Map<string, number>, n: number): number[] {
+  const vector: number[] = [];
+  for (let from = 0; from < n; from++) {
+    for (let to = 0; to < n; to++) {
+      if (from !== to) vector.push(Math.max(0, matrix.get(`${from}:${to}`) ?? 0));
+    }
+  }
+  return vector;
+}
+
+/**
+ * Adjacent-day directed-matrix persistence.
+ * Each value is Pearson r(vec(M_d), vec(M_{d+1})) over all directed non-self
+ * dyads, bounded to [-1, 1]. Equal non-empty constant vectors are treated as 1;
+ * other zero-variance or empty comparisons are treated as 0.
+ */
+export function matrixPersistence(byDay: Map<number, Map<string, number>>, n: number): number[] {
+  const days = [...byDay.keys()].sort((a, b) => a - b);
+  const out: number[] = [];
+  for (let i = 1; i < days.length; i++) {
+    if (days[i] !== days[i - 1] + 1) continue;
+    const previous = directedVector(byDay.get(days[i - 1])!, n);
+    const current = directedVector(byDay.get(days[i])!, n);
+    if (previous.length === 0) {
+      out.push(0);
+      continue;
+    }
+    const previousMean = avg(previous);
+    const currentMean = avg(current);
+    let covariance = 0;
+    let previousVariance = 0;
+    let currentVariance = 0;
+    for (let j = 0; j < previous.length; j++) {
+      const previousDelta = previous[j] - previousMean;
+      const currentDelta = current[j] - currentMean;
+      covariance += previousDelta * currentDelta;
+      previousVariance += previousDelta ** 2;
+      currentVariance += currentDelta ** 2;
+    }
+    if (previousVariance === 0 || currentVariance === 0) {
+      const equal = previous.some((value) => value > 0) && previous.every((value, j) => value === current[j]);
+      out.push(equal ? 1 : 0);
+      continue;
+    }
+    out.push(Math.max(-1, Math.min(1, covariance / Math.sqrt(previousVariance * currentVariance))));
+  }
+  return out;
+}
+
+/**
+ * Daily normalized weighted in-degree hub concentration.
+ * With incoming strengths s_i and total S, C = sum_i(s_max - s_i) / ((n-1)S).
+ * This Freeman-style centralization is 0 for balanced attention and 1 when one
+ * receiver gets all directed choice weight; n < 2 or S = 0 is defined as 0.
+ */
+export function hubConcentration(byDay: Map<number, Map<string, number>>, n: number): number[] {
+  const out: number[] = [];
+  const days = [...byDay.keys()].sort((a, b) => a - b);
+  for (const day of days) {
+    const matrix = byDay.get(day)!;
+    if (n < 2) {
+      out.push(0);
+      continue;
+    }
+    const incoming = Array.from({ length: n }, () => 0);
+    for (const [key, count] of matrix) {
+      const [from, to] = key.split(':').map(Number);
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from >= n || to < 0 || to >= n || count <= 0) continue;
+      incoming[to] += count;
+    }
+    const total = incoming.reduce((sum, strength) => sum + strength, 0);
+    if (total === 0) {
+      out.push(0);
+      continue;
+    }
+    const max = Math.max(...incoming);
+    const numerator = incoming.reduce((sum, strength) => sum + max - strength, 0);
+    out.push(Math.max(0, Math.min(1, numerator / ((n - 1) * total))));
+  }
+  return out;
+}
+
 /** 便捷汇总：由 choices 直接给出全部序列（用于 API 与 CLI） */
-export function metricsOf(choices: Choice[], ids: string[]): { repeat: number[]; recip: number[]; clus: number[]; div: number[]; pairs: Map<string, number> } {
+export function metricsOf(choices: Choice[], ids: string[]): {
+  repeat: number[];
+  recip: number[];
+  clus: number[];
+  div: number[];
+  hhi: number[];
+  persistence: number[];
+  hub: number[];
+  pairs: Map<string, number>;
+} {
   const byDay = dailyMatrix(choices, ids);
   const pairs = new Map<string, number>();
   for (const m of byDay.values()) for (const [k, v] of m) pairs.set(k, (pairs.get(k) ?? 0) + v);
@@ -122,6 +244,9 @@ export function metricsOf(choices: Choice[], ids: string[]): { repeat: number[];
     recip: reciprocity(choices),
     clus: clustering(byDay, ids.length),
     div: diversity(byDay, ids.length),
+    hhi: partnerHhi(byDay, ids.length),
+    persistence: matrixPersistence(byDay, ids.length),
+    hub: hubConcentration(byDay, ids.length),
     pairs,
   };
 }
