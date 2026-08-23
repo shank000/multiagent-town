@@ -9,13 +9,15 @@ import type { TimeEngine } from '../core/time';
 import type { WorldState } from '../core/world';
 import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
+import type { DbHandle } from '../store/db';
 import type { RelationshipStore } from '../store/relationships';
 import type { RumorTracker } from '../engine/rumors';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import { computeStanding } from '../engine/status';
-import { createGuestAgent } from '../engine/seed';
+import { analyzeTown } from '../engine/analyze';
+import { createGuestAgent, hydrateWorld } from '../engine/seed';
 import { PerceptionEngine } from '../engine/perception';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 
@@ -28,6 +30,8 @@ export interface TownWebOptions {
   player?: PlayerDirector;    // 玩家扮演
   rels?: RelationshipStore;  // M3 关系存储（声望/关系 API 数据源）
   rumors?: RumorTracker;  // M3 谣言追踪（种子 API 数据源）
+  db?: DbHandle;         // 数据统计与分析（/api/stats）数据源；缺省则该接口 404
+  dbPath?: string;       // 展示用库路径（/api/stats 报告内），缺省空串
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   port?: number;        // 默认 0 = 系统随机端口
@@ -88,6 +92,21 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       if (url.pathname === '/api/state') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(currentSnapshot()));
+        return;
+      }
+      if (url.pathname === '/api/stats' && req.method === 'GET') {
+        if (!opts.db) {
+          res.writeHead(404);
+          res.end('数据统计未启用');
+          return;
+        }
+        const dayRaw = url.searchParams.get('day');
+        const day = dayRaw !== null && /^\d+$/.test(dayRaw) ? Number(dayRaw) : undefined;
+        // 名册优先用内存世界（含访客），与 agents 表保持一致（两者都由 hydrateWorld 维护）
+        const names = new Map(world.allAgents().map((a) => [a.id, a.name]));
+        const report = analyzeTown(opts.db, { day, top: 10, dbPath: opts.dbPath ?? '', names });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(report));
         return;
       }
       if (url.pathname === '/api/status' && req.method === 'GET') {
@@ -168,6 +187,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         if (!guest) {
           guest = createGuestAgent(name);
           world.addAgent(guest);
+          if (opts.db) hydrateWorld(opts.db, world); // 访客同步进名册，统计可解析其名字
           log.addEvent({
             id: randomUUID(), type: 'system', actorId: guest.id, targetIds: [],
             description: `访客「${name}」登录了小镇。`, location: 'obj:plaza',
@@ -360,7 +380,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         return await file(res, resolve(publicDir, 'assets', name));
       }
       if (url.pathname === '/') return await file(res, resolve(publicDir, 'index.html'));
-      if (url.pathname === '/client.js' || url.pathname === '/style.css') {
+      if (url.pathname === '/stats.html') return await file(res, resolve(publicDir, 'stats.html'));
+      if (url.pathname === '/client.js' || url.pathname === '/stats.js' || url.pathname === '/style.css') {
         return await file(res, resolve(publicDir, url.pathname.slice(1)));
       }
       res.writeHead(404);

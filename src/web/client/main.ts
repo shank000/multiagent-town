@@ -107,7 +107,8 @@ function fitCamera(): void {
 
 function applyCamera(): void {
   const dpr = window.devicePixelRatio || 1;
-  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, camera.offX * dpr, camera.offY * dpr);
+  // 偏移对齐到整数设备像素，避免亚像素错位导致瓦片纹样抖动/重影
+  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, Math.round(camera.offX * dpr), Math.round(camera.offY * dpr));
 }
 
 function resetCamera(): void { ctx.setTransform(1, 0, 0, 1, 0, 0); }
@@ -482,6 +483,10 @@ function draw(): void {
   const nowMs = performance.now();
   const worldW = snap.gridW * TILE;
   const worldH = snap.gridH * TILE;
+  // 每帧先整体清空画布（含世界外信箱留白区）：上一帧残留的雨丝/横幅/提示框像素
+  // 若不清除会永久留在画布上，形成重影/残影（weather 转晴或元素过期后仍可见）
+  resetCamera();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   // 世界层：应用摄像机变换后绘制（地形/对象/agent/气泡）
   applyCamera();
   drawTerrain(ctx, worldW, worldH);

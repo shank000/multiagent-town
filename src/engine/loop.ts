@@ -9,6 +9,7 @@ import type { DbHandle } from '../store/db';
 import type { GameEvent } from '../core/types';
 import type { SocialTicker } from './social';
 import type { MindEngine } from './mind';
+import { hydrateWorld } from './seed';
 
 export interface LoopHooks {
   onTick?: (clock: ClockState) => void;
@@ -31,6 +32,8 @@ export class WorldLoop {
   ) {
     this.log.subscribe((e) => this.hooks.onEvent?.(e));
     this.log.addEvent(systemEvent(0, '第1天开始，小镇从晨光中醒来。'));
+    // 世界名册落库：agents/objects 表与内存世界保持一致（统计/回放数据源）
+    hydrateWorld(this.db, this.world);
   }
 
   /** 推进一步（虚拟时钟下可连续调用）；默认 flush 一个宏任务让进行中的决策落定 */

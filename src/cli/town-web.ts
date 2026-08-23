@@ -43,7 +43,7 @@ async function main(): Promise<void> {
   const executor = new AgentExecutor(gateway, world, log, mind, player);
   const social = new SocialTicker(log, {}, mind.dialogue);
   const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind);
-  const server = await createTownServer({ world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, port: args.port });
+  const server = await createTownServer({ world, time, loop, log, mind, player, rels: mind.rels, rumors: mind.rumors, db, dbPath: args.dbPath, port: args.port });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   loop.start();

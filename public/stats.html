@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>multiagent-town 数据统计与分析</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body id="stats-page">
+  <header id="stats-header">
+    <a class="hud-link" href="/">← 返回小镇</a>
+    <h1>📊 小镇数据统计与分析</h1>
+    <div class="stats-toolbar">
+      <label>分析范围
+        <select id="stats-day"><option value="">全部天数</option></select>
+      </label>
+      <button id="stats-refresh">🔄 刷新</button>
+      <label class="stats-auto"><input type="checkbox" id="stats-auto" /> 每 5 秒自动刷新</label>
+      <span id="stats-status"></span>
+    </div>
+    <div id="stats-meta"></div>
+  </header>
+  <main id="stats-root"></main>
+  <footer id="stats-footer">数据来自小镇运行时 SQLite（events / memories / reflections / plans / messages / relationships / rumors），只读分析。</footer>
+  <script src="/stats.js"></script>
+</body>
+</html>

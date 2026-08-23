@@ -37,7 +37,7 @@
 | 测试 | `node:test`（内置），`tsx` 直接跑 TS |
 | 包管理 | pnpm（`package.json` + `pnpm-lock.yaml`） |
 
-当前测试：`pnpm test` 共 138 项（其中 137 通过；1 项在 Windows 上偶发 `EBUSY` 临时 SQLite 文件删除失败，属环境问题，不影响架构）。
+当前测试：`pnpm test` 共 142 项（其中 141 通过；1 项在 Windows 上偶发 `EBUSY` 临时 SQLite 文件删除失败，属环境问题，不影响架构）。
 
 ---
 
@@ -56,7 +56,8 @@
 │ Web 服务层 (src/web/server.ts + snapshot.ts)                        │
 │   静态文件 / SSE 事件流 / 世界控制 / 扮演接口 / 访客接口             │
 │   /api/state /api/status /api/relationships /api/agents/*/mind      │
-│   /api/guest/* /api/player/* /api/broadcast /api/rumor              │
+│   /api/guest/* /api/player/* /api/broadcast /api/rumor /api/stats   │
+│   static: index.html / stats.html / client.js / stats.js / style.css│
 └───────────────┬────────────────────────────────────────────────────┘
 ┌───────────────▼────────────────────────────────────────────────────┐
 │ 模拟引擎层 (src/engine + src/core)                                  │
@@ -159,6 +160,7 @@ multiagent-town/
 │   │   ├── snapshot.ts        # 世界快照序列化
 │   │   └── client/            # 浏览器前端
 │   │       ├── main.ts        # 入口：SSE、状态同步、交互、扮演
+│   │       ├── stats.ts       # 数据统计页客户端（/stats.html，拉取 /api/stats）
 │   │       ├── render.ts      # 地形/建筑/湖水/昼夜
 │   │       ├── tiles.ts       # 像素图集加载与瓦片映射
 │   │       ├── sprites.ts     # NPC 行走图/姿态
@@ -179,9 +181,11 @@ multiagent-town/
 │   ├── acceptance*.test.ts    # 端到端验收
 │   └── *.test.ts              # 单元/子系统测试
 ├── public/                    # 前端静态资源
-│   ├── index.html             # 页面骨架
+│   ├── index.html             # 小镇页面骨架
+│   ├── stats.html             # 数据统计与分析页面（/stats.html）
 │   ├── style.css
-│   ├── client.js              # esbuild 产物（.gitignore）
+│   ├── client.js              # esbuild 产物 → 小镇页面（.gitignore）
+│   ├── stats.js               # esbuild 产物 → 统计页（.gitignore）
 │   └── assets/                # 像素素材（见 ATTRIBUTION.md）
 ├── data/                      # 运行时 SQLite（.gitignore）
 ├── docs/                      # 设计/论文/竞赛文档
@@ -225,6 +229,7 @@ multiagent-town/
 | `social.ts` | `SocialTicker` | 邻近累计 3 游戏分钟触发打招呼；有 DialogueEngine 时转真对话，否则台词池单句 |
 | `rumors.ts` | `RumorTracker` | 谣言 seed/spread/传播链查询；会话中按关系门槛传播 |
 | `status.ts` | `computeStanding()` | Weighted PageRank + 互惠加成（Agentopia/Sociometer），输入全量关系输出声望分 |
+| `analyze.ts` | `analyzeTown()` | 数据统计与分析核心：只读聚合 events/memories/reflections/plans/messages/relationships/rumors，产出 TownReport（`/api/stats` 数据源） |
 | `town-model.ts` | `TownModel` | 公开活动目录轮换（湖边派对/读书会/集市）；按性格报名；≥2 人成行广播；参与者关系升温 |
 | `player.ts` | `PlayerDirector` | 玩家自然语言指令覆盖某个 agent 决策，60 游戏分钟内最高优先级 |
 | `interview.ts` | `interviewAgent()` | 上帝视角访谈：检索记忆+洞察 → 第一人称回答 |
@@ -259,8 +264,8 @@ multiagent-town/
 | 表 | 用途 |
 |---|---|
 | `world_meta` | KV：游戏时间等元信息 |
-| `agents` | 居民/访客档案 |
-| `objects` | 世界对象树 |
+| `agents` | 居民/访客名册（WorldLoop 构造与访客登录时由 `hydrateWorld` 幂等写入内存世界） |
+| `objects` | 世界对象树（启动时水合同步） |
 | `events` | 事件日志（回放源） |
 | `memories` | 记忆流（observation/reflection/dialogue_summary/plan/insight） |
 | `reflections` | 反思树 |
@@ -281,9 +286,10 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 ### 5.5 `src/web` —— Web 服务与浏览器
 
 **服务端**（`server.ts`）：
-- 静态文件：`/`、`/client.js`、`/style.css`、`/assets/*`；
+- 静态文件：`/`、`/stats.html`、`/client.js`、`/stats.js`、`/style.css`、`/assets/*`；
 - SSE：`GET /events`，200ms 推 `snapshot`，实时推 `event`；
 - 世界控制：`POST /api/world/control`（pause/resume/speed）；
+- 数据统计：`GET /api/stats[?day=N]`（`engine/analyze.ts` 只读聚合全库，供统计页用）；
 - 声望/关系：`GET /api/status`、`GET /api/relationships/:id`；
 - 心智面板：`GET /api/agents/:id/mind`（记忆/反思/计划/对话）；
 - 扮演：`POST/DELETE /api/player/:id/act`；
@@ -292,6 +298,7 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 
 **客户端**（`src/web/client/*`）：
 - `main.ts`：SSE 接收快照与事件；相机/交互/扮演；
+- `stats.ts`：统计页（`/stats.html`）客户端——拉取 `/api/stats`，渲染概览/事件/记忆/反思/计划/对话/关系/声望/谣言/活动区块（DOM 无关的纯渲染函数，可被测试直接调用）；
 - `render.ts` + `tiles.ts` + `sprites.ts`：Canvas 像素世界（多图集回退链、程序化 fallback、屋顶剖切、昼夜、河光）；
 - `effects.ts`：粒子系统（Zzz/蒸汽/星光/信件/炊烟/萤火/雨丝/水花）；
 - `panel.ts`：侧边六标签面板（详情/档案/记忆/反思/对话/关系）；
@@ -311,7 +318,7 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 ### 5.7 `tests` —— 测试体系
 
 - 用 Node 内置 `node:test` + `tsx`；
-- 覆盖：路径/世界/时间/天气、状态机、记忆/检索/反思、对话/关系/谣言/社交/活动/声望、LLM 网关/校验/提示词、Web API/SSE/快照/访客/扮演、CLI、前端渲染（render/panel/hud/tiles/effects/camera）等；
+- 覆盖：路径/世界/时间/天气、状态机、记忆/检索/反思、对话/关系/谣言/社交/活动/声望、LLM 网关/校验/提示词、Web API/SSE/快照/访客/扮演、CLI、前端渲染（render/panel/hud/tiles/effects/camera）、数据统计（`analyze.ts` + `/api/stats` + 统计页渲染）等；
 - 验收测试（`acceptance*.test.ts`）验证“连续跑 1 天不崩、事件可回放”等端到端行为。
 
 ---
@@ -338,7 +345,8 @@ pnpm town-web --port 8787
 - 看小镇实时画面、事件流；
 - 滚轮缩放、双击复位、点击 NPC/建筑查看档案；
 - 点击“🎮 扮演”后输入自然语言指令指挥该 NPC；
-- 暂停/恢复/1x/60x/360x 变速。
+- 暂停/恢复/1x/60x/360x 变速；
+- 点顶栏「📊 数据统计」打开 `/stats.html` 数据统计与分析页。
 
 ### 6.3 用真机 LLM（DeepSeek / Ollama）
 
@@ -396,7 +404,28 @@ pnpm town-agent status --name 爱丽丝
 
 完整协议见 `skills/town-agent/SKILL.md`。
 
-### 6.6 研究/预实验模式
+### 6.6 数据统计与分析（Web 界面）
+
+```bash
+pnpm town-web --port 8787       # 启动后浏览器打开 http://127.0.0.1:8787
+# 再打开 http://127.0.0.1:8787/stats.html（或小镇顶栏「📊 数据统计」）
+```
+
+统计页从 `GET /api/stats`（`src/engine/analyze.ts` 只读聚合整库）拉取报告，展示：
+
+- **概览**：已模拟天数、居民名单、events/memories/reflections/plans/messages/relationships/rumors 各表计数与日均事件；
+- **事件**：按 type（move/chat/interact/broadcast/system/player）与 payload.kind 分布、每日趋势、2 小时档时段分布（作息节律）、最活跃居民/地点；
+- **记忆**：按 kind（observation/reflection/dialogue_summary/plan/insight）与按居民分布、importance 均值与直方图、从未被检索比例（记忆活跃度）、日均新增；
+- **反思 / 计划**：次数、平均触发分、洞察数、计划覆盖天数与小时条目密度；
+- **对话**：消息量、会话数、平均轮数、字数、对话最多的配对；
+- **关系**：有向记录/双向对、affection/respect 均值与极值、最紧密/最疏远配对、knowledge 叙事层条目；
+- **声望榜**：Weighted PageRank 排序（复用 `engine/status.ts`）；
+- **谣言**：记录数、去重内容、最大传播链、传播链长度分布、源头排行；
+- **公开活动**：成行活动时间表与参与人数。
+
+支持「全部天数 / 第 N 天」筛选（事件与对话统计按天，其余为整库口径）与 5 秒自动刷新。
+
+### 6.7 研究/预实验模式
 
 ```bash
 pnpm experiment --days 30 --seeds 3
@@ -404,7 +433,7 @@ pnpm experiment --days 30 --seeds 3
 
 用内存 SQLite + mock LLM 跑“伙伴选择（关系记忆开/关）”对照，输出同对重复率、互惠性、聚类系数、伙伴多样性等指标。详见 `docs/competition-track7-analysis.md`。
 
-### 6.7 验证开发改动
+### 6.8 验证开发改动
 
 ```bash
 pnpm typecheck     # tsc --noEmit
@@ -421,6 +450,7 @@ pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
 | GET | `/api/state` | 当前世界快照 JSON |
 | GET | `/events` | SSE：snapshot/event |
 | POST | `/api/world/control` | `{action:"pause"|"resume"|"speed", value?}` |
+| GET | `/api/stats[?day=N]` | 数据统计与分析报告（整库只读聚合，day 可选） |
 | GET | `/api/status` | 声望榜（Weighted PageRank） |
 | GET | `/api/relationships/:id` | 某 agent 的关系 + 声望 |
 | GET | `/api/agents/:id/mind` | 记忆/反思/计划/对话 |
@@ -474,7 +504,7 @@ pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
 ### 8.5 已知问题 / TODO 摘录
 
 - Windows 上 `pnpm test` 存在一个偶发 `EBUSY`（临时 SQLite 清理失败），建议在 CI/Linux/macOS 上跑全量测试；
-- `data/town.sqlite` 与 `public/client.js` 由运行/构建生成，已加入 `.gitignore`；
+- `data/town.sqlite` 与 `public/client.js`、`public/stats.js` 由运行/构建生成，已加入 `.gitignore`；
 - 当前地图约 50 个对象、6 位常驻居民；更多居民/对象可直接由 seed 扩展；
 - 社区路线图（来自 docs）：
   - P2：库存交互 / 金币背包 / 动态资源区；

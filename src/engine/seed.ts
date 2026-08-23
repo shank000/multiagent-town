@@ -2,6 +2,34 @@
 
 import type { Agent, Persona, WorldObject } from '../core/types';
 import { WorldState, GRID_W, GRID_H } from '../core/world';
+import type { DbHandle } from '../store/db';
+
+/** 世界水合：把内存中的居民/对象同步写入 SQLite 的 agents/objects 表（幂等 upsert）。
+ * 这两张表是统计/回放的“名册”，与实际运行的内存世界保持一致。由 WorldLoop 构造时
+ * 与访客登录时调用；数据统计（/api/stats）据此解析居民名与对象。 */
+export function hydrateWorld(db: DbHandle, world: WorldState): void {
+  const upsertAgent = db.raw.prepare(
+    `INSERT INTO agents(id, name, persona_json, home_object, state_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, persona_json = excluded.persona_json,
+       home_object = excluded.home_object, state_json = excluded.state_json, updated_at = excluded.updated_at`
+  );
+  const now = Date.now();
+  for (const a of world.allAgents()) {
+    upsertAgent.run(a.id, a.name, JSON.stringify(a.persona), a.homeObjectId,
+      JSON.stringify({ x: a.x, y: a.y, state: a.state, locationId: a.locationId }), now, now);
+  }
+  const upsertObject = db.raw.prepare(
+    `INSERT INTO objects(id, parent_id, name, type, x, y, w, h, state_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name,
+       type = excluded.type, x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h,
+       state_json = excluded.state_json`
+  );
+  for (const o of world.allObjects()) {
+    upsertObject.run(o.id, o.parentId, o.name, o.type, o.x, o.y, o.w, o.h, '{}');
+  }
+}
 
 export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: GRID_W, h: GRID_H },
