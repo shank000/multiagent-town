@@ -46,7 +46,7 @@ export class LLMGateway {
         baseUrl: cfg.ollama?.baseUrl ?? 'http://127.0.0.1:11434',
         model: cfg.ollama?.model ?? 'qwen2.5:7b',
         ...(cfg.ollama?.smallModel ? { smallModel: cfg.ollama.smallModel } : {}),
-        timeoutMs: cfg.ollama?.timeoutMs ?? 30_000,
+        timeoutMs: cfg.ollama?.timeoutMs ?? 120_000,
       });
     } else {
       this.provider = new MockProvider();
@@ -75,7 +75,12 @@ export class LLMGateway {
         if (attempt < this.retries) await sleep(this.backoffMs * 2 ** attempt);
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    const err = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    if (err.name === 'TimeoutError' || /aborted due to timeout|timed out/i.test(err.message)) {
+      // DOMException.message 是只读 getter，不能原地改写，改用带 cause 的包装 Error
+      throw new Error(`${err.message}（${this.provider.name} 请求超时，已重试 ${this.retries} 次；本地 Ollama 可调大 OLLAMA_TIMEOUT_MS）`, { cause: err });
+    }
+    throw err;
   }
 
   private record(template: string, usage: LLMResponse['usage']): void {

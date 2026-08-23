@@ -9,7 +9,7 @@ export interface OllamaConfig {
   baseUrl: string;     // 默认 http://127.0.0.1:11434
   model: string;       // 默认 qwen2.5:7b（large 层）
   smallModel?: string; // 可选：small 层用小模型，默认同 model
-  timeoutMs: number;   // 默认 30000
+  timeoutMs: number;   // 默认 120000（本地推理慢，需给足时间）
 }
 
 export class OllamaProvider implements LLMProvider {

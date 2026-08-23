@@ -1,7 +1,7 @@
 // 从环境变量解析 LLM 网关配置（provider 选择与各项设置）
 // 支持：LLM_PROVIDER=mock|deepseek|ollama（默认 mock）
 //   deepseek：DEEPSEEK_API_KEY（必填）
-//   ollama：OLLAMA_BASE_URL / OLLAMA_MODEL / OLLAMA_SMALL_MODEL / OLLAMA_TIMEOUT_MS
+//   ollama：OLLAMA_BASE_URL / OLLAMA_MODEL / OLLAMA_SMALL_MODEL / OLLAMA_TIMEOUT_MS（默认 120000，本地推理需给足时间）
 
 import type { GatewayConfig } from './gateway';
 
@@ -25,7 +25,7 @@ export function gatewayConfigFromEnv(): GatewayConfig {
       baseUrl: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434',
       model: process.env.OLLAMA_MODEL ?? 'qwen2.5:7b',
       ...(process.env.OLLAMA_SMALL_MODEL ? { smallModel: process.env.OLLAMA_SMALL_MODEL } : {}),
-      timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS ?? 30_000),
+      timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS ?? 120_000),
     };
   }
   return cfg;
