@@ -2,11 +2,13 @@
 
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
 import { DeepSeekProvider } from './deepseek';
+import { OllamaProvider } from './ollama';
 import { MockProvider } from './mock';
 
 export interface GatewayConfig {
-  provider?: LLMProvider | 'mock' | 'deepseek';
+  provider?: LLMProvider | 'mock' | 'deepseek' | 'ollama';
   deepseek?: { apiKey: string; baseUrl?: string; model?: string; timeoutMs?: number };
+  ollama?: { baseUrl?: string; model?: string; smallModel?: string; timeoutMs?: number };
   retries?: number;   // 默认 2（共 3 次尝试）
   backoffMs?: number; // 默认 100，指数退避基数
 }
@@ -38,6 +40,13 @@ export class LLMGateway {
         baseUrl: cfg.deepseek.baseUrl ?? 'https://api.deepseek.com',
         model: cfg.deepseek.model ?? 'deepseek-chat',
         timeoutMs: cfg.deepseek.timeoutMs ?? 30_000,
+      });
+    } else if (p === 'ollama') {
+      this.provider = new OllamaProvider({
+        baseUrl: cfg.ollama?.baseUrl ?? 'http://127.0.0.1:11434',
+        model: cfg.ollama?.model ?? 'qwen2.5:7b',
+        ...(cfg.ollama?.smallModel ? { smallModel: cfg.ollama.smallModel } : {}),
+        timeoutMs: cfg.ollama?.timeoutMs ?? 30_000,
       });
     } else {
       this.provider = new MockProvider();

@@ -29,10 +29,27 @@ pnpm town-web --port 8787     # 浏览器打开 http://127.0.0.1:8787
 LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-xxx pnpm town-web --port 8787
 ```
 
+真机本地 Ollama（先在本地 `ollama pull qwen2.5:7b`，再启动服务）：
+
+```bash
+LLM_PROVIDER=ollama pnpm town-web --port 8787
+```
+
+Ollama 相关设置（环境变量）：
+
+| 变量 | 说明 | 默认值 |
+|---|---|---|
+| `OLLAMA_BASE_URL` | Ollama 服务地址 | `http://127.0.0.1:11434` |
+| `OLLAMA_MODEL` | 大模型（large 层：规划/反思/对话） | `qwen2.5:7b` |
+| `OLLAMA_SMALL_MODEL` | 可选：小模型（small 层：动作决策/重要性打分），不设则同 `OLLAMA_MODEL` | 无 |
+| `OLLAMA_TIMEOUT_MS` | 单次请求超时（毫秒） | `30000` |
+
+Provider 通用设置：`LLM_PROVIDER=mock|deepseek|ollama`（默认 `mock`，全模板离线确定性输出）。更多说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 6.3 节。
+
 其他命令：
 
 ```bash
-pnpm test                        # 全部测试（127 项）
+pnpm test                        # 全部测试（138 项）
 pnpm typecheck                   # tsc --noEmit
 pnpm town --until-minutes 1440 --speed 60   # 虚拟时钟快跑 1 游戏日（无界面）
 pnpm replay --day 1              # 回放第 1 天事件时间线
@@ -62,19 +79,21 @@ multiagent-town/
 ├── src/
 │   ├── core/                # 世界状态 / 寻路 / 时间 / 状态机 / 天气
 │   ├── engine/              # 种子数据 / 循环 / 记忆 / 反思 / 规划 / 对话 / 社交 / 谣言 / 活动
-│   ├── llm/                 # 提示词库 / 网关 / mock 与 DeepSeek 实现
+│   ├── llm/                 # 提示词库 / 网关 / mock、DeepSeek 与 Ollama 实现
 │   ├── store/               # SQLite（node:sqlite）持久化
 │   ├── web/                 # HTTP 服务 / SSE 快照 / 客户端（Canvas 渲染）
 │   └── cli/                 # run / replay / interview / town-web
-├── tests/                   # node:test 测试（127 项）
+├── tests/                   # node:test 测试（138 项，其中 1 项 Windows EBUSY 偶发）
 ├── public/                  # 前端页面、样式、像素素材
 └── docs/
+    ├── ARCHITECTURE.md      # 整体架构/子系统/使用/贡献导读
     ├── ai-town-design.md    # 技术方案设计
     └── agentopia-analysis.md # 论文 Agentopia 机制映射分析
 ```
 
 ## 文档
 
+- 工程导读（整体架构 / 子系统 / 使用 / 贡献）：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 设计文档：[docs/ai-town-design.md](docs/ai-town-design.md)
 - 社交机制（Agentopia 论文）分析：[docs/agentopia-analysis.md](docs/agentopia-analysis.md)
 - 素材许可与署名：[ATTRIBUTION.md](ATTRIBUTION.md)

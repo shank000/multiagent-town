@@ -416,7 +416,7 @@ interface LLMGateway {
   complete(req: LLMRequest): Promise<LLMResponse>;
 }
 ```
-- 路由：small → 本地 Qwen-14B（vLLM）或低价 API；large → DeepSeek-chat；
+- 路由：small → 本地小模型（当前实现 `OllamaProvider` 的 `smallModel`，如 Qwen2.5-1.5B）或低价 API；large → DeepSeek-chat 或本地大模型（`OllamaProvider` 的 `model`，如 Qwen2.5-7B）；
 - 重试（指数退避 ×2，超时 30s）；JSON 解析失败自动重试一次；
 - **计量**：按 template 聚合 token 消耗与成本 → `/api/cost` 实时查看；
 - **缓存**：persona 摘要等静态前缀缓存；对话摘要只算一次写两方。
