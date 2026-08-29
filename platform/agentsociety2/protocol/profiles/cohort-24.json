@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "partner-choice.profile-catalog/v1",
+  "design": "Neutral participant labels with balanced social energy and conversation styles; every paired treatment arm reuses the same seed-specific assignment.",
+  "profiles": [
+    { "profileId": "p01", "displayName": "Participant 01", "occupation": "archivist", "interests": ["local history", "gardening"], "socialEnergy": "low", "conversationStyle": "reflective" },
+    { "profileId": "p02", "displayName": "Participant 02", "occupation": "baker", "interests": ["recipes", "walking"], "socialEnergy": "medium", "conversationStyle": "curious" },
+    { "profileId": "p03", "displayName": "Participant 03", "occupation": "mechanic", "interests": ["repair", "music"], "socialEnergy": "high", "conversationStyle": "pragmatic" },
+    { "profileId": "p04", "displayName": "Participant 04", "occupation": "teacher", "interests": ["books", "board games"], "socialEnergy": "low", "conversationStyle": "storytelling" },
+    { "profileId": "p05", "displayName": "Participant 05", "occupation": "nurse", "interests": ["cooking", "nature"], "socialEnergy": "medium", "conversationStyle": "reflective" },
+    { "profileId": "p06", "displayName": "Participant 06", "occupation": "carpenter", "interests": ["crafts", "photography"], "socialEnergy": "high", "conversationStyle": "curious" },
+    { "profileId": "p07", "displayName": "Participant 07", "occupation": "accountant", "interests": ["puzzles", "tea"], "socialEnergy": "low", "conversationStyle": "pragmatic" },
+    { "profileId": "p08", "displayName": "Participant 08", "occupation": "gardener", "interests": ["plants", "weather"], "socialEnergy": "medium", "conversationStyle": "storytelling" },
+    { "profileId": "p09", "displayName": "Participant 09", "occupation": "designer", "interests": ["drawing", "architecture"], "socialEnergy": "high", "conversationStyle": "reflective" },
+    { "profileId": "p10", "displayName": "Participant 10", "occupation": "shopkeeper", "interests": ["markets", "sports"], "socialEnergy": "low", "conversationStyle": "curious" },
+    { "profileId": "p11", "displayName": "Participant 11", "occupation": "translator", "interests": ["languages", "cinema"], "socialEnergy": "medium", "conversationStyle": "pragmatic" },
+    { "profileId": "p12", "displayName": "Participant 12", "occupation": "electrician", "interests": ["technology", "cycling"], "socialEnergy": "high", "conversationStyle": "storytelling" },
+    { "profileId": "p13", "displayName": "Participant 13", "occupation": "researcher", "interests": ["science", "hiking"], "socialEnergy": "low", "conversationStyle": "reflective" },
+    { "profileId": "p14", "displayName": "Participant 14", "occupation": "cook", "interests": ["food", "folklore"], "socialEnergy": "medium", "conversationStyle": "curious" },
+    { "profileId": "p15", "displayName": "Participant 15", "occupation": "driver", "interests": ["maps", "radio"], "socialEnergy": "high", "conversationStyle": "pragmatic" },
+    { "profileId": "p16", "displayName": "Participant 16", "occupation": "librarian", "interests": ["poetry", "chess"], "socialEnergy": "low", "conversationStyle": "storytelling" },
+    { "profileId": "p17", "displayName": "Participant 17", "occupation": "tailor", "interests": ["textiles", "dance"], "socialEnergy": "medium", "conversationStyle": "reflective" },
+    { "profileId": "p18", "displayName": "Participant 18", "occupation": "technician", "interests": ["tools", "astronomy"], "socialEnergy": "high", "conversationStyle": "curious" },
+    { "profileId": "p19", "displayName": "Participant 19", "occupation": "planner", "interests": ["public spaces", "running"], "socialEnergy": "low", "conversationStyle": "pragmatic" },
+    { "profileId": "p20", "displayName": "Participant 20", "occupation": "florist", "interests": ["flowers", "painting"], "socialEnergy": "medium", "conversationStyle": "storytelling" },
+    { "profileId": "p21", "displayName": "Participant 21", "occupation": "reporter", "interests": ["current events", "coffee"], "socialEnergy": "high", "conversationStyle": "reflective" },
+    { "profileId": "p22", "displayName": "Participant 22", "occupation": "pharmacist", "interests": ["wellbeing", "crosswords"], "socialEnergy": "low", "conversationStyle": "curious" },
+    { "profileId": "p23", "displayName": "Participant 23", "occupation": "musician", "interests": ["concerts", "travel"], "socialEnergy": "medium", "conversationStyle": "pragmatic" },
+    { "profileId": "p24", "displayName": "Participant 24", "occupation": "builder", "interests": ["construction", "fishing"], "socialEnergy": "high", "conversationStyle": "storytelling" }
+  ]
+}

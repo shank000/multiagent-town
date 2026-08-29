@@ -11,15 +11,19 @@
   "roundMinute": 1170,
   "candidatePolicy": "all_other_participants",
   "candidateOrderPolicy": "paired_seeded_shuffle",
+  "executionOrderPolicy": "sha256_seeded_condition_order/v1",
   "decision": {
     "policy": "llm",
+    "contextPolicy": "observation_only_fresh_completion",
     "promptVersion": "partner-choice.prompt/v1",
     "fallback": "seeded_uniform",
     "modelRole": "primary",
+    "modelId": "ONLINE_WORKSPACE_REQUIRED",
     "temperature": 0.2,
     "topP": 1,
     "maxTokens": 256,
-    "maxAttempts": 2
+    "maxAttempts": 2,
+    "maxFallbackRate": 0.05
   },
   "coreConditions": [
     {
@@ -60,5 +64,42 @@
   "replay": {
     "choiceDatasetId": "partner_choice.choice_event",
     "defaultOrder": ["day", "round_id", "chooser_id", "event_seq"]
+  },
+  "analysis": {
+    "replicateUnit": "condition_by_seed_run",
+    "confirmatoryOutcome": {
+      "metric": "directed_edge_repeat_rate",
+      "windowDays": [31, 60],
+      "withinRunAggregation": "arithmetic_mean"
+    },
+    "secondaryOutcomes": [
+      { "metric": "partner_hhi_7d", "windowDays": [31, 60] },
+      { "metric": "partner_diversity_7d", "windowDays": [31, 60] },
+      { "metric": "weighted_indegree_freeman_centralization", "windowDays": [31, 60] },
+      { "metric": "undirected_global_clustering", "windowDays": [31, 60] },
+      { "metric": "chance_corrected_reciprocity", "windowDays": [31, 60] },
+      { "metric": "adjacent_nonoverlapping_7d_directed_matrix_pearson", "endpointDays": [14, 60] }
+    ],
+    "estimands": {
+      "historyMainEffect": "0.5*((full,on-none,on)+(full,off-none,off))",
+      "giftMainEffect": "0.5*((full,on-full,off)+(none,on-none,off))",
+      "interaction": "(full,on-full,off)-(none,on-none,off)"
+    },
+    "inference": {
+      "basePairedSeedCount": 5,
+      "minimumTwoSidedExactP": 0.0625,
+      "alpha05ConfirmatoryRejectionSupported": false,
+      "report": ["paired_values", "mean", "median", "range", "leave_one_seed_out_range"]
+    },
+    "missingness": {
+      "fallbackMainAnalysis": "intention_to_treat",
+      "fallbackSensitivity": "per_protocol",
+      "maxFallbackRate": 0.05,
+      "lateOrSkippedRound": "invalidate_run"
+    },
+    "seedExpansion": {
+      "targetPairedSeedCount": 8,
+      "decisionTiming": "before_formal_outcome_access"
+    }
   }
 }

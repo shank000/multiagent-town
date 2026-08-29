@@ -1,1 +1,3 @@
 agentsociety2==2.8.4
+# AgentSociety 2.8.4 imports the FastMCP 1.x module layout.
+mcp[cli]>=1.13.1,<2
