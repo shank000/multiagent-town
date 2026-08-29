@@ -25,6 +25,7 @@ interface PendingDecision {
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
   private blockCount = new Map<string, number>();
+  private activeDecisions = new Set<Promise<void>>();
 
   constructor(
     private llm: LLMGateway,
@@ -97,7 +98,14 @@ export class AgentExecutor {
     };
     const entry: PendingDecision = { resolved: null, error: null };
     this.pending.set(agent.id, entry);
-    void this.runDecision(agent, req, entry, now);
+    const task = this.runDecision(agent, req, entry, now);
+    this.activeDecisions.add(task);
+    void task.finally(() => this.activeDecisions.delete(task));
+  }
+
+  /** 等待已发出的决策完成，保证关闭数据库前不再写入事件。 */
+  async drain(): Promise<void> {
+    while (this.activeDecisions.size > 0) await Promise.allSettled(this.activeDecisions);
   }
 
   private async runDecision(agent: Agent, req: LLMRequest, entry: PendingDecision, now: number): Promise<void> {

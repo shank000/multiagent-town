@@ -1,4 +1,4 @@
-// 实验运行器单测：按绝对日界线结算天数，并保持伙伴选择轮次的跨时刻触发语义
+// 实验运行器单测：按跨越的绝对选择边界结算轮数，保证 N 天恰有 N 轮。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MINUTES_PER_DAY } from '../src/core/time';
@@ -28,7 +28,7 @@ function tickBy(runner: ExperimentRunner, from: number, through: number, step: n
   for (let now = from + step; now <= through; now += step) runner.tick(now);
 }
 
-test('30 分钟 tick：每个日界线只扣一天，19:30 准时触发选择轮次', () => {
+test('30 分钟 tick：每次 19:30 轮次完成后扣一天', () => {
   const { log, world, runner } = setup();
   runner.start(2, 0);
 
@@ -44,7 +44,7 @@ test('30 分钟 tick：每个日界线只扣一天，19:30 准时触发选择轮
   ]);
 });
 
-test('180 分钟 tick：跨过 19:30 时仍按原有时刻触发，日界线结算不漏扣', () => {
+test('180 分钟 tick：跨过 19:30 时按计划时刻落盘且不漏扣', () => {
   const { log, world, runner } = setup();
   runner.start(2, 0);
 
@@ -52,33 +52,34 @@ test('180 分钟 tick：跨过 19:30 时仍按原有时刻触发，日界线结�
 
   assert.deepEqual(runner.state(), { running: false, remainingDays: 0, mem: 'off', gift: 'off' });
   assert.deepEqual(choiceTimes(log), [
-    ...Array(world.allAgents().length).fill(1260),
-    ...Array(world.allAgents().length).fill(MINUTES_PER_DAY + 1260),
+    ...Array(world.allAgents().length).fill(1170),
+    ...Array(world.allAgents().length).fill(MINUTES_PER_DAY + 1170),
   ]);
 });
 
-test('同一天内重复 tick 不重复扣减', () => {
+test('同一选择边界不重复扣减', () => {
   const { runner } = setup();
   runner.start(3, 100);
 
   for (const now of [100, 200, 1170, 1171, 1171, 1439, 1439]) runner.tick(now);
 
-  assert.equal(runner.state().remainingDays, 3);
+  assert.equal(runner.state().remainingDays, 2);
   assert.equal(runner.state().running, true);
 });
 
-test('跨多日跳跃按全部日界线结算并夹紧到零', () => {
-  const { runner } = setup();
+test('跨多日跳跃补齐全部计划轮次并夹紧到零', () => {
+  const { log, world, runner } = setup();
   runner.start(2, 100);
 
   runner.tick(3 * MINUTES_PER_DAY + 100);
   assert.deepEqual(runner.state(), { running: false, remainingDays: 0, mem: 'off', gift: 'off' });
+  assert.equal(choiceTimes(log).length, 2 * world.allAgents().length);
 
   runner.tick(20 * MINUTES_PER_DAY);
   assert.equal(runner.state().remainingDays, 0);
 });
 
-test('stop 后以新的启动时刻重新建立日界线基准', () => {
+test('stop 后以新的启动时刻重新建立选择边界基准', () => {
   const { runner } = setup();
   runner.start(5, 200);
   runner.tick(MINUTES_PER_DAY + 200);
@@ -93,6 +94,25 @@ test('stop 后以新的启动时刻重新建立日界线基准', () => {
   assert.equal(runner.state().remainingDays, 2);
   runner.tick(11 * MINUTES_PER_DAY);
   assert.equal(runner.state().remainingDays, 1);
-  runner.tick(12 * MINUTES_PER_DAY);
+  runner.tick(11 * MINUTES_PER_DAY + 1170);
+  assert.equal(runner.state().remainingDays, 0);
+  runner.tick(12 * MINUTES_PER_DAY + 1170);
   assert.deepEqual(runner.state(), { running: false, remainingDays: 0, mem: 'off', gift: 'off' });
+});
+
+test('在当日选择时刻之后启动时从下一轮起完整运行 N 天', () => {
+  const { log, runner } = setup();
+  runner.start(2, 1200);
+
+  runner.tick(1210);
+  assert.deepEqual(choiceTimes(log), []);
+
+  runner.tick(MINUTES_PER_DAY);
+  runner.tick(MINUTES_PER_DAY + 1200);
+  assert.equal(choiceTimes(log).length, 6);
+  assert.ok(choiceTimes(log).every((time) => time === MINUTES_PER_DAY + 1170));
+  assert.equal(runner.state().remainingDays, 1);
+  runner.tick(2 * MINUTES_PER_DAY + 1200);
+  assert.equal(choiceTimes(log).length, 12);
+  assert.equal(runner.state().remainingDays, 0);
 });

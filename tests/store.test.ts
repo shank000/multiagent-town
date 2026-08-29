@@ -72,11 +72,12 @@ test('payload.kind 查询仅返回目标实验事件', () => {
 
 test('文件模式自动创建目录', () => {
   const dir = mkdtempSync(join(tmpdir(), 'town-'));
+  const db = openDb(join(dir, 'nested', 't.sqlite'));
   try {
-    const db = openDb(join(dir, 'nested', 't.sqlite'));
     db.setMeta('k', 'v');
     assert.equal(db.getMeta('k'), 'v');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    db.raw.close();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });

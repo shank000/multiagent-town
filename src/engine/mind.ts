@@ -66,4 +66,10 @@ export class MindEngine {
     this.dialogue?.tick(world, dt, now);
     this.townModel.tick(world, dt, now);
   }
+
+  /** 停止接收新事件并等待事件记忆写入完成。 */
+  async dispose(): Promise<void> {
+    this.writer.detach();
+    await this.writer.flush();
+  }
 }

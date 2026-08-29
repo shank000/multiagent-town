@@ -50,6 +50,7 @@ test('recency is relative to decision time and absent relationships receive no b
   assert.equal(recencyBonus(10_000, undefined), 0);
   assert.equal(recencyBonus(10_000, null), 0);
   assert.equal(recencyBonus(10_000, 10_000), 1);
+  assert.equal(recencyBonus(10_000, 11_000), 1);
   assert.equal(recencyBonus(10_000, 8_800), 0.5);
   assert.equal(recencyBonus(10_000, 7_600), 0);
   assert.equal(recencyBonus(10_000, 6_000), 0);
@@ -74,4 +75,14 @@ test('candidate snapshots and all choices are frozen before same-round gifts', (
     assert.equal(choice.candidates.find((candidate) => candidate.id === choice.toId)?.affection, 0);
   }
   assert.ok(mind.rels.allPairs().some((relationship) => relationship.affection > 0));
+  const events = log.eventsBetween(0, 2000);
+  for (const choice of choices) {
+    const choiceIndex = events.findIndex((event) =>
+      event.payload?.kind === 'experiment_pair_choice' && event.payload.fromId === choice.fromId
+    );
+    const giftIndex = events.findIndex((event) =>
+      event.payload?.kind === 'gift' && event.payload.fromId === choice.fromId
+    );
+    assert.ok(choiceIndex >= 0 && giftIndex > choiceIndex);
+  }
 });

@@ -76,14 +76,23 @@ export interface ManagedWorld {
   seedRumor: (text: string) => void;
 }
 
-/** 创建平行世界：独立引擎/记忆/对话/日志（内存库，世界间互不影响） */
-export function createManagedWorld(id: string, kind: WorldKind, seed = 1): ManagedWorld {
+export interface ManagedWorldOptions {
+  /** Paired experimental worlds share this seed so reference-policy draws are comparable. */
+  seed?: number;
+  gameMinutesPerTick?: number;
+  gateway?: LLMGateway;
+  dbPath?: string;
+}
+
+/** 创建平行世界：每个世界拥有独立状态、记忆、对话与事件库。 */
+export function createManagedWorld(id: string, kind: WorldKind, options: ManagedWorldOptions = {}): ManagedWorld {
+  const seed = options.seed ?? 1;
   const meta: WorldMeta = { id, ...KINDS[kind] };
-  const db = openDb(':memory:');
+  const db = openDb(options.dbPath ?? ':memory:');
   const log = new EventLog(db);
   const world = buildTown(DEFAULT_SEED);
-  const time = new TimeEngine(30);
-  const gateway = new LLMGateway({ provider: 'mock' });
+  const time = new TimeEngine(options.gameMinutesPerTick ?? 30);
+  const gateway = options.gateway ?? new LLMGateway({ provider: 'mock' });
   const mind = new MindEngine({ db, llm: gateway, log });
   const player = new PlayerDirector();
   const executor = new AgentExecutor(gateway, world, log, mind, player);
@@ -95,7 +104,7 @@ export function createManagedWorld(id: string, kind: WorldKind, seed = 1): Manag
     experiment = new ExperimentRunner(log, world, mind, {
       historyAccess: kind === 'mem-on' ? 'on' : 'off',
       giftExchange: kind === 'mem-on' ? 'on' : 'off',
-    });
+    }, { seed });
     // 隔离相邻闲聊，让全部对话来自伙伴选择（洁净对照）
     const loop = new WorldLoop(time, world, executor, log, db, {}, undefined, mind, experiment);
     runnerHost = loop;

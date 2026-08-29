@@ -6,6 +6,7 @@ import {
   matrixPersistence,
   metricsOf,
   partnerHhi,
+  reciprocity,
   type Choice,
 } from '../src/engine/metrics';
 
@@ -36,7 +37,7 @@ test('rolling partner HHI pools directed choices inside the requested window', (
   assert.deepEqual(partnerHhi(byDay, ids.length, 1), [1, 1]);
 });
 
-test('adjacent-day directed matrix persistence is one for identical and negative for disjoint patterns', () => {
+test('windowed directed matrix persistence is one for identical and negative for disjoint patterns', () => {
   const identical = dailyMatrix([
     { day: 1, from: 'a', to: 'b' },
     { day: 1, from: 'c', to: 'd' },
@@ -48,8 +49,8 @@ test('adjacent-day directed matrix persistence is one for identical and negative
     { day: 2, from: 'c', to: 'd' },
   ], ids);
 
-  assert.deepEqual(matrixPersistence(identical, ids.length), [1]);
-  assert.ok(matrixPersistence(disjoint, ids.length)[0] < 0);
+  assert.deepEqual(matrixPersistence(identical, ids.length, 1), [1]);
+  assert.ok(matrixPersistence(disjoint, ids.length, 1)[0] < 0);
 });
 
 test('matrix persistence handles empty, single-day, gaps, and zero variance deterministically', () => {
@@ -64,7 +65,27 @@ test('matrix persistence handles empty, single-day, gaps, and zero variance dete
     [1, new Map([['0:1', 1], ['0:2', 1], ['1:0', 1], ['1:2', 1], ['2:0', 1], ['2:1', 1]])],
     [2, new Map([['0:1', 1], ['0:2', 1], ['1:0', 1], ['1:2', 1], ['2:0', 1], ['2:1', 1]])],
   ]);
-  assert.deepEqual(matrixPersistence(constant, 3), [1]);
+  assert.deepEqual(matrixPersistence(constant, 3, 1), [1]);
+});
+
+test('reciprocity includes zero-reciprocity days and normalizes by equal-candidate chance', () => {
+  const choices: Choice[] = [
+    { day: 1, from: 'a', to: 'b' }, { day: 1, from: 'b', to: 'c' },
+    { day: 1, from: 'c', to: 'd' }, { day: 1, from: 'd', to: 'a' },
+    { day: 2, from: 'a', to: 'b' }, { day: 2, from: 'b', to: 'c' },
+    { day: 2, from: 'c', to: 'd' }, { day: 2, from: 'd', to: 'a' },
+    { day: 3, from: 'a', to: 'd' }, { day: 3, from: 'b', to: 'a' },
+    { day: 3, from: 'c', to: 'b' }, { day: 3, from: 'd', to: 'c' },
+  ];
+  assert.deepEqual(reciprocity(choices), [0, 3]);
+});
+
+test('directed repeat rate does not compare across missing calendar days', () => {
+  const choices: Choice[] = [
+    { day: 1, from: 'a', to: 'b' },
+    { day: 3, from: 'a', to: 'b' },
+  ];
+  assert.deepEqual(metricsOf(choices, ['a', 'b']).repeat, []);
 });
 
 test('weighted in-degree hub concentration distinguishes a star from balanced attention', () => {
@@ -98,7 +119,7 @@ test('metricsOf adds concentration metrics without changing existing result keys
   assert.ok(Array.isArray(metrics.clus));
   assert.ok(Array.isArray(metrics.div));
   assert.deepEqual(metrics.hhi, [1, 1]);
-  assert.deepEqual(metrics.persistence, [1]);
+  assert.deepEqual(metrics.persistence, []);
   assert.deepEqual(metrics.hub, [1, 1]);
   assert.equal(metrics.pairs.get('0:1'), 2);
 });

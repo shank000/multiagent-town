@@ -17,6 +17,7 @@ export interface LoopHooks {
 
 export class WorldLoop {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private activeRealtimeStep: Promise<void> | null = null;
   private lastDay = 1;
 
   constructor(
@@ -76,7 +77,14 @@ export class WorldLoop {
   /** 实时模式：每 0.5s 一个 tick */
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => { void this.step(); }, 500);
+    this.timer = setInterval(() => {
+      if (this.activeRealtimeStep) return;
+      const task = this.step();
+      this.activeRealtimeStep = task;
+      void task.catch((error) => console.error('[world-loop]', error)).finally(() => {
+        if (this.activeRealtimeStep === task) this.activeRealtimeStep = null;
+      });
+    }, 500);
   }
 
   stop(): void {
@@ -84,6 +92,12 @@ export class WorldLoop {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /** 停止定时触发后，等待当前 tick 与全部智能体决策完成。 */
+  async drain(): Promise<void> {
+    if (this.activeRealtimeStep) await Promise.allSettled([this.activeRealtimeStep]);
+    await this.executor.drain();
   }
 }
 

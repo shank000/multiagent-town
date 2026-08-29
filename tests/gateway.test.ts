@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LLMGateway } from '../src/llm/gateway';
 import { StubProvider } from './helpers';
-import type { ChatMessage, LLMRequest } from '../src/llm/types';
+import type { ChatMessage, LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 
 function ctxUser(ctx: object): ChatMessage {
   return { role: 'user', content: `可用对象：[]\n\n<M0_CONTEXT>\n${JSON.stringify(ctx)}\n</M0_CONTEXT>` };
@@ -66,4 +66,25 @@ test('deepseek 模式缺 API key 直接报错', () => {
     () => new LLMGateway({ provider: 'deepseek', deepseek: { apiKey: '' } }),
     /DEEPSEEK_API_KEY/
   );
+});
+
+test('drain 等待关闭前已发出的模型调用完成', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const provider: LLMProvider = {
+    name: 'delayed',
+    async complete(): Promise<LLMResponse> {
+      await gate;
+      return { content: '{}', parsed: {}, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({ provider });
+  const completion = gateway.complete(req([ctxUser(mockCtx)]));
+  let drained = false;
+  const draining = gateway.drain().then(() => { drained = true; });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  release();
+  await Promise.all([completion, draining]);
+  assert.equal(drained, true);
 });

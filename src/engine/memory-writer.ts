@@ -8,10 +8,28 @@ import { TimeEngine, MINUTES_PER_DAY } from '../core/time';
 import type { GameEvent } from '../core/types';
 
 export class MemoryWriter {
+  private pending = new Set<Promise<void>>();
+  private unsubscribe: (() => void) | null = null;
+
   constructor(private store: MemoryStore, private llm: LLMGateway) {}
 
   attach(log: EventLog): void {
-    log.subscribe((e) => void this.onEvent(e).catch((err) => console.error('[memory-writer]', err)));
+    this.detach();
+    this.unsubscribe = log.subscribe((e) => {
+      const task = this.onEvent(e).catch((err) => console.error('[memory-writer]', err));
+      this.pending.add(task);
+      void task.then(() => this.pending.delete(task));
+    });
+  }
+
+  detach(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  /** 等待当前已接收事件全部写入，供测试与受控关闭安全落盘。 */
+  async flush(): Promise<void> {
+    while (this.pending.size > 0) await Promise.all(this.pending);
   }
 
   async onEvent(e: GameEvent): Promise<void> {

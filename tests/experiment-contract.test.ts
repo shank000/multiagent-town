@@ -46,13 +46,17 @@ test('AgentSociety² 正式实验清单固定 2×2 主矩阵与 recent-3 稳健�
   assert.equal(manifest.days, 60);
   assert.equal(manifest.seeds.length, 5);
   assert.equal(manifest.coreConditions.length, 4);
+  assert.equal(manifest.analysis.confirmatoryOutcome.metric, 'directed_edge_repeat_rate');
+  assert.deepEqual(manifest.analysis.confirmatoryOutcome.windowDays, [31, 60]);
+  assert.equal(manifest.analysis.inference.minimumTwoSidedExactP, 0.0625);
+  assert.equal(manifest.analysis.missingness.lateOrSkippedRound, 'invalidate_run');
 });
 
 test('golden Replay：协议哈希、候选顺序、历史暴露与每人一次选择均合法', () => {
   const { protocol, events } = loadGolden();
   assert.equal(
     hashPartnerChoiceProtocol(protocol),
-    'sha256:6faf746894472bef36a733ebf160f5bb0a8a3a8414b39e3c55d18e2cfdb1f174',
+    'sha256:10b16a57bd8cff317777920c3013f872f6e8eb29797ba5c04f9c2f1ef45e67a7',
   );
   assert.doesNotThrow(() => assertPartnerChoiceRound(protocol, events));
 });

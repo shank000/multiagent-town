@@ -44,10 +44,10 @@ export function recencyBonus(
   window = RECENCY_WINDOW_MINUTES
 ): number {
   if (lastInteraction === null || lastInteraction === undefined) return 0;
-  return Math.max(0, 1 - (now - lastInteraction) / window);
+  return Math.max(0, Math.min(1, 1 - (now - lastInteraction) / window));
 }
 
-const CHOICE_MINUTE = 1170; // 19:30
+export const CHOICE_MINUTE = 1170; // 19:30
 
 export class PartnerChoiceExperiment {
   private lastMinute = 0;
@@ -68,11 +68,29 @@ export class PartnerChoiceExperiment {
     this.random = options.random ?? createLabelledRandom(options.seed ?? randomUUID());
   }
 
-  /** 由主循环每 tick 调用；跨过 19:30 触发当日一轮选择 */
-  tick(now: number): void {
-    const minute = now % 1440;
-    if (this.lastMinute < CHOICE_MINUTE && minute >= CHOICE_MINUTE) this.round(now);
-    this.lastMinute = minute;
+  /** 跨越一个或多个 19:30 边界时逐轮触发，并返回实际完成的轮数。 */
+  tick(now: number, maxRounds = Number.MAX_SAFE_INTEGER): number {
+    if (now < this.lastMinute) {
+      this.lastMinute = now;
+      return 0;
+    }
+    let completed = 0;
+    const firstDay = Math.floor(this.lastMinute / 1440);
+    const lastDay = Math.floor(now / 1440);
+    for (let day = firstDay; day <= lastDay && completed < maxRounds; day++) {
+      const scheduled = day * 1440 + CHOICE_MINUTE;
+      if (this.lastMinute < scheduled && scheduled <= now) {
+        this.round(scheduled);
+        completed++;
+      }
+    }
+    this.lastMinute = now;
+    return completed;
+  }
+
+  /** 运行器开始或恢复时以当前时刻建立触发基线，不回补停机期间的轮次。 */
+  resetClock(now: number): void {
+    this.lastMinute = now;
   }
 
   /** 当日一轮：先冻结全员候选状态并独立选择，再执行馈礼与一对一对话。 */
@@ -85,7 +103,6 @@ export class PartnerChoiceExperiment {
 
     for (const { agent, partner, snapshot } of decisions) {
       if (partner === null) continue;
-      if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
       this.log.addEvent({
         id: randomUUID(),
         type: 'chat',
@@ -101,6 +118,7 @@ export class PartnerChoiceExperiment {
           chosen: partner.id,
         },
       });
+      if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
       if (!this.mind.dialogue.isActive(agent.id, partner.id)) this.mind.dialogue.start(agent, partner, now);
     }
   }

@@ -25,11 +25,12 @@ export function std(values: number[]): number {
   return Math.sqrt(avg(values.map((v) => (v - m) ** 2)));
 }
 
-/** 同对重复率：昨日互动过的对，今日仍互动的比例 */
+/** 有向同对重复率：昨日 A→B 选择边中，今日仍出现 A→B 的比例；缺日不跨越比较。 */
 export function repeatRate(byDay: Map<number, Map<string, number>>): number[] {
   const days = [...byDay.keys()].sort((a, b) => a - b);
   const out: number[] = [];
   for (let i = 1; i < days.length; i++) {
+    if (days[i] !== days[i - 1] + 1) continue;
     const prev = new Set(byDay.get(days[i - 1])!.keys());
     const cur = new Set(byDay.get(days[i])!.keys());
     if (!prev.size) continue;
@@ -49,17 +50,16 @@ export function reciprocity(choices: Choice[]): number[] {
   const days = [...byDay.keys()].sort((a, b) => a - b);
   const out: number[] = [];
   for (let i = 1; i < days.length; i++) {
+    if (days[i] !== days[i - 1] + 1) continue;
     const prev = byDay.get(days[i - 1])!;
     const cur = byDay.get(days[i])!;
-    if (cur.length < 2) continue;
-    const base = new Map<string, number>();
-    for (const c of cur) base.set(c.to, (base.get(c.to) ?? 0) + 1);
-    const baseP = (to: string) => (base.get(to) ?? 0) / cur.length;
-    const recips: number[] = [];
-    for (const c of prev) {
-      if (cur.some((x) => x.from === c.to && x.to === c.from)) recips.push(1 / (baseP(c.from) * cur.length));
-    }
-    if (recips.length) out.push(avg(recips));
+    const senderCount = new Set(cur.map((choice) => choice.from)).size;
+    if (senderCount < 2 || prev.length === 0) continue;
+    const currentPairs = new Set(cur.map((choice) => `${choice.from}\0${choice.to}`));
+    const reciprocalCount = prev.filter((choice) => currentPairs.has(`${choice.to}\0${choice.from}`)).length;
+    const observedRate = reciprocalCount / prev.length;
+    const equalCandidateBaseline = 1 / (senderCount - 1);
+    out.push(observedRate / equalCandidateBaseline);
   }
   return out;
 }
@@ -154,18 +154,27 @@ function directedVector(matrix: Map<string, number>, n: number): number[] {
 }
 
 /**
- * Adjacent-day directed-matrix persistence.
- * Each value is Pearson r(vec(M_d), vec(M_{d+1})) over all directed non-self
- * dyads, bounded to [-1, 1]. Equal non-empty constant vectors are treated as 1;
- * other zero-variance or empty comparisons are treated as 0.
+ * Non-overlapping rolling-window directed-matrix persistence.
+ * Each value compares two adjacent windows of equal width using Pearson
+ * r(vec(sum M_previous), vec(sum M_current)). The default 7-day windows avoid the algebraic
+ * equivalence between single-day persistence and directed-edge repeat rate.
  */
-export function matrixPersistence(byDay: Map<number, Map<string, number>>, n: number): number[] {
+export function matrixPersistence(byDay: Map<number, Map<string, number>>, n: number, window = 7): number[] {
   const days = [...byDay.keys()].sort((a, b) => a - b);
   const out: number[] = [];
-  for (let i = 1; i < days.length; i++) {
-    if (days[i] !== days[i - 1] + 1) continue;
-    const previous = directedVector(byDay.get(days[i - 1])!, n);
-    const current = directedVector(byDay.get(days[i])!, n);
+  const width = Math.max(1, Math.floor(window));
+  const aggregate = (selectedDays: number[]): Map<string, number> => {
+    const result = new Map<string, number>();
+    for (const day of selectedDays) {
+      for (const [key, count] of byDay.get(day) ?? []) result.set(key, (result.get(key) ?? 0) + count);
+    }
+    return result;
+  };
+  for (let end = width * 2 - 1; end < days.length; end++) {
+    const segment = days.slice(end - width * 2 + 1, end + 1);
+    if (segment.some((day, index) => index > 0 && day !== segment[index - 1] + 1)) continue;
+    const previous = directedVector(aggregate(segment.slice(0, width)), n);
+    const current = directedVector(aggregate(segment.slice(width)), n);
     if (previous.length === 0) {
       out.push(0);
       continue;

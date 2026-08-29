@@ -8,7 +8,7 @@ export const OBSERVATION_SCHEMA_VERSION = 'partner-choice.observation/v1' as con
 export const EVENT_SCHEMA_VERSION = 'partner-choice.event/v1' as const;
 
 export type HistoryMode = 'none' | 'recent_k' | 'full';
-export type DecisionSource = 'llm' | 'seeded_fallback';
+export type DecisionSource = 'llm' | 'seeded_fallback' | 'tool_submission';
 
 export interface PartnerChoiceConditionV1 {
   id: string;
@@ -30,21 +30,59 @@ export interface PartnerChoiceStudyManifestV1 {
   roundMinute: number;
   candidatePolicy: 'all_other_participants';
   candidateOrderPolicy: 'paired_seeded_shuffle';
+  executionOrderPolicy: 'sha256_seeded_condition_order/v1';
   decision: {
     policy: 'llm';
+    contextPolicy: 'observation_only_fresh_completion';
     promptVersion: string;
     fallback: 'seeded_uniform';
     modelRole: string;
+    modelId: string;
     temperature: number;
     topP: number;
     maxTokens: number;
     maxAttempts: number;
+    maxFallbackRate: number;
   };
   coreConditions: PartnerChoiceConditionV1[];
   robustnessConditions: PartnerChoiceConditionV1[];
   replay: {
     choiceDatasetId: string;
     defaultOrder: string[];
+  };
+  analysis: {
+    replicateUnit: 'condition_by_seed_run';
+    confirmatoryOutcome: {
+      metric: 'directed_edge_repeat_rate';
+      windowDays: [number, number];
+      withinRunAggregation: 'arithmetic_mean';
+    };
+    secondaryOutcomes: Array<{
+      metric: string;
+      windowDays?: [number, number];
+      endpointDays?: [number, number];
+    }>;
+    estimands: {
+      historyMainEffect: string;
+      giftMainEffect: string;
+      interaction: string;
+    };
+    inference: {
+      basePairedSeedCount: number;
+      minimumTwoSidedExactP: number;
+      alpha05ConfirmatoryRejectionSupported: boolean;
+      report: string[];
+    };
+    missingness: {
+      fallbackMainAnalysis: 'intention_to_treat';
+      fallbackSensitivity: 'per_protocol';
+      maxFallbackRate: number;
+      lateOrSkippedRound: 'invalidate_run';
+    };
+    seedExpansion: {
+      targetPairedSeedCount: number;
+      decisionTiming: 'before_formal_outcome_access';
+    };
   };
 }
 
@@ -67,13 +105,16 @@ export interface PartnerChoiceProtocolV1 {
   };
   decision: {
     policy: 'llm';
+    contextPolicy: 'observation_only_fresh_completion';
     promptVersion: string;
     fallback: 'seeded_uniform';
     modelRole: string;
+    modelId: string;
     temperature: number;
     topP: number;
     maxTokens: number;
     maxAttempts: number;
+    maxFallbackRate: number;
   };
 }
 
@@ -82,6 +123,8 @@ export interface InteractionRefV1 {
   day: number;
   gameTime: number;
   summary: string;
+  giftSent?: boolean;
+  giftReceived?: boolean;
 }
 
 export interface CandidateAuditV1 {
@@ -129,6 +172,8 @@ export interface PartnerChoiceReplayV1 {
     attemptCount: number;
     rationale?: string;
     fallbackReason?: string;
+    requestId?: string;
+    traceId?: string;
   };
 }
 
@@ -205,15 +250,12 @@ export function hashPartnerChoiceProtocol(protocol: PartnerChoiceProtocolV1): st
 export function partnerChoiceObservation(event: PartnerChoiceReplayV1): Record<string, unknown> {
   return {
     schemaVersion: OBSERVATION_SCHEMA_VERSION,
-    runId: event.runId,
-    conditionId: event.conditionId,
     day: event.day,
     roundId: event.roundId,
     chooserId: event.chooserId,
     candidates: event.preChoiceCandidates.map((candidate) => ({
       id: candidate.id,
       name: candidate.name,
-      historyMode: event.historyMode,
       history: event.visibleHistory[candidate.id] ?? [],
     })),
   };
@@ -251,7 +293,9 @@ export function assertStudyManifest(manifest: PartnerChoiceStudyManifestV1): voi
   invariant(Number.isInteger(manifest.roundMinute) && manifest.roundMinute >= 0 && manifest.roundMinute < 1440, 'roundMinute must be within one day');
   invariant(manifest.candidatePolicy === 'all_other_participants', 'candidatePolicy must keep candidate counts equal');
   invariant(manifest.candidateOrderPolicy === 'paired_seeded_shuffle', 'candidate ordering must be paired across conditions');
+  invariant(manifest.executionOrderPolicy === 'sha256_seeded_condition_order/v1', 'execution order must be frozen and seed-randomized');
   invariant(manifest.decision.policy === 'llm', 'core conditions must use one LLM decision policy');
+  invariant(manifest.decision.contextPolicy === 'observation_only_fresh_completion', 'partner choice must use a fresh completion containing only the protocol observation');
   invariant(manifest.decision.fallback === 'seeded_uniform', 'fallback must be seeded_uniform');
   assertNonEmpty(manifest.decision.promptVersion, 'decision.promptVersion');
   assertNonEmpty(manifest.decision.modelRole, 'decision.modelRole');
@@ -275,6 +319,16 @@ export function assertStudyManifest(manifest: PartnerChoiceStudyManifestV1): voi
   invariant(manifest.replay.choiceDatasetId === 'partner_choice.choice_event', 'choice replay dataset id must be stable');
   const replayOrder = ['day', 'round_id', 'chooser_id', 'event_seq'];
   invariant(manifest.replay.defaultOrder.length === replayOrder.length && manifest.replay.defaultOrder.every((key, index) => key === replayOrder[index]), 'Replay defaultOrder must deterministically order choice rows');
+  invariant(manifest.analysis.replicateUnit === 'condition_by_seed_run', 'analysis replicate unit must be a condition-by-seed run');
+  invariant(manifest.analysis.confirmatoryOutcome.metric === 'directed_edge_repeat_rate', 'the confirmatory outcome must be directed-edge repeat rate');
+  invariant(manifest.analysis.confirmatoryOutcome.windowDays[0] === 31 && manifest.analysis.confirmatoryOutcome.windowDays[1] === 60, 'the confirmatory outcome window must be days 31-60');
+  invariant(manifest.analysis.confirmatoryOutcome.withinRunAggregation === 'arithmetic_mean', 'the confirmatory outcome must be averaged within run');
+  invariant(manifest.analysis.inference.basePairedSeedCount === manifest.seeds.length, 'paired seed count must match the frozen seed list');
+  invariant(manifest.analysis.inference.minimumTwoSidedExactP === 0.0625, 'five paired seeds have a minimum two-sided exact p-value of 0.0625');
+  invariant(manifest.analysis.inference.alpha05ConfirmatoryRejectionSupported === false, 'the five-seed design must not claim alpha=.05 confirmatory rejection');
+  invariant(manifest.analysis.missingness.maxFallbackRate === manifest.decision.maxFallbackRate, 'analysis and decision fallback thresholds must match');
+  invariant(manifest.analysis.missingness.lateOrSkippedRound === 'invalidate_run', 'late or skipped rounds must invalidate a run');
+  invariant(manifest.analysis.seedExpansion.decisionTiming === 'before_formal_outcome_access', 'seed expansion must be decided before outcome access');
 }
 
 export function assertPartnerChoiceProtocol(protocol: PartnerChoiceProtocolV1): void {
@@ -295,11 +349,14 @@ export function assertPartnerChoiceProtocol(protocol: PartnerChoiceProtocolV1): 
   invariant(protocol.decision.policy === 'llm', 'decision.policy must be llm in the confirmatory experiment');
   invariant(protocol.decision.fallback === 'seeded_uniform', 'decision.fallback must be seeded_uniform');
   assertNonEmpty(protocol.decision.promptVersion, 'decision.promptVersion');
+  invariant(protocol.decision.contextPolicy === 'observation_only_fresh_completion', 'decision.contextPolicy must isolate each completion');
   assertNonEmpty(protocol.decision.modelRole, 'decision.modelRole');
+  assertNonEmpty(protocol.decision.modelId, 'decision.modelId');
   invariant(Number.isFinite(protocol.decision.temperature) && protocol.decision.temperature >= 0, 'decision.temperature must be non-negative');
   invariant(Number.isFinite(protocol.decision.topP) && protocol.decision.topP > 0 && protocol.decision.topP <= 1, 'decision.topP must be within (0, 1]');
   assertPositiveInteger(protocol.decision.maxTokens, 'decision.maxTokens');
   assertPositiveInteger(protocol.decision.maxAttempts, 'decision.maxAttempts');
+  invariant(Number.isFinite(protocol.decision.maxFallbackRate) && protocol.decision.maxFallbackRate >= 0 && protocol.decision.maxFallbackRate <= 1, 'decision.maxFallbackRate must be within [0, 1]');
 }
 
 export function assertPartnerChoiceRound(protocol: PartnerChoiceProtocolV1, events: PartnerChoiceReplayV1[]): void {

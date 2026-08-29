@@ -24,6 +24,7 @@ export class LLMGateway {
   private retries: number;
   private backoffMs: number;
   private metrics = new Map<string, TemplateMetric>();
+  private active = new Set<Promise<LLMResponse>>();
 
   constructor(cfg: GatewayConfig) {
     this.retries = cfg.retries ?? 2;
@@ -45,6 +46,16 @@ export class LLMGateway {
   }
 
   async complete(req: LLMRequest): Promise<LLMResponse> {
+    const task = this.completeWithRetry(req);
+    this.active.add(task);
+    try {
+      return await task;
+    } finally {
+      this.active.delete(task);
+    }
+  }
+
+  private async completeWithRetry(req: LLMRequest): Promise<LLMResponse> {
     let lastErr: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       try {
@@ -67,6 +78,11 @@ export class LLMGateway {
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  /** 等待已发出的模型调用全部结算；停止世界循环后用于安全关闭。 */
+  async drain(): Promise<void> {
+    while (this.active.size > 0) await Promise.allSettled(this.active);
   }
 
   private record(template: string, usage: LLMResponse['usage']): void {

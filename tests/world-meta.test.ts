@@ -24,3 +24,26 @@ test('平行世界元数据明确展示各自处理条件与研究用途', () =>
     }
   }
 });
+
+test('world factory applies runtime clock settings while keeping paired experiment seeds stable', async () => {
+  const fast = createManagedWorld('fast', 'mem-on', { seed: 17, gameMinutesPerTick: 180 });
+  const paired = createManagedWorld('paired', 'mem-on', { seed: 17, gameMinutesPerTick: 30 });
+  try {
+    assert.equal(fast.time.gameMinutesPerTick, 180);
+    assert.equal(paired.time.gameMinutesPerTick, 30);
+    fast.mind.dialogue.start = () => {};
+    paired.mind.dialogue.start = () => {};
+    for (const managed of [fast, paired]) {
+      managed.experiment?.start(1, 0);
+      managed.experiment?.tick(1170);
+    }
+    const choices = (managed: typeof fast) => managed.log
+      .eventsOfKind('experiment_pair_choice')
+      .map((event) => [event.payload?.fromId, event.payload?.toId]);
+    assert.deepEqual(choices(fast), choices(paired));
+  } finally {
+    await Promise.all([fast.mind.dispose(), paired.mind.dispose()]);
+    fast.db.raw.close();
+    paired.db.raw.close();
+  }
+});
