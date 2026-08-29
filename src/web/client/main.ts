@@ -2,10 +2,14 @@
 
 import { drawNpc, type Dir } from './sprites';
 import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
-import { computeFit, zoomScale, zoomOffsets, type FitCamera } from './camera';
+import { computeFit, zoomOffsets, detailScale, stepPixelZoom, clampCameraOffsets, type FitCamera } from './camera';
 import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop, rainSplash, type Particle } from './effects';
 import { escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind, bindPanel, updatePanelDeps, type AgentView } from './panel';
-import { drawNetwork, drawMetrics, drawMiniWorld, fetchMetrics, controlExperiment, exportMetrics, type MetricsPayload } from './console';
+import {
+  drawNetwork, drawMetrics, fetchMetrics, controlExperiment, exportMetrics,
+  hitTestNetwork, resetNetworkLayout, METRIC_DEFINITIONS,
+  type MetricsPayload, type MetricKey, type NetworkNodeLayout,
+} from './console';
 import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 
@@ -36,6 +40,7 @@ let selectedObjectId: string | null = null;
 // 玩家扮演：快照不含该信息，客户端本地记录正在被扮演的 NPC
 const playing = new Set<string>();
 let playTargetId: string | null = null;
+let playWorldId: string | null = null;
 
 // 悬停 tooltip 与广播横幅（canvas 绘制层）
 let tooltip: { text: string; x: number; y: number } | null = null;
@@ -63,34 +68,63 @@ const RAIN_CAP = 200;
 let lastRainSpawn = 0;
 let lastWaterRipple = 0;
 
-// —— 全屏相机（fit-to-screen，无拖拽）——
+// —— 像素细节相机：整数倍率、拖拽平移、边界钳制 ——
 const camera: FitCamera = { scale: 1, offX: 0, offY: 0 };
-let viewMode: 'narrative' | 'map' | 'net' | 'metrics' = 'narrative';
+let cameraReady = false;
+let pendingCameraTarget: { x: number; y: number } | null = null;
+let dragState: { pointerId: number; startX: number; startY: number; offX: number; offY: number; moved: boolean } | null = null;
+let suppressMapClick = false;
 let activeWorldId = 'w1';
-let metricsCache: MetricsPayload = { repeat: [], recip: [], clus: [], div: [], pairs: [] };
+const emptyMetrics = (): MetricsPayload => ({
+  repeat: [], recip: [], clus: [], div: [], hhi: [], persistence: [], hub: [], pairs: [],
+});
+let metricsCache: MetricsPayload = emptyMetrics();
+const metricsByWorld = new Map<string, MetricsPayload>();
 let lastMetricsAt = 0;
 let fitScale = 1;
+let activeMetric: MetricKey = 'repeat';
+let networkNodes: NetworkNodeLayout[] = [];
+let hoveredNetworkId: string | null = null;
+let toastTimer = 0;
 // 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
 let lastGridW = 0;
 let lastGridH = 0;
 
 async function main(): Promise<void> {
-  snap = (await (await fetch('/api/state')).json()) as WorldSnapshot;
+  const initial = (await (await fetch('/api/state')).json()) as WorldSnapshot & { worldId?: string };
+  if (initial.worldId) activeWorldId = initial.worldId;
+  snap = initial;
+  selectedId = snap.agents[0]?.id ?? null;
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
   for (const a of snap.agents) initDisplay(a);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => { tooltip = null; });
   canvas.addEventListener('wheel', onWheel, { passive: false });
-  canvas.addEventListener('dblclick', () => fitCamera());
+  canvas.addEventListener('pointerdown', onMapPointerDown);
+  canvas.addEventListener('pointermove', onMapPointerMove);
+  canvas.addEventListener('pointerup', onMapPointerUp);
+  canvas.addEventListener('pointercancel', onMapPointerUp);
+  canvas.addEventListener('dblclick', () => resetDetailCamera());
   canvas.addEventListener('click', onClick);
   bindControls();
+  bindWorkspaceInteractions();
+  bindNetworkInteractions();
+  bindMetricTabs();
+  bindNarrativeFollow();
   bindPlayBar();
   updatePanelDeps({ playing, togglePlay });
   bindPanel((tab) => { activeTab = tab; }, updatePanel);
+  renderRoster();
+  renderCharacterCard(selectedId);
+  updatePanel();
   const es = new EventSource('/events');
+  es.addEventListener('open', () => setConnectionState(true));
+  es.addEventListener('error', () => setConnectionState(false));
   es.addEventListener('snapshot', (ev) => {
-    snap = JSON.parse((ev as MessageEvent<string>).data) as WorldSnapshot;
+    const incoming = JSON.parse((ev as MessageEvent<string>).data) as WorldSnapshot & { worldId?: string };
+    if (incoming.worldId && incoming.worldId !== activeWorldId) return;
+    snap = incoming;
     applySnapshot();
   });
   es.addEventListener('event', (ev) => onEvent(JSON.parse((ev as MessageEvent<string>).data) as TownEvent));
@@ -99,30 +133,93 @@ async function main(): Promise<void> {
 }
 
 function resizeCanvas(): void {
+  const host = document.getElementById('town-body');
+  if (!host) return;
+  const width = host.clientWidth;
+  const height = host.clientHeight;
+  if (width <= 0 || height <= 0) return;
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(window.innerWidth * dpr);
-  canvas.height = Math.floor(window.innerHeight * dpr);
-  canvas.style.width = `${window.innerWidth}px`;
-  canvas.style.height = `${window.innerHeight}px`;
-  fitCamera();
+  canvas.width = Math.max(1, Math.floor(width * dpr));
+  canvas.height = Math.max(1, Math.floor(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  if (!cameraReady) resetDetailCamera();
+  else if (pendingCameraTarget) {
+    const target = pendingCameraTarget;
+    pendingCameraTarget = null;
+    centerCameraAt(target.x, target.y);
+  }
+  else clampCamera();
 }
 
-function fitCamera(): void {
+function resetDetailCamera(): void {
   if (!snap) return;
   const dpr = window.devicePixelRatio || 1;
   const f = computeFit(canvas.width / dpr, canvas.height / dpr, snap.gridW, snap.gridH, TILE);
   fitScale = f.scale;
-  camera.scale = fitScale;
-  camera.offX = f.offX;
-  camera.offY = f.offY;
+  camera.scale = detailScale(fitScale);
+  const selected = snap.agents.find((agent) => agent.id === selectedId);
+  centerCameraAt(
+    selected ? (selected.x + .5) * TILE : (snap.gridW * TILE) / 2,
+    selected ? (selected.y + .5) * TILE : (snap.gridH * TILE) / 2
+  );
+  cameraReady = true;
+  updateZoomLabel();
 }
 
 function applyCamera(): void {
   const dpr = window.devicePixelRatio || 1;
-  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, camera.offX * dpr, camera.offY * dpr);
+  ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, Math.round(camera.offX * dpr), Math.round(camera.offY * dpr));
+  ctx.imageSmoothingEnabled = false;
 }
 
-function resetCamera(): void { ctx.setTransform(1, 0, 0, 1, 0, 0); }
+function resetCamera(): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
+
+function canvasCssSize(): { width: number; height: number } {
+  const dpr = window.devicePixelRatio || 1;
+  return { width: canvas.width / dpr, height: canvas.height / dpr };
+}
+
+function centerCameraAt(worldX: number, worldY: number): void {
+  const host = document.getElementById('town-body');
+  if (!host || host.clientWidth <= 0 || host.clientHeight <= 0) {
+    pendingCameraTarget = { x: worldX, y: worldY };
+    return;
+  }
+  pendingCameraTarget = null;
+  const view = canvasCssSize();
+  camera.offX = view.width / 2 - worldX * camera.scale;
+  camera.offY = view.height / 2 - worldY * camera.scale;
+  clampCamera();
+}
+
+function clampCamera(): void {
+  if (!snap) return;
+  const view = canvasCssSize();
+  const next = clampCameraOffsets(view.width, view.height, snap.gridW * TILE, snap.gridH * TILE, camera.scale, camera.offX, camera.offY);
+  camera.offX = next.offX;
+  camera.offY = next.offY;
+}
+
+function setPixelZoom(nextScale: number, anchorX?: number, anchorY?: number): void {
+  const view = canvasCssSize();
+  const ax = anchorX ?? view.width / 2;
+  const ay = anchorY ?? view.height / 2;
+  const offset = zoomOffsets(ax, ay, camera.scale, nextScale, camera.offX, camera.offY, TILE);
+  camera.scale = nextScale;
+  camera.offX = offset.offX;
+  camera.offY = offset.offY;
+  clampCamera();
+  updateZoomLabel();
+}
+
+function updateZoomLabel(): void {
+  const label = document.getElementById('map-zoom-label');
+  if (label) label.textContent = `${Math.round(camera.scale * 100)}% · 拖拽平移`;
+}
 function initDisplay(a: AgentView): void {
   display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false, dir: 'down' });
 }
@@ -145,10 +242,13 @@ function applySnapshot(): void {
     }
   }
   updateHud();
+  renderRoster();
+  renderSelectedCard();
+  if (activeTab === 'detail' || activeTab === 'profile') updatePanel();
   if (snap.gridW !== lastGridW || snap.gridH !== lastGridH) {
     lastGridW = snap.gridW;
     lastGridH = snap.gridH;
-    fitCamera();
+    resetDetailCamera();
   }
 }
 
@@ -182,13 +282,30 @@ interface NarrativeItem {
   mode: string | null; chosen: string | null;
   candidates: { id: string; name: string; affection: number; lastInteraction: number }[] | null;
 }
-let lastNarrativeId = 0;
+let lastNarrativeSignature = '';
 let lastNarrativeAt = 0;
+let narrativeFollow = true;
 
 /** 叙事流：SillyTavern 式时间轴卡片 + 对话气泡 + 内心独白 */
 function renderNarrative(items: NarrativeItem[]): void {
   const box = document.getElementById('narrative');
   if (!box) return;
+  const activeElement = document.activeElement instanceof HTMLElement && box.contains(document.activeElement)
+    ? document.activeElement
+    : null;
+  const activeCard = activeElement?.closest<HTMLElement>('[data-event-id]') ?? null;
+  const activeActions = activeCard ? Array.from(activeCard.querySelectorAll<HTMLElement>('[data-agent-id]')) : [];
+  const focusEventId = activeCard?.dataset.eventId ?? null;
+  const focusActionIndex = activeElement ? activeActions.indexOf(activeElement) : -1;
+  if (items.length === 0) {
+    box.innerHTML = '<p class="label">当前世界尚无社会事件</p>';
+    const jump = document.getElementById('narrative-jump');
+    if (jump) jump.hidden = true;
+    narrativeFollow = true;
+    return;
+  }
+  const keepFollowing = narrativeFollow || box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+  const previousTop = box.scrollTop;
   const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   const frag = document.createDocumentFragment();
   let lastDay = -1;
@@ -201,10 +318,12 @@ function renderNarrative(items: NarrativeItem[]): void {
       frag.appendChild(sep);
     }
     const card = document.createElement('div');
+    card.dataset.eventId = it.id;
     const meta = `<span class="nar-meta">${hhmm(it.minute)}</span>`;
+    const actorData = it.actor ? encodeURIComponent(it.actor) : '';
     if (it.kind.startsWith('chat')) {
       card.className = 'nar-bubble';
-      card.innerHTML = `<div class="nar-head"><span class="nar-ava">${escapeHtml(it.actorName.slice(0, 1))}</span><span class="nar-name">${escapeHtml(it.actorName)}</span>${meta}</div><div class="nar-text">${escapeHtml(it.line ?? it.text)}</div>`;
+      card.innerHTML = `<div class="nar-head"><button type="button" class="nar-ava" data-agent-id="${actorData}" aria-label="查看 ${escapeHtml(it.actorName)}">${escapeHtml(it.actorName.slice(0, 1))}</button><button type="button" class="nar-name" data-agent-id="${actorData}">${escapeHtml(it.actorName)}</button>${meta}</div><div class="nar-text">${escapeHtml(it.line ?? it.text)}</div>`;
     } else if (it.kind === 'thought' || ((it.kind.startsWith('thought')) && it.thought)) {
       card.className = 'nar-card thought';
       card.innerHTML = `${meta}<span class="nar-title">💭 ${escapeHtml(it.actorName)} 的内心独白</span><div class="nar-italic">${escapeHtml(it.thought ?? it.text)}</div>`;
@@ -213,14 +332,17 @@ function renderNarrative(items: NarrativeItem[]): void {
       const cands = (it.candidates ?? []).map((c) => {
         const id = c.name;
         const rel = c.affection !== 0 ? `💗${c.affection >= 0 ? '+' : ''}${c.affection}` : '';
-        const hist = c.lastInteraction > 0 ? ` · 上次互动${Math.round(c.lastInteraction / 1440)}天` : '';
+        const ageMinutes = Math.max(0, it.time - c.lastInteraction);
+        const hist = c.lastInteraction > 0
+          ? ` · ${ageMinutes < 1440 ? '当天互动过' : `上次互动${Math.floor(ageMinutes / 1440)}天前`}`
+          : '';
         const chosenCls = c.name === (it.candidates ?? []).find((x) => x.id === it.chosen)?.name ? ' chosen' : '';
-        return `<span class="cand${chosenCls}"><b>${escapeHtml(id)}</b> ${rel}${hist}</span>`;
+        return `<button type="button" class="cand${chosenCls}" data-agent-id="${encodeURIComponent(c.id)}"><b>${escapeHtml(id)}</b> ${rel}${hist}</button>`;
       }).join(' ');
       const reason = it.mode === 'on'
-        ? `她让回忆牵引着脚步——走向了 ${escapeHtml(it.targetName ?? '')}。`
-        : `这一次没有特别的回忆，她随意地走向了 ${escapeHtml(it.targetName ?? '')}。`;
-      card.innerHTML = `${meta}<div class="nar-prose"><span class="nar-title">🌆 黄昏 · 选择时刻</span><br>${escapeHtml(it.actorName)} 的目光在几位同样熟识的伙伴之间停留——</div>
+        ? `本地机制正控按可访问的关系历史加权，选择了 ${escapeHtml(it.targetName ?? '')}。`
+        : `本地零模型基线按种子化均匀抽样，选择了 ${escapeHtml(it.targetName ?? '')}。`;
+      card.innerHTML = `${meta}<div class="nar-prose"><span class="nar-title">🌆 黄昏 · 选择时刻</span><br>${escapeHtml(it.actorName)} 在数量相等的候选伙伴之间做出选择——</div>
         <div class="cands">${cands}</div><div class="nar-reason">${reason}</div>`;
     } else if (it.kind === 'gift') {
       card.className = 'nar-card gift';
@@ -234,7 +356,26 @@ function renderNarrative(items: NarrativeItem[]): void {
   }
   box.innerHTML = '';
   box.appendChild(frag);
-  box.scrollTop = box.scrollHeight;
+  box.querySelectorAll<HTMLElement>('[data-agent-id]').forEach((element) => {
+    element.addEventListener('click', () => {
+      const encoded = element.dataset.agentId;
+      if (encoded) selectAgent(decodeURIComponent(encoded));
+    });
+  });
+  if (focusEventId && focusActionIndex >= 0) {
+    const restoredCard = Array.from(box.querySelectorAll<HTMLElement>('[data-event-id]'))
+      .find((element) => element.dataset.eventId === focusEventId);
+    restoredCard?.querySelectorAll<HTMLElement>('[data-agent-id]')[focusActionIndex]?.focus({ preventScroll: true });
+  }
+  if (keepFollowing) {
+    box.scrollTop = box.scrollHeight;
+    narrativeFollow = true;
+  } else {
+    box.scrollTop = previousTop;
+    narrativeFollow = false;
+    const jump = document.getElementById('narrative-jump');
+    if (jump) jump.hidden = false;
+  }
 }
 
 async function pollNarrative(): Promise<void> {
@@ -242,11 +383,16 @@ async function pollNarrative(): Promise<void> {
   if (now - lastNarrativeAt < 2000) return;
   lastNarrativeAt = now;
   try {
-    const res = await fetch('/api/narrative?limit=300');
-    const r = (await res.json()) as { items: NarrativeItem[] };
+    const requestedWorld = activeWorldId;
+    const res = await fetch(`/api/narrative?limit=300&worldId=${encodeURIComponent(requestedWorld)}`);
+    if (!res.ok) throw new Error(String(res.status));
+    const r = (await res.json()) as { worldId?: string; items: NarrativeItem[] };
+    if (activeWorldId !== requestedWorld || r.worldId !== requestedWorld) return;
     const fresh = r.items.filter((x) => (x.id ?? '') !== '' && x.seq >= 0).slice(-120);
-    if (fresh.length) renderNarrative(fresh);
-    void lastNarrativeId;
+    const signature = `${requestedWorld}\u0000${fresh.map((item) => item.id).join('\u0000')}`;
+    if (signature === lastNarrativeSignature) return;
+    lastNarrativeSignature = signature;
+    renderNarrative(fresh);
   } catch { /* 静默 */ }
 }
 const FEED_KINDS: [string, string][] = [
@@ -265,6 +411,19 @@ function renderCharacterCard(id: string | null): void {
     <div class="char-row"><span>想法</span>${a.thought ? escapeHtml(a.thought) : '（暂无）'}</div>
     <div class="char-divider"></div>
     <div class="char-row"><span>坐标</span>(${a.x}, ${a.y}) · ${escapeHtml(a.locationName)}</div>`;
+}
+
+function renderSelectedCard(): void {
+  if (!selectedObjectId) {
+    renderCharacterCard(selectedId);
+    return;
+  }
+  const card = document.getElementById('character-card');
+  if (!card) return;
+  const object = snap?.objects.find((item) => item.id === selectedObjectId);
+  card.innerHTML = object
+    ? `<div class="char-head"><span class="char-ava">⌂</span><div><div class="char-name">${escapeHtml(object.name)}</div><div class="char-sub">${escapeHtml(TYPE_NAME[object.type] ?? object.type)}</div></div></div><div class="char-row"><span>范围</span>${object.w}×${object.h} 格 · 坐标 (${object.x}, ${object.y})</div>`
+    : '点击小镇居民或关系节点，查看人物属性与社会记录';
 }
 
 function renderFeed(): void {
@@ -293,30 +452,109 @@ function renderFeed(): void {
   }).join('') || '<p style="color:var(--ink-dim)">等待事件……</p>';
 }
 
-/** 左栏居民名册：点击选中查看详情 */
+function selectAgent(id: string, centerMap = true): void {
+  if (!snap?.agents.some((agent) => agent.id === id)) return;
+  selectedId = id;
+  selectedObjectId = null;
+  renderRoster();
+  renderSelectedCard();
+  updatePanel();
+  if (centerMap) {
+    const agent = snap.agents.find((item) => item.id === id)!;
+    centerCameraAt((agent.x + .5) * TILE, (agent.y + .5) * TILE);
+  }
+}
+
+function selectObject(id: string | null): void {
+  selectedId = null;
+  selectedObjectId = id;
+  renderRoster();
+  renderSelectedCard();
+  updatePanel();
+}
+
+async function fetchWorldSnapshot(worldId: string): Promise<WorldSnapshot & { worldId: string }> {
+  const response = await fetch(`/api/state?worldId=${encodeURIComponent(worldId)}`);
+  if (!response.ok) throw new Error(`world snapshot unavailable (${response.status})`);
+  const next = (await response.json()) as WorldSnapshot & { worldId?: string };
+  if (next.worldId !== worldId) throw new Error('world snapshot mismatch');
+  return next as WorldSnapshot & { worldId: string };
+}
+
+/** 以一个已验证的世界快照原子替换所有视图级临时状态。 */
+function installWorldSnapshot(next: WorldSnapshot): void {
+  snap = next;
+  display.clear();
+  poses.clear();
+  lastActionKey.clear();
+  zzzLast.clear();
+  steamLast.clear();
+  bubbles.clear();
+  fx.particles = [];
+  tooltip = null;
+  banner = null;
+  feed.length = 0;
+  lastNarrativeSignature = '';
+  lastNarrativeAt = 0;
+  narrativeFollow = true;
+  const narrative = document.getElementById('narrative');
+  if (narrative) narrative.innerHTML = '<p class="label">正在读取当前世界的社会事件…</p>';
+  const narrativeJump = document.getElementById('narrative-jump');
+  if (narrativeJump) narrativeJump.hidden = true;
+  if (selectedId && !next.agents.some((agent) => agent.id === selectedId)) selectedId = next.agents[0]?.id ?? null;
+  if (selectedObjectId && !next.objects.some((object) => object.id === selectedObjectId)) selectedObjectId = null;
+  lastGridW = 0;
+  lastGridH = 0;
+  networkNodes = [];
+  hoveredNetworkId = null;
+  resetNetworkLayout();
+  renderFeed();
+  applySnapshot();
+  updatePanel();
+}
+
+/** 居民名册是全部 Canvas 视图的键盘可访问选择入口。 */
 function renderRoster(): void {
   const box = document.getElementById('roster');
   if (!box || !snap) return;
-  box.innerHTML = snap.agents.map((a) => {
-    const hot = a.id === selectedId ? ' hot' : '';
-    return `<div class="roster-item${hot}" data-id="${escapeHtml(a.id)}"><span>${escapeHtml(a.name)}</span><span class="v">${escapeHtml(STATE_NAME[a.state] ?? a.state)}</span></div>`;
-  }).join('');
-  box.querySelectorAll('.roster-item').forEach((el) => {
-    el.addEventListener('click', () => {
-      selectedId = (el as HTMLElement).dataset.id ?? null;
-      selectedObjectId = null;
-      renderRoster();
-      updatePanel();
-      renderCharacterCard(selectedId);
-    });
+  let buttons = Array.from(box.querySelectorAll<HTMLButtonElement>('.roster-item'));
+  const sameResidents = buttons.length === snap.agents.length
+    && buttons.every((button, index) => button.dataset.id === snap!.agents[index].id);
+  if (!sameResidents) {
+    box.innerHTML = snap.agents.map((agent) =>
+      `<button type="button" class="roster-item" data-id="${escapeHtml(agent.id)}"><span></span><span class="v"></span></button>`
+    ).join('');
+    buttons = Array.from(box.querySelectorAll<HTMLButtonElement>('.roster-item'));
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      const id = button.dataset.id;
+      if (id) selectAgent(id);
+    }));
+  }
+  buttons.forEach((button, index) => {
+    const agent = snap!.agents[index];
+    const active = agent.id === selectedId;
+    button.classList.toggle('hot', active);
+    button.setAttribute('aria-pressed', String(active));
+    const labels = button.querySelectorAll('span');
+    if (labels[0]) labels[0].textContent = agent.name;
+    if (labels[1]) labels[1].textContent = STATE_NAME[agent.state] ?? agent.state;
   });
 }
 
 /** 实验运行状态轮询 */
 function pollExperiment(): void {
-  void fetch('/api/experiment/state').then((r) => r.json()).then((st) => {
+  const requestedWorld = activeWorldId;
+  void fetch(`/api/experiment/state?worldId=${encodeURIComponent(requestedWorld)}`).then(async (r) => (
+    r.ok ? r.json() : { available: false }
+  )).then((st) => {
+    if (activeWorldId !== requestedWorld || st.worldId !== requestedWorld) return;
     const el = document.getElementById('run-status');
     if (!el) return;
+    if (st.available === false) {
+      el.classList.remove('live');
+      el.innerHTML = '<div class="dot"></div>实验：<b>此世界不适用</b>';
+      return;
+    }
     const live = !!st.running;
     el.classList.toggle('live', live);
     el.innerHTML = `<div class="dot"></div>实验：${live ? `<b>运行中（余 ${st.remainingDays} 天）</b>` : '<b>未运行</b>'}<br><span style="font-size:11px">记忆${st.mem === 'on' ? '开' : '关'} · 馈礼${st.gift === 'on' ? '开' : '关'}</span>`;
@@ -324,43 +562,185 @@ function pollExperiment(): void {
 }
 setInterval(pollExperiment, 2000);
 
-function bindControls(): void {
-  document.querySelectorAll('#controls button[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const action = btn.getAttribute('data-action')!;
-      const value = btn.getAttribute('data-value');
-      void fetch('/api/world/control', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(value ? { action, value: Number(value) } : { action }),
-      });
-    });
-  });
-  const setView = (v: 'narrative' | 'map' | 'net' | 'metrics') => {
-    viewMode = v;
-    const nar = document.getElementById('narrative')!;
-    const g = document.getElementById('game')!;
-    const net = document.getElementById('net-canvas')!;
-    const met = document.getElementById('metrics-canvas')!;
-    nar.style.display = v === 'narrative' ? 'block' : 'none';
-    g.style.display = v === 'map' ? 'block' : 'none';
-    net.style.display = v === 'net' ? 'block' : 'none';
-    met.style.display = v === 'metrics' ? 'block' : 'none';
-    for (const [id, mode] of [['view-narrative', 'narrative'], ['view-map', 'map'], ['view-net', 'net'], ['view-metrics', 'metrics']] as const) {
-      document.getElementById(id)!.classList.toggle('active', mode === v);
+function showToast(message: string, tone: 'info' | 'success' | 'error' = 'info'): void {
+  const toast = document.getElementById('ui-toast');
+  if (!toast) return;
+  window.clearTimeout(toastTimer);
+  toast.textContent = message;
+  toast.dataset.tone = tone;
+  toast.hidden = false;
+  toastTimer = window.setTimeout(() => { toast.hidden = true; }, 3200);
+}
+
+function setConnectionState(online: boolean): void {
+  const status = document.getElementById('connection-status');
+  if (!status) return;
+  status.classList.toggle('offline', !online);
+  status.innerHTML = `<span class="live-dot"></span>纵向社会观测 · ${online ? '实时' : '正在重连'}`;
+}
+
+function bindWorkspaceInteractions(): void {
+  const workspace = document.getElementById('research-workspace')!;
+  const focusButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-focus-view]'));
+  const refreshFocusButtons = () => {
+    const focused = workspace.dataset.focus ?? '';
+    for (const button of focusButtons) {
+      const active = button.dataset.focusView === focused;
+      button.setAttribute('aria-pressed', String(active));
+      button.textContent = active ? '恢复三窗' : '聚焦';
     }
   };
-  document.getElementById('view-narrative')!.addEventListener('click', () => setView('narrative'));
-  document.getElementById('view-map')!.addEventListener('click', () => setView('map'));
-  document.getElementById('view-net')!.addEventListener('click', () => setView('net'));
-  document.getElementById('view-metrics')!.addEventListener('click', () => setView('metrics'));
-  document.getElementById('exp-start')!.addEventListener('click', () => {
+  const setFocus = (view: string | null) => {
+    if (view) workspace.dataset.focus = view;
+    else delete workspace.dataset.focus;
+    refreshFocusButtons();
+    requestAnimationFrame(() => {
+      resizeCanvas();
+      window.dispatchEvent(new Event('resize'));
+    });
+  };
+  for (const button of focusButtons) {
+    button.addEventListener('click', () => {
+      const view = button.dataset.focusView ?? '';
+      setFocus(workspace.dataset.focus === view ? null : view);
+    });
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && workspace.dataset.focus) setFocus(null);
+  });
+
+  document.getElementById('map-zoom-out')!.addEventListener('click', () => setPixelZoom(stepPixelZoom(camera.scale, -1)));
+  document.getElementById('map-zoom-in')!.addEventListener('click', () => setPixelZoom(stepPixelZoom(camera.scale, 1)));
+  document.getElementById('map-reset')!.addEventListener('click', resetDetailCamera);
+  document.getElementById('network-reset')!.addEventListener('click', () => {
+    resetNetworkLayout();
+    showToast('伙伴选择网络已重新排布', 'success');
+  });
+  document.getElementById('roster-toggle')!.addEventListener('click', (event) => {
+    const roster = document.querySelector<HTMLElement>('.town-roster')!;
+    const collapsed = roster.classList.toggle('is-collapsed');
+    const button = event.currentTarget as HTMLButtonElement;
+    button.textContent = collapsed ? '展开' : '收起';
+    button.setAttribute('aria-expanded', String(!collapsed));
+  });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(() => resizeCanvas());
+    observer.observe(document.getElementById('town-body')!);
+  }
+}
+
+function bindNetworkInteractions(): void {
+  const network = document.getElementById('net-canvas') as HTMLCanvasElement;
+  const pointAt = (event: MouseEvent) => {
+    const rect = network.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  network.addEventListener('mousemove', (event) => {
+    const point = pointAt(event);
+    hoveredNetworkId = hitTestNetwork(networkNodes, point.x, point.y);
+    network.style.cursor = hoveredNetworkId ? 'pointer' : 'default';
+  });
+  network.addEventListener('mouseleave', () => { hoveredNetworkId = null; });
+  network.addEventListener('click', (event) => {
+    const point = pointAt(event);
+    const id = hitTestNetwork(networkNodes, point.x, point.y);
+    if (id) selectAgent(id);
+  });
+}
+
+function bindMetricTabs(): void {
+  const tabs = document.getElementById('metric-tabs')!;
+  tabs.replaceChildren(...METRIC_DEFINITIONS.map((definition) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `metric-tab${definition.key === activeMetric ? ' active' : ''}`;
+    button.dataset.metric = definition.key;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(definition.key === activeMetric));
+    button.textContent = definition.shortLabel;
+    button.addEventListener('click', () => {
+      activeMetric = definition.key;
+      tabs.querySelectorAll<HTMLButtonElement>('.metric-tab').forEach((item) => {
+        const active = item.dataset.metric === activeMetric;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-selected', String(active));
+      });
+    });
+    return button;
+  }));
+}
+
+function bindNarrativeFollow(): void {
+  const narrative = document.getElementById('narrative')!;
+  const jump = document.getElementById('narrative-jump') as HTMLButtonElement;
+  const update = () => {
+    narrativeFollow = narrative.scrollHeight - narrative.scrollTop - narrative.clientHeight < 48;
+    jump.hidden = narrativeFollow;
+  };
+  narrative.addEventListener('scroll', update, { passive: true });
+  jump.addEventListener('click', () => {
+    narrative.scrollTop = narrative.scrollHeight;
+    narrativeFollow = true;
+    jump.hidden = true;
+  });
+}
+
+function bindControls(): void {
+  document.querySelectorAll('#controls button[data-action]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const action = btn.getAttribute('data-action')!;
+      const effectiveAction = action === 'pause' && snap?.paused ? 'resume' : action;
+      const value = btn.getAttribute('data-value');
+      const button = btn as HTMLButtonElement;
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/world/control', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(value ? { action: effectiveAction, value: Number(value) } : { action: effectiveAction }),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+      } catch {
+        showToast('世界时间控制未生效，请检查服务状态', 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+  document.getElementById('exp-start')!.addEventListener('click', async () => {
     const mem = (document.getElementById('exp-mem') as HTMLInputElement).checked ? 'on' : 'off';
     const gift = (document.getElementById('exp-gift') as HTMLInputElement).checked ? 'on' : 'off';
     const days = Number((document.getElementById('exp-days') as HTMLInputElement).value || 30);
-    void controlExperiment('config', { mem, gift }).then(() => controlExperiment('start', { days }));
+    const button = document.getElementById('exp-start') as HTMLButtonElement;
+    const requestedWorld = activeWorldId;
+    button.disabled = true;
+    try {
+      await controlExperiment('config', requestedWorld, { mem, gift });
+      if (activeWorldId !== requestedWorld) throw new Error('active world changed');
+      await controlExperiment('start', requestedWorld, { days });
+      pollExperiment();
+      showToast(`实验已启动：${days} 天`, 'success');
+    } catch {
+      showToast('实验启动失败，请检查当前世界与运行参数', 'error');
+    } finally {
+      button.disabled = false;
+    }
   });
-  document.getElementById('exp-stop')!.addEventListener('click', () => void controlExperiment('stop'));
+  document.getElementById('exp-stop')!.addEventListener('click', async () => {
+    const button = document.getElementById('exp-stop') as HTMLButtonElement;
+    const requestedWorld = activeWorldId;
+    button.disabled = true;
+    try {
+      await controlExperiment('stop', requestedWorld);
+      pollExperiment();
+      showToast('实验已停止', 'success');
+    } catch {
+      showToast('实验停止请求失败', 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
   document.getElementById('exp-export')!.addEventListener('click', () => exportMetrics(metricsCache));
   renderFeed();
   pollExperiment();
@@ -378,19 +758,76 @@ function bindControls(): void {
     sel.value = activeWorldId;
     const cur = w.worlds.find((x) => x.id === activeWorldId);
     if (cur) renderWorldMeta(cur);
-    sel.addEventListener('change', () => {
-      activeWorldId = sel.value;
-      void fetch('/api/world/switch', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: activeWorldId }),
-      }).then(() => {
-        const c = w.worlds.find((x) => x.id === activeWorldId);
-        if (c) renderWorldMeta(c);
-        lastNarrativeAt = 0;
-      });
+    const activateWorldView = async (worldId: string): Promise<WorldListItem | undefined> => {
+      const nextSnapshot = await fetchWorldSnapshot(worldId);
+      activeWorldId = worldId;
+      sel.value = worldId;
+      installWorldSnapshot(nextSnapshot);
+      const selectedWorld = w.worlds.find((item) => item.id === worldId);
+      if (selectedWorld) renderWorldMeta(selectedWorld);
+      metricsCache = metricsByWorld.get(worldId) ?? emptyMetrics();
+      lastMetricsAt = 0;
+      pollExperiment();
+      void pollNarrative();
+      return selectedWorld;
+    };
+    sel.addEventListener('change', async () => {
+      const previousWorldId = activeWorldId;
+      const requestedWorldId = sel.value;
+      let switchIssued = false;
+      sel.disabled = true;
+      try {
+        if (playTargetId) await stopPlay(playTargetId);
+        switchIssued = true;
+        const response = await fetch('/api/world/switch', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: requestedWorldId }),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+        const result = await response.json() as { active?: string };
+        if (result.active !== requestedWorldId) throw new Error('world switch rejected');
+        const c = await activateWorldView(requestedWorldId);
+        showToast(`已切换到 ${c?.name ?? requestedWorldId}`, 'success');
+      } catch {
+        let actualWorldId: string | null = null;
+        if (switchIssued) {
+          try {
+            const status = await fetch('/api/worlds');
+            const state = await status.json() as { active?: string };
+            if (status.ok && typeof state.active === 'string') actualWorldId = state.active;
+          } catch { /* 继续执行幂等回滚 */ }
+        }
+        if (actualWorldId === requestedWorldId) {
+          try {
+            const c = await activateWorldView(requestedWorldId);
+            showToast(`已切换到 ${c?.name ?? requestedWorldId}，状态已重新确认`, 'success');
+            return;
+          } catch { /* 快照不可用时恢复到先前世界 */ }
+        }
+        let rollbackConfirmed = !switchIssued || actualWorldId === previousWorldId;
+        if (!rollbackConfirmed) {
+          try {
+            const rollback = await fetch('/api/world/switch', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ id: previousWorldId }),
+            });
+            const result = await rollback.json() as { active?: string };
+            rollbackConfirmed = rollback.ok && result.active === previousWorldId;
+          } catch {
+            rollbackConfirmed = false;
+          }
+        }
+        activeWorldId = previousWorldId;
+        sel.value = activeWorldId;
+        showToast(rollbackConfirmed
+          ? '平行世界切换失败，当前世界保持不变'
+          : '平行世界状态未能确认，请刷新页面重新同步', 'error');
+      } finally {
+        sel.disabled = false;
+      }
     });
   }).catch(() => { /* 单世界模式无 worlds 时静默 */ });
-  document.getElementById('side')!.addEventListener('click', () => { /* 面板区点击不动视图 */ });
+  document.getElementById('side')!.addEventListener('click', () => { /* 检查器点击不影响小镇选择 */ });
 }
 
 function renderWorldMeta(world: WorldListItem): void {
@@ -414,29 +851,57 @@ function onWheel(e: WheelEvent): void {
   const rect = canvas.getBoundingClientRect();
   const ax = e.clientX - rect.left;
   const ay = e.clientY - rect.top;
-  const factor = e.deltaY < 0 ? 1.25 : 0.8;
-  const next = zoomScale(camera.scale, factor, fitScale);
-  const off = zoomOffsets(ax, ay, camera.scale, next, camera.offX, camera.offY, TILE);
-  camera.scale = next;
-  camera.offX = off.offX;
-  camera.offY = off.offY;
+  setPixelZoom(stepPixelZoom(camera.scale, e.deltaY < 0 ? 1 : -1), ax, ay);
+}
+
+function onMapPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) return;
+  dragState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    offX: camera.offX,
+    offY: camera.offY,
+    moved: false,
+  };
+  canvas.setPointerCapture(event.pointerId);
+  canvas.classList.add('is-dragging');
+}
+
+function onMapPointerMove(event: PointerEvent): void {
+  if (!dragState || dragState.pointerId !== event.pointerId) return;
+  const dx = event.clientX - dragState.startX;
+  const dy = event.clientY - dragState.startY;
+  if (Math.hypot(dx, dy) > 5) dragState.moved = true;
+  camera.offX = dragState.offX + dx;
+  camera.offY = dragState.offY + dy;
+  clampCamera();
+  tooltip = null;
+}
+
+function onMapPointerUp(event: PointerEvent): void {
+  if (!dragState || dragState.pointerId !== event.pointerId) return;
+  suppressMapClick = dragState.moved;
+  dragState = null;
+  canvas.classList.remove('is-dragging');
+  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
 }
 
 function onClick(ev: MouseEvent): void {
   if (!snap) return;
+  if (suppressMapClick) {
+    suppressMapClick = false;
+    return;
+  }
   const { tx, ty } = tileAt(ev);
   const agent = snap.agents.find((a) => Math.abs(a.x - tx) <= 0.5 && Math.abs(a.y - ty) <= 0.5);
   if (agent) {
-    selectedId = agent.id;
-    selectedObjectId = null;
-    updatePanel();
+    selectAgent(agent.id, false);
     return;
   }
   // 未命中 NPC → 命中对象则显示建筑信息卡
   const obj = findObjectAtTile(tx, ty);
-  selectedId = null;
-  selectedObjectId = obj?.id ?? null;
-  updatePanel();
+  selectObject(obj?.id ?? null);
 }
 
 function onMouseMove(ev: MouseEvent): void {
@@ -482,6 +947,7 @@ function findObjectAtTile(tx: number, ty: number): ObjectView | null {
 }
 
 let activeTab = 'detail';
+let playStopPromise: Promise<void> | null = null;
 
 function updatePanel(): void {
   const body = document.getElementById('panel-body')!;
@@ -501,23 +967,23 @@ function updatePanel(): void {
   }
   if (activeTab === 'detail') renderDetail(body, a);
   else if (activeTab === 'profile') renderProfile(body, a);
-  else void renderMind(body, a.id, activeTab);
+  else void renderMind(body, a.id, activeTab, activeWorldId);
 }
 
 // —— 玩家扮演 ——
 function togglePlay(id: string): void {
-  if (playing.has(id)) stopPlay(id);
-  else startPlay(id);
+  const action = playing.has(id) ? stopPlay(id) : startPlay(id);
+  void action.catch(() => showToast('扮演状态同步失败，请稍后重试', 'error'));
 }
 
-function startPlay(id: string): void {
+async function startPlay(id: string): Promise<void> {
   // 若此前在扮演其他 NPC，先清除服务端覆盖
   if (playTargetId && playTargetId !== id) {
-    void fetch(`/api/player/${encodeURIComponent(playTargetId)}/act`, { method: 'DELETE' });
-    playing.delete(playTargetId);
+    await stopPlay(playTargetId);
   }
   playing.add(id);
   playTargetId = id;
+  playWorldId = activeWorldId;
   const input = document.getElementById('play-input') as HTMLInputElement;
   input.value = '';
   document.getElementById('play-bar')!.hidden = false;
@@ -525,31 +991,52 @@ function startPlay(id: string): void {
   updatePanel();
 }
 
-function stopPlay(id: string): void {
-  playing.delete(id);
-  if (playTargetId === id) playTargetId = null;
-  document.getElementById('play-bar')!.hidden = true;
-  void fetch(`/api/player/${encodeURIComponent(id)}/act`, { method: 'DELETE' });
-  updatePanel();
+async function stopPlay(id: string): Promise<void> {
+  if (playStopPromise) return playStopPromise;
+  const worldId = playWorldId ?? activeWorldId;
+  const operation = (async () => {
+    const response = await fetch(`/api/player/${encodeURIComponent(id)}/act?worldId=${encodeURIComponent(worldId)}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(String(response.status));
+    const result = await response.json() as { worldId?: string };
+    if (result.worldId !== worldId) throw new Error('player world mismatch');
+    playing.delete(id);
+    if (playTargetId === id) playTargetId = null;
+    if (playWorldId === worldId) playWorldId = null;
+    document.getElementById('play-bar')!.hidden = playTargetId === null;
+    updatePanel();
+  })();
+  playStopPromise = operation;
+  try {
+    await operation;
+  } finally {
+    if (playStopPromise === operation) playStopPromise = null;
+  }
 }
 
 async function sendPlay(): Promise<void> {
   if (!playTargetId) return;
+  const worldId = playWorldId;
+  if (!worldId || worldId !== activeWorldId) throw new Error('player world changed');
   const input = document.getElementById('play-input') as HTMLInputElement;
   const instruction = input.value.trim();
   if (!instruction) return;
-  await fetch(`/api/player/${encodeURIComponent(playTargetId)}/act`, {
+  const response = await fetch(`/api/player/${encodeURIComponent(playTargetId)}/act?worldId=${encodeURIComponent(worldId)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ instruction }),
   });
+  if (!response.ok) throw new Error(String(response.status));
+  const result = await response.json() as { worldId?: string };
+  if (result.worldId !== worldId) throw new Error('player world mismatch');
   input.value = '';
 }
 
 function bindPlayBar(): void {
-  document.getElementById('play-send')!.addEventListener('click', () => void sendPlay());
+  document.getElementById('play-send')!.addEventListener('click', () => {
+    void sendPlay().catch(() => showToast('角色指令发送失败，请检查当前世界', 'error'));
+  });
   document.getElementById('play-exit')!.addEventListener('click', () => {
-    if (playTargetId) stopPlay(playTargetId);
+    if (playTargetId) void stopPlay(playTargetId).catch(() => showToast('扮演状态同步失败', 'error'));
   });
 }
 
@@ -560,6 +1047,17 @@ function updateHud(): void {
   const mm = String(c.minutesOfDay % 60).padStart(2, '0');
   const paused = snap.paused ? ' ⏸ 已暂停' : '';
   document.getElementById('clock')!.textContent = `第${c.day}天 ${hh}:${mm}${paused}`;
+  document.querySelectorAll<HTMLButtonElement>('#controls button[data-action]').forEach((button) => {
+    const action = button.dataset.action;
+    const speed = Number(button.dataset.value ?? NaN);
+    const active = action === 'pause' ? snap!.paused : !snap!.paused && speed === snap!.speedPerRealSecond;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+    if (action === 'pause') {
+      button.textContent = snap!.paused ? '继续' : '暂停';
+      button.setAttribute('aria-label', snap!.paused ? '继续运行所有平行世界' : '暂停所有平行世界');
+    }
+  });
 }
 
 /** 环境粒子：白天炊烟（咖啡馆/面包店/住宅烟囱）、夜间萤火虫（湖/公园/树林，≤40 只） */
@@ -692,39 +1190,52 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
-  if (viewMode !== 'narrative' && now - lastMetricsAt > 2000) {
+  if (now - lastMetricsAt > 2000) {
     lastMetricsAt = now;
-    void fetchMetrics().then((m) => { metricsCache = m; });
+    const requestedWorld = activeWorldId;
+    void fetchMetrics(requestedWorld).then((metrics) => {
+      metricsByWorld.set(requestedWorld, metrics);
+      if (activeWorldId === requestedWorld) metricsCache = metrics;
+    }).catch(() => {
+      metricsByWorld.set(requestedWorld, emptyMetrics());
+      if (activeWorldId === requestedWorld) metricsCache = emptyMetrics();
+    });
   }
-  if (viewMode === 'map') {
-    const g = document.getElementById('game') as HTMLCanvasElement;
-    resizeConsole(g);
-    if (snap) drawMiniWorld(g.getContext('2d')!, snap, g.width, g.height);
-  } else if (viewMode === 'net') {
-    const net = document.getElementById('net-canvas') as HTMLCanvasElement;
-    resizeConsole(net);
-    drawNetwork(net.getContext('2d')!, snap?.agents ?? [], metricsCache.pairs, net.width, net.height, now);
-  } else if (viewMode === 'metrics') {
-    const met = document.getElementById('metrics-canvas') as HTMLCanvasElement;
-    resizeConsole(met);
-    drawMetrics(met.getContext('2d')!, metricsCache, met.width, met.height);
-  } else {
-    void 0; // 叙事视图：由 SSE 事件 + 2s 轮询驱动渲染
+  draw();
+  const net = document.getElementById('net-canvas') as HTMLCanvasElement;
+  const netViewport = resizeConsole(net);
+  if (netViewport.visible) {
+    const netCtx = net.getContext('2d')!;
+    netCtx.setTransform(netViewport.dpr, 0, 0, netViewport.dpr, 0, 0);
+    networkNodes = drawNetwork(netCtx, snap?.agents ?? [], metricsCache.pairs, netViewport.width, netViewport.height, now, selectedId, hoveredNetworkId);
+  }
+  const met = document.getElementById('metrics-canvas') as HTMLCanvasElement;
+  const metricViewport = resizeConsole(met);
+  if (metricViewport.visible) {
+    const metricCtx = met.getContext('2d')!;
+    metricCtx.setTransform(metricViewport.dpr, 0, 0, metricViewport.dpr, 0, 0);
+    drawMetrics(metricCtx, metricsCache, metricViewport.width, metricViewport.height, activeMetric);
   }
   requestAnimationFrame(loop);
 }
 
-/** 控制台画布铺满窗口（与游戏画布同规格） */
-function resizeConsole(c: HTMLCanvasElement): void {
-  const stage = document.getElementById('stage')!;
+/** 控制台画布跟随各自研究视窗尺寸。 */
+function resizeConsole(c: HTMLCanvasElement): { width: number; height: number; dpr: number; visible: boolean } {
+  const host = c.parentElement;
+  if (!host) return { width: 0, height: 0, dpr: 1, visible: false };
   const dpr = window.devicePixelRatio || 1;
-  const w = Math.floor(stage.clientWidth * dpr);
-  const h = Math.floor(stage.clientHeight * dpr);
-  if (c.width === w && c.height === h) return;
-  c.width = w;
-  c.height = h;
-  c.style.width = `${stage.clientWidth}px`;
-  c.style.height = `${stage.clientHeight}px`;
+  const width = host.clientWidth;
+  const height = host.clientHeight;
+  if (width <= 0 || height <= 0) return { width: 0, height: 0, dpr, visible: false };
+  const bitmapWidth = Math.max(1, Math.floor(width * dpr));
+  const bitmapHeight = Math.max(1, Math.floor(height * dpr));
+  if (c.width !== bitmapWidth || c.height !== bitmapHeight) {
+    c.width = bitmapWidth;
+    c.height = bitmapHeight;
+  }
+  c.style.width = `${width}px`;
+  c.style.height = `${height}px`;
+  return { width, height, dpr, visible: true };
 }
 
 function draw(): void {
@@ -732,6 +1243,10 @@ function draw(): void {
   const nowMs = performance.now();
   const worldW = snap.gridW * TILE;
   const worldH = snap.gridH * TILE;
+  resetCamera();
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#090d15';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   // 世界层：应用摄像机变换后绘制（地形/对象/agent/气泡）
   applyCamera();
   drawTerrain(ctx, worldW, worldH);

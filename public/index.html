@@ -2,85 +2,135 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>multiagent-town 像素小镇</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#090d15" />
+  <title>涌现社会研究台 · multiagent-town</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <div id="hud">
-    <div id="brand"><b>EMERGENCE</b> CONSOLE</div>
-    <div id="clock">第1天 00:00</div>
+  <header id="hud">
+    <div id="brand"><span class="brand-mark">E</span><div><b>EMERGENCE</b><small>SOCIAL OBSERVATORY</small></div></div>
+    <div class="hud-status"><span class="status-label">世界时钟</span><strong id="clock">第1天 00:00</strong></div>
     <div class="spacer"></div>
-    <div class="seg">
-      <button id="view-narrative" class="active">🎭 叙事</button>
-      <button id="view-map">🗺 地图</button>
-      <button id="view-net">🕸 网络</button>
-      <button id="view-metrics">📈 指标</button>
+    <div class="research-mode" id="connection-status" role="status" aria-live="polite"><span class="live-dot"></span>纵向社会观测 · 实时</div>
+    <div class="seg" id="controls" aria-label="世界时间控制">
+      <button data-action="pause">暂停</button>
+      <button data-action="speed" data-value="1">1×</button>
+      <button data-action="speed" data-value="60">60×</button>
+      <button data-action="speed" data-value="360">360×</button>
     </div>
-    <div class="seg" id="controls">
-      <button data-action="pause">⏸ 暂停</button>
-      <button data-action="speed" data-value="1">1x</button>
-      <button data-action="speed" data-value="60">60x</button>
-      <button data-action="speed" data-value="360">360x</button>
-    </div>
-  </div>
+  </header>
 
-  <aside id="rail">
-    <div class="card">
-      <h4>平行世界</h4>
-      <select id="world-select" style="width:100%;background:var(--bg-2);border:1px solid var(--panel-edge);border-radius:6px;color:var(--ink);padding:6px;font-family:var(--mono)"></select>
-      <div style="font-size:11px;color:var(--ink-dim);margin-top:6px" id="world-desc"></div>
-      <div id="world-badges" aria-label="当前世界实验配置"></div>
-    </div>
-    <div class="card" id="run-status"><div class="dot"></div>实验：<b>未运行</b></div>
-    <div class="card">
-      <h4>实验配置</h4>
-      <div class="switch-row"><label>关系记忆</label>
-        <label class="switch"><input type="checkbox" id="exp-mem" checked /><span class="knob"></span></label></div>
-      <div class="switch-row"><label>馈礼交换</label>
-        <label class="switch"><input type="checkbox" id="exp-gift" checked /><span class="knob"></span></label></div>
-      <div class="field-row" style="margin-bottom:10px"><span>天数</span>
-        <input id="exp-days" type="number" value="30" min="1" max="365" /></div>
-      <div class="rail-actions">
-        <button class="icon-btn primary" id="exp-start">▶ 开始</button>
-        <button class="icon-btn danger" id="exp-stop">■ 停止</button>
-        <button class="icon-btn" id="exp-export" style="grid-column:1/-1">💾 导出指标 JSON</button>
+  <main id="research-workspace">
+    <section class="viewport town-viewport" data-view="town" aria-labelledby="town-title">
+      <header class="viewport-head">
+        <div><span class="eyebrow">VIEW 01 · FIELD</span><h2 id="town-title">小镇现场</h2></div>
+        <div class="viewport-head-tools">
+          <div class="viewport-legend"><span><i class="legend-dot active"></i>实时</span><span id="map-zoom-label">100% · 拖拽平移</span></div>
+          <div class="viewport-actions" aria-label="小镇视图操作">
+            <button class="tool-button" id="map-zoom-out" type="button" aria-label="缩小小镇">−</button>
+            <button class="tool-button" id="map-reset" type="button">1:1</button>
+            <button class="tool-button" id="map-zoom-in" type="button" aria-label="放大小镇">＋</button>
+            <button class="tool-button focus-view" type="button" data-focus-view="town" aria-pressed="false">聚焦</button>
+          </div>
+        </div>
+      </header>
+      <div id="town-body" class="viewport-body">
+        <canvas id="game" aria-label="小镇实时地图"></canvas>
+        <aside class="town-roster glass-card" aria-label="居民名册">
+          <div class="card-title"><span>居民名册</span><button id="roster-toggle" class="mini-action" type="button" aria-expanded="true">收起</button></div>
+          <div id="roster"></div>
+        </aside>
       </div>
-    </div>
-    <div class="card">
-      <h4>居民名册</h4>
-      <div id="roster"></div>
-    </div>
-  </aside>
+    </section>
 
-  <main id="stage">
-    <div id="narrative"></div>
-    <canvas id="game" style="display:none"></canvas>
-    <canvas id="net-canvas"></canvas>
-    <canvas id="metrics-canvas"></canvas>
+    <section class="viewport relation-viewport" data-view="relations" aria-labelledby="relation-title">
+      <header class="viewport-head">
+        <div><span class="eyebrow">VIEW 02 · STRUCTURE</span><h2 id="relation-title">互动关系与伙伴选择</h2></div>
+        <div class="viewport-head-tools">
+          <div class="viewport-legend"><span>箭头＝选择方向</span><span>边宽＝累计次数</span></div>
+          <div class="viewport-actions">
+            <button class="tool-button" id="network-reset" type="button">重排</button>
+            <button class="tool-button focus-view" type="button" data-focus-view="relations" aria-pressed="false">聚焦</button>
+          </div>
+        </div>
+      </header>
+      <div class="relation-stack viewport-body">
+        <div class="canvas-zone network-zone">
+          <div class="zone-label">有向伙伴选择网络 · 点击节点联动人物</div>
+          <canvas id="net-canvas" aria-label="居民关系网络"></canvas>
+        </div>
+        <div class="canvas-zone metrics-zone">
+          <div class="zone-label">结构指标 · 时间序列</div>
+          <div id="metric-tabs" role="tablist" aria-label="选择结构指标"></div>
+          <canvas id="metrics-canvas" aria-label="社会结构指标"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="viewport inspector-viewport" data-view="inspector" aria-labelledby="inspector-title">
+      <header class="viewport-head">
+        <div><span class="eyebrow">VIEW 03 · INSPECTOR</span><h2 id="inspector-title">人物与世界</h2></div>
+        <div class="viewport-head-tools horizontal">
+          <select id="world-select" aria-label="切换平行世界"></select>
+          <button class="tool-button focus-view" type="button" data-focus-view="inspector" aria-pressed="false">聚焦</button>
+        </div>
+      </header>
+      <div class="inspector-scroll viewport-body">
+        <section class="world-card glass-card" aria-label="当前世界状态">
+          <div class="world-card-top">
+            <div><span class="section-kicker">当前世界</span><div id="world-desc">载入世界状态……</div></div>
+            <div class="card" id="run-status" role="status" aria-live="polite"><div class="dot"></div><span>实验</span><b>未运行</b></div>
+          </div>
+          <div id="world-badges" aria-label="当前世界实验配置"></div>
+          <div class="experiment-grid">
+            <label class="compact-field">关系记忆
+              <span class="switch"><input type="checkbox" id="exp-mem" checked /><span class="knob"></span></span>
+            </label>
+            <label class="compact-field">馈礼交换
+              <span class="switch"><input type="checkbox" id="exp-gift" checked /><span class="knob"></span></span>
+            </label>
+            <label class="compact-field days-field">运行天数<input id="exp-days" type="number" value="30" min="1" max="365" /></label>
+          </div>
+          <div class="rail-actions">
+            <button class="icon-btn primary" id="exp-start">开始实验</button>
+            <button class="icon-btn danger" id="exp-stop">停止</button>
+            <button class="icon-btn" id="exp-export">导出指标</button>
+          </div>
+        </section>
+
+        <section id="character-card" class="character-summary glass-card">
+          点击小镇居民，查看人物属性与当前状态
+        </section>
+
+        <div id="side">
+          <div id="panel">
+            <div id="panel-tabs" role="tablist" aria-label="人物研究信息">
+              <button data-tab="detail" class="tab active" role="tab" aria-selected="true">状态</button>
+              <button data-tab="profile" class="tab" role="tab" aria-selected="false">属性</button>
+              <button data-tab="memory" class="tab" role="tab" aria-selected="false">记忆</button>
+              <button data-tab="reflection" class="tab" role="tab" aria-selected="false">反思</button>
+              <button data-tab="dialogue" class="tab" role="tab" aria-selected="false">对话</button>
+              <button data-tab="relation" class="tab" role="tab" aria-selected="false">关系</button>
+            </div>
+            <div id="panel-body" role="tabpanel"><p id="panel-empty">选择一位居民开始观察</p></div>
+          </div>
+        </div>
+
+        <section class="timeline-card glass-card" aria-label="社会互动时间线">
+          <div class="card-title"><span>社会互动时间线</span><button id="narrative-jump" class="mini-action" type="button" hidden>回到最新</button></div>
+          <div id="narrative"></div>
+        </section>
+      </div>
+    </section>
   </main>
 
-  <aside id="feed">
-    <h4>角色详情</h4>
-    <div id="character-card" style="color:var(--ink-dim);font-size:12px">点击左侧名册或对话头像查看角色</div>
-  </aside>
-
-  <div id="side">
-    <div id="panel">
-      <div id="panel-tabs">
-        <button data-tab="detail" class="tab active">详情</button>
-        <button data-tab="profile" class="tab">档案</button>
-        <button data-tab="memory" class="tab">记忆</button>
-        <button data-tab="reflection" class="tab">反思</button>
-        <button data-tab="dialogue" class="tab">对话</button>
-        <button data-tab="relation" class="tab">关系</button>
-      </div>
-      <div id="panel-body"><p id="panel-empty" style="color:var(--ink-dim)">点击小镇里的角色查看详情</p></div>
-    </div>
-  </div>
   <div id="play-bar" hidden>
     <input id="play-input" placeholder="输入指令，如：去告诉陈默今晚派对" maxlength="120" />
     <button id="play-send">执行</button>
     <button id="play-exit">退出扮演</button>
   </div>
+  <div id="ui-toast" role="status" aria-live="polite" hidden></div>
   <script src="/client.js"></script>
 </body>
+</html>

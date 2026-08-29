@@ -1,7 +1,7 @@
 // tiles.ts 冒烟：未加载时全部 ready=false 且 draw 不崩（node 无 DOM/Image 路径）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sheetReady, drawTile, drawTileW, TILE_MAP, TOWN_SHEET, INTERIOR_SHEET } from '../src/web/client/tiles';
+import { sheetReady, drawTile, drawTileW, TILE_MAP, TOWN_SHEET, INTERIOR_SHEET, TERRAIN_SHEETS, PROGRAMMATIC_FURNITURE } from '../src/web/client/tiles';
 
 function mockCtx() {
   const noop = () => {};
@@ -37,7 +37,17 @@ test('TILE_MAP 结构完整：全部 terrain 键存在且坐标非负整数', ()
     assert.ok(TILE_MAP.furniture[f] && TILE_MAP.furniture[f].frames.length >= 1, f);
   }
   assert.ok(TILE_MAP.interior.floor.length === 2 && TILE_MAP.interior.wallTile.length === 2);
-  assert.ok(TILE_MAP.interior.floorSheet === 'sv_floor');
+  assert.equal(TILE_MAP.interior.floorSheet, 'interiors');
+  assert.deepEqual(TILE_MAP.interior.floor, [16, 144]);
+  assert.deepEqual(TILE_MAP.interior.wallTile, [16, 16]);
+  assert.equal(PROGRAMMATIC_FURNITURE, true);
+  assert.deepEqual(TERRAIN_SHEETS, {
+    grass: 'sv_field', dirt: 'sv_field', path: 'sv_field', plaza: 'sv_field',
+    flowers: 'sv_nature', crops: 'sv_field', tree2: 'sv_nature', flowerBed: 'sv_nature',
+  });
+  assert.deepEqual(TILE_MAP.terrain.grass, [16, 64]);
+  assert.deepEqual(TILE_MAP.terrain.dirt, [16, 16]);
+  assert.deepEqual(TILE_MAP.terrain.tree2, [0, 0]);
 });
 
 test('TOWN_SHEET/INTERIOR_SHEET 常量指向已下载包（tiny16 已下载、dungeon 未下载）', () => {

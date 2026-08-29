@@ -40,22 +40,23 @@ if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
   }
 }
 
-// 外景/内饰首选包（默认取已下载包中的优先级；调用方再按 sheetReady 做回退链）
-//   TOWN_SHEET: tiny16 > tinytown > town（tiny16 已下载 → 'tiny16'）
+// 完整小镇统一使用 Serene Village；TOWN_SHEET 仅服务旧外景回退分支。
 //   INTERIOR_SHEET: dungeon > interiors（dungeon 未下载 → 'interiors'）
 export const TOWN_SHEET: 'town' | 'tiny16' | 'tinytown' = 'tiny16';
 export const INTERIOR_SHEET: 'interiors' | 'dungeon' = 'interiors';
+/** 家具采用语义明确的程序化像素组件，保证床、沙发、桌台与交互目标一致。 */
+export const PROGRAMMATIC_FURNITURE = true;
 
 // 地形坐标键 → 所属图集：各键自描述所属图集，绘制方按 sheetReady 判定并回退（与 TILE_MAP.terrain 消费键一致）
 export const TERRAIN_SHEETS: Record<'grass' | 'dirt' | 'path' | 'plaza' | 'flowers' | 'crops' | 'tree2' | 'flowerBed', SheetId> = {
-  grass: 'town',       // town r00c0 草地
-  dirt: 'tiny16',      // tiny16 沙土路
-  path: 'tiny16',      // tiny16 沙土路
-  plaza: 'tiny16',     // tiny16 沙土路
-  flowers: 'tiny16',   // tiny16 白色花簇
-  crops: 'tiny16',     // tiny16 深绿作物行
-  tree2: 'tiny16',     // tiny16 针叶树
-  flowerBed: 'tiny16', // tiny16 黄色花丛
+  grass: 'sv_field',
+  dirt: 'sv_field',
+  path: 'sv_field',
+  plaza: 'sv_field',
+  flowers: 'sv_nature',
+  crops: 'sv_field',
+  tree2: 'sv_nature',
+  flowerBed: 'sv_nature',
 };
 
 export function sheetReady(id: SheetId): boolean {
@@ -80,7 +81,7 @@ export function drawTileW(
   ctx.imageSmoothingEnabled = prev;
 }
 
-// —— 命名坐标映射（数值为 16px 网格像素坐标，依据见 task-1-report.md 的像素解码记录）——
+// —— 命名坐标映射：地表取 48×48 autotile 组的可平铺中心 16×16；整房保留原始矩形 ——
 export interface TileMap {
   terrain: { grass: number[]; grassAlt: number[]; dirt: number[]; path: number[]; plaza: number[]; flowers: number[]; crops: number[]; tree2: number[]; flowerBed: number[] };
   water: { frames: number[][]; sheet: SheetId };
@@ -94,32 +95,32 @@ export interface TileMap {
 //   town   (medieval-town.png 384×256=24×16)：草地 r00c0=(0,0)；红砖顶 r12c01=(192,16)；白墙房 wall=r09c04=(144,64)、door=r11c05=(176,80)、window=白墙(144,64)；灰石房 wall=r17c04=(272,64)、door=r19c05=(304,80)、window=r21c05=(336,80)。
 //   tiny16 (sharm-tiny16.png 384×224=24×14)：沙土路 path=r10c05=(160,80)、plaza=r11c05=(176,80)、dirt=r04c05=(64,80)；针叶树 tree2=r00c01=(0,16)；白色花簇 flowers=r00c07=(0,112)；黄色花丛 flowerBed=r00c11=(0,176)；作物行 crops=r12c12=(192,192)；木板桥 pier=r10c11=(160,176)；粉砖房 wall=r10c01=(160,16)、roof=r10c00=(160,0)、door=r12c03=(192,48)；蓝石房 wall=r03c01=(48,16)、roof=r02c01=(32,16)、door=r03c02=(48,32)。
 //   forest (ansimuz-forest.png 544×512=34×32)：树冠 tree=r01c30=(480,16)。
-//   interiors (medieval-interior.png 320×320=20×20)：地板 floor=r00c00=(0,0)、墙砖 wallTile=r01c00=(0,16)。
+//   interiors (medieval-interior.png 320×320=20×20)：完整木地板 floor=(16,144)、完整石墙 wallTile=(16,16)。
 //   程序化回退：water 与家具（对应图集无语义砖）。
 export const TILE_MAP: TileMap = {
   terrain: {
-    grass: [0, 32],      // sv_field 浅绿草地
-    grassAlt: [32, 32],  // sv_field 深绿草地
-    dirt: [0, 0],        // sv_field 沙地
-    path: [0, 0],        // sv_field 沙地
-    plaza: [16, 0],      // sv_field 沙地变体
-    flowers: [0, 128],   // sv_nature 红花丛
-    crops: [0, 32],      // sv_field 浅绿草地（农田绿毯）
-    tree2: [48, 240],    // sv_nature 大树（64×48 冠+干）
-    flowerBed: [0, 128], // sv_nature 红花丛
+    grass: [16, 64],     // sv_field 浅绿草地中心
+    grassAlt: [16, 112], // sv_field 深绿草地中心
+    dirt: [16, 16],      // sv_field 沙地中心
+    path: [16, 16],      // sv_field 沙地中心
+    plaza: [16, 16],     // sv_field 沙地中心
+    flowers: [48, 176],  // sv_nature 红花
+    crops: [16, 112],    // sv_field 深绿草地（农田绿毯）
+    tree2: [0, 0],       // sv_nature 树木
+    flowerBed: [0, 224], // sv_nature 成簇花草
   },
   water: { frames: [[0, 32], [16, 32]], sheet: 'forest' }, // 水保持程序化
   tree: { frames: [[480, 16]], sheet: 'forest' },          // forest 树冠（备选）
   buildings: {
-    cafe:        { sprite: [304, 80, 64, 64],  sheet: 'sv_house' }, // 橙墙两层房
-    bookstore:   { sprite: [304, 224, 64, 64], sheet: 'sv_house' }, // 棕墙两层房
-    post_office: { sprite: [304, 80, 64, 64],  sheet: 'sv_house' },
-    bakery:      { sprite: [304, 224, 64, 64], sheet: 'sv_house' },
-    clinic:      { sprite: [240, 64, 64, 48],  sheet: 'sv_house' }, // 黄褐平房
-    home:        { sprite: [304, 224, 64, 64], sheet: 'sv_house' },
+    cafe:        { sprite: [0, 0, 64, 48],   sheet: 'sv_house' }, // 橙顶商铺
+    bookstore:   { sprite: [128, 0, 64, 48], sheet: 'sv_house' }, // 木墙商铺
+    post_office: { sprite: [192, 0, 64, 48], sheet: 'sv_house' }, // 粉色门面
+    bakery:      { sprite: [0, 0, 64, 48],   sheet: 'sv_house' },
+    clinic:      { sprite: [128, 0, 64, 48], sheet: 'sv_house' },
+    home:        { sprite: [128, 0, 64, 48], sheet: 'sv_house' },
     pier:        { sprite: [160, 176, 16, 16], sheet: 'tiny16' },   // 木板砖；zone 专用
-    flower_shop: { sprite: [240, 64, 64, 48],  sheet: 'sv_house' },
-    grocer:      { sprite: [304, 80, 64, 64],  sheet: 'sv_house' },
+    flower_shop: { sprite: [192, 0, 64, 48], sheet: 'sv_house' },
+    grocer:      { sprite: [0, 0, 64, 48], sheet: 'sv_house' },
   },
   furniture: {
     bed:     { frames: [[0, 192]], sw: 32, sh: 64, sheet: 'limezu' },   // 白床左列（床头+枕+被）
@@ -127,6 +128,5 @@ export const TILE_MAP: TileMap = {
     table:   { frames: [[32, 320]], sw: 32, sh: 32, sheet: 'limezu' },  // 木圆桌
     counter: { frames: [[384, 896]], sw: 64, sh: 32, sheet: 'limezu' }, // 厨房台面
   },
-  interior: { floor: [0, 80], floorSheet: 'sv_floor', wallTile: [0, 16], wallSheet: 'interiors' }, // 木地板 + 中世纪墙砖
+  interior: { floor: [16, 144], floorSheet: 'interiors', wallTile: [16, 16], wallSheet: 'interiors' }, // 木地板 + 石墙
 }
-

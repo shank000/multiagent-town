@@ -48,7 +48,10 @@ export function drawNpc(
     // 每行 3 帧步态（0 站立/迈步 1/2），帧序列由调用方按 WALK_CYCLE 驱动
     const sx = col * 96 + frame * 32;
     const sy = row * 128 + (DIR_ROW[dir] ?? 0);
+    const smoothing = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(sheet, sx, sy, 32, 32, x - 16, y - 26, 32, 32);
+    ctx.imageSmoothingEnabled = smoothing;
   } else {
     drawNpcProcedural(ctx, x, y, dir, frame, index, moving);
   }

@@ -1,7 +1,7 @@
 // 全屏相机纯函数：fit 缩放 / 缩放钳制 / 光标锚定偏移
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeFit, zoomScale, zoomOffsets } from '../src/web/client/camera';
+import { computeFit, zoomScale, zoomOffsets, detailScale, stepPixelZoom, clampCameraOffsets } from '../src/web/client/camera';
 import { TILE } from '../src/web/client/render';
 
 test('computeFit：48×44 网格在 1920×1080 窗口按高度铺满并居中', () => {
@@ -9,6 +9,19 @@ test('computeFit：48×44 网格在 1920×1080 窗口按高度铺满并居中', 
   assert.equal(c.scale, 1080 / (44 * 32)); // min(1920/1536, 1080/1408)
   assert.equal(c.offX, (1920 - 48 * 32 * c.scale) / 2);
   assert.equal(c.offY, 0);
+});
+
+test('细节相机以整数倍率显示像素并逐级缩放', () => {
+  assert.equal(detailScale(0.42), 1);
+  assert.equal(detailScale(2.8), 2);
+  assert.equal(stepPixelZoom(1, 1), 2);
+  assert.equal(stepPixelZoom(4, 1), 4);
+  assert.equal(stepPixelZoom(3, -1), 2);
+});
+
+test('平移边界保证世界始终保留可见区域', () => {
+  assert.deepEqual(clampCameraOffsets(500, 400, 1536, 1408, 1, 900, 700), { offX: 72, offY: 72 });
+  assert.deepEqual(clampCameraOffsets(500, 400, 100, 100, 1, 20, 30), { offX: 200, offY: 150 });
 });
 
 test('computeFit：窄窗口按宽度铺满', () => {

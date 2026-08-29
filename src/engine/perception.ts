@@ -30,10 +30,18 @@ function attentionOf(base: number, distance: number, range: number): number {
 
 export class PerceptionEngine {
   private buffers = new Map<string, PerceptionEntry[]>();
+  private unsubscribe: (() => void) | null;
 
-  constructor(private world: WorldState, private log: { subscribe(fn: (e: GameEvent) => void): () => void }) {
-    this.log.subscribe((e) => this.onEvent(e as GameEvent & { payload?: { kind?: string }; }));
+  constructor(private world: WorldState, log: { subscribe(fn: (e: GameEvent) => void): () => void }) {
+    this.unsubscribe = log.subscribe((e) => this.onEvent(e as GameEvent & { payload?: { kind?: string }; }));
     // 外部注入初始事件流由调用方 eventByEvent 喂入；订阅已在构造时挂接
+  }
+
+  /** 解除事件订阅并释放缓冲；可安全重复调用。 */
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.buffers.clear();
   }
 
   /** 事件入缓冲：判断事件 actor 与每位访客的距离并计算注意力 */

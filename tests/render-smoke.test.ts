@@ -1,7 +1,7 @@
 // 渲染冒烟：昼夜纯函数数值合法 + 各绘制函数在 mock ctx 下不抛异常
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dayNightState, applyDayNight, drawRiver, drawTree, drawLampGlow, drawObjectDetail, drawFurniture, drawTerrain, TILE } from '../src/web/client/render';
+import { dayNightState, applyDayNight, drawRiver, drawTree, drawLampGlow, drawObjectDetail, drawFurniture, drawTerrain, fitPixelSprite, TILE } from '../src/web/client/render';
 import type { ObjectView } from '../src/web/client/types';
 
 function mockCtx() {
@@ -26,6 +26,11 @@ test('dayNightState：无跳变连续过渡', () => {
     const s = dayNightState(m);
     assert.ok(s.alpha >= 0 && s.alpha <= 1, `alpha 越界 at ${m}`);
   }
+});
+
+test('整房精灵保持整数倍等比缩放并底部居中', () => {
+  assert.deepEqual(fitPixelSprite(64, 48, 0, 0, 128, 128), { dx: 0, dy: 32, dw: 128, dh: 96 });
+  assert.deepEqual(fitPixelSprite(64, 48, 10, 20, 96, 96), { dx: 26, dy: 68, dw: 64, dh: 48 });
 });
 
 test('绘制函数冒烟：mock ctx 不抛异常', () => {
