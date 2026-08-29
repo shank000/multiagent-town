@@ -1,6 +1,6 @@
 # 项目交接手册（multiagent-town → 涌现观测台）
 
-> 本文档供接手 agent 完整理解项目现状与后续任务。最后更新：2026-08-22，HEAD = d5f0ba6，135/135 测试全绿，工作区干净。
+> 本文档供接手 agent 完整理解项目现状与后续任务。状态日期：2026-08-23；当前提交以 `git rev-parse HEAD` 为准，验收以 `pnpm test && pnpm typecheck` 为准。
 
 ## 一、项目是什么
 
@@ -16,7 +16,7 @@
 
 - TypeScript strict、Node 22（`node:sqlite` DatabaseSync）、tsx、esbuild、node:test。**零运行时依赖**。
 - 常用命令：
-  - `pnpm test`（135 项）｜`pnpm typecheck`｜`pnpm build:web`
+  - `pnpm test`｜`pnpm typecheck`｜`pnpm build:web`
   - `pnpm town-web --port 8787` → http://127.0.0.1:8787（平行世界控制台+酒馆叙事）
   - `pnpm experiment --days 20 --seeds 3`（2×2 因子预实验 CLI，输出四格指标表）
   - `pnpm town-agent login/look/map/status/walk/interact/say`（AI 接入协议，需要服务在跑）
@@ -29,7 +29,7 @@ src/core/      world(48×44网格/A*/walkable) · time(时钟) · types · state
 src/engine/    seed(6居民persona+对象树) · mind(记忆/反思/规划/对话/关系/谣言/活动门面)
                social(邻近闲聊) · town-model(公开活动) · rumors(选择性披露) · loop(主循环)
                economy(金币/物品/赠礼) · experiment(伙伴选择实验·候选快照) · experiment-runner(实时挂载)
-               metrics(共享测量：重复率/互惠/聚类/多样性) · perception(Alicization式感知缓冲)
+               metrics(重复率/互惠/聚类/多样性/HHI/矩阵持续性/枢纽集中度) · perception(Alicization式感知缓冲)
                world-factory(平行世界装配：mem-on/mem-off/rumor) · player(玩家指令) · dialogue/reflection/memory-writer
 src/llm/       gateway(路由/重试/计量) · prompts(模板) · mock(确定性决策) · deepseek
 src/store/     db(sqlite schema: world_meta/agents/objects/events/memories/reflections/plans/messages/relationships/rumors)
@@ -38,7 +38,7 @@ src/web/client camera(全屏相机) · console(网络图/指标曲线/小地图/
                effects(粒子) · hud/panel(旧界面控件) · main(编排) · render/tiles/sprites(旧小镇渲染，叙事态下不展示)
                perception 前端对应叙事流；kinds 事件驱动叙事卡
 src/cli/       town-web · experiment(2×2 CLI) · town-agent(协议) · run/replay/interview
-tests/         135 项 node:test（验收 m0-m3/town2 + 单元 + server-guest/narrative/experiment）
+tests/         node:test（验收 m0-m3/town2 + 单元 + server/narrative/experiment/contract/runtime）
 public/        index.html(三栏：rail/舞台/角色详情) · style.css(深色仪器风) · assets/(素材，叙事态仅存档)
 skills/town-agent/SKILL.md   外部 AI 接入文档
 docs/          交接/研究文档（见下）
@@ -46,7 +46,7 @@ docs/          交接/研究文档（见下）
 
 ## 四、平行世界（当前主形态）
 
-`world-factory.ts` 创建三个独立世界（各自内存库/引擎/日志/循环）：
+`world-factory.ts` 创建三个独立世界（各自数据库/引擎/日志/循环）；默认使用带时间戳与 PID 的新 run 路径，测试可用 `:memory:`。显式 `--db` 及其 w1/w2/w3 派生文件必须全部不存在，启动门禁会保护旧 run：
 - `w1` mem-on：伙伴选择可访问历史（亲密度+近因打分）+ 馈礼交换；**关闭邻近闲聊**，隔离实验变量
 - `w2` mem-off：随机选择、无馈礼（零模型对照）
 - `w3` rumor：注入秘密（`seedRumor`），观察传播链（保留社交邻近闲聊）
@@ -61,31 +61,31 @@ docs/          交接/研究文档（见下）
 - 因子1 `historyAccess`：off=均匀随机；on=按 `亲密度 + 0.5×近因(40游戏小时衰减) + 0.3×扰动` 打分
 - 因子2 `giftExchange`：每日工资 10 → 买鲜花(5) → 赠所选伙伴（A→B 情感+0.1，B→A +0.05），事件 kind=`gift`
 - 选择事件 payload 含 `mode/candidates[{id,name,affection,lastInteraction}]/chosen`——叙事「选择场景」卡依赖此数据（**删减会破坏前台**）
-- `experiment-runner.ts`：实时主循环挂载（`remainingDays` 扣减用精确 minute===1171 判定，**调速跳过窗口时扣减不生效但轮次仍会触发**——已知小缺陷，修复方向：改为跨日计数）
+- `experiment-runner.ts`：实时主循环挂载；运行天数按实际完成的 19:30 轮次结算，跨速、跨多日和 19:30 后启动均保证 N 天=N 轮
 
 ### 测量（`engine/metrics.ts`，CLI/服务端共用）
-`repeat(同对重复率) / recip(互惠性相对基线) / clus(聚类系数) / div(7日窗口伙伴多样性)` + `metricsOf()` 汇总。
-CLI 输出 2×2 四格表；`/api/experiment/metrics` 输出逐日序列+配对计数。
+`repeat / recip / clus / div / hhi / persistence / hub` 由 `metricsOf()` 统一汇总：有向边重复率、机会校正互惠性、无向聚类、7 日 sender 伙伴多样性/HHI、相邻非重叠双 7 日有向矩阵 Pearson 持续性、加权入度 Freeman 枢纽集中度。TypeScript/Python 由同一 16 日 fixture 校验完整序列。
+CLI 输出 2×2 四格表；`/api/experiment/metrics` 输出逐日序列+配对计数；前台按各指标量纲绘制小多图。
 
-### 预实验结论（20 天 × 3 种子，mock）
-- 记忆开 → 重复率 0.54-0.58 vs 记忆关 0.23-0.24（2.3×）；伙伴多样性 2.19-2.34 vs 3.53-3.55（集中化）
-- 馈礼在记忆开下有正向交互趋势（0.582/2.189 为四格极值）；互惠性跨格稳定（基线现象，鉴别对照有效）
-- 完整表见 `docs/competition-report-draft.md`
+### 本地机制正控（20 天 × 3 种子，mock）
+- seed 内汇总后，关系加权策略的平均有向重复率为 0.553/0.608，对照为 0.222；7 日伙伴多样性为 2.317/2.139，对照为 3.458
+- 这些值验证本地代码策略与测量链，不估计正式 LLM 历史可见性效应；互惠、馈礼交互和其余结构指标均只作描述
+- 逐 seed 数据见 `docs/data/local-reference-pilot-20d-3seed.v1.json`；60 天×5 seed 压力数据与环境记录见 `docs/runtime-validation.md`
 
 ## 六、比赛上下文（必须延续）
 
 - **赛事**：AI 社会科学家研究挑战赛（清华 FIB Lab），赛道 7「智能体与计算社会科学探索」
 - **硬约束**：所有研究类投稿须基于 AgentSociety² 平台实验（`pip install agentsociety2`，在线工作区有免费 LLM API）；提交=研究报告+代码+工作区压缩包（agentsociety.fiblab2025@gmail.com）；**初筛 2026-09-15**；现场 10-25；组队 3-5 人；评审五维（社科价值/问题创新/方法严谨/理论贡献/影响潜力）
-- **我方策略**：本仓库作预实验+演示台 → 平台复刻正式实验（N=24-30、三组/2×2、5 种子、60 天、稳健性子实验、Replay 数据）→ 报告成稿
-- **分析文档**：`docs/competition-track7-analysis.md`（策略）、`docs/research-narrative.md`（总纲）、`docs/competition-report-draft.md`（报告 v1 草稿，含全部预实验数据与平台计划）、`docs/alicization-study.md`（Alicization 对照）、`docs/agentopia-analysis.md`（M3 机制来源论文）
+- **我方策略**：本仓库作机制正控+演示台 → AgentSociety² 正式 2×2（N=24、5 seed、60 天）+ recent-3 稳健性 → 报告成稿
+- **分析文档**：`docs/competition-track7-analysis.md`（策略）、`docs/research-narrative.md`（总纲）、`docs/competition-report-draft.md`（报告 v2 草稿）、`docs/competition-execution-plan.md`（三阶段计划与风险）、`docs/alicization-study.md`（Alicization 对照）
 
 ## 七、未完成任务（按优先级）
 
-1. **AgentSociety² 平台移植**（比赛关键路径，等队伍 API Key；代码结构可参考 `world-factory`/`experiment.ts` 移植为自定义环境模块）
-2. **报告 v2**：补充平行世界对照叙事、稳健性数据
-3. **实验运行稳定性**：`experiment-runner` 跨速扣减缺陷；长时间运行内存验证
-4. **「世界配置徽标」**：每个世界在叙事流顶部显示实验差异说明
-5. **GitHub 推送**：本地领先远程 6 个提交（54947b2 起未推；github.com 443 曾不稳定，恢复后 `git push origin main`；凭据需用户 token，远程地址已去凭据化）
+1. **在线平台运行**：工作区已具协议、fresh-completion agent、环境、Replay、受控 checkpoint、24 人档案和随机化 30-run 矩阵；在线阶段固定真实模型，跑通 `AgentSociety.init/step/close`，接入互动摘要，完成崩溃恢复故障注入与容量标定，再执行 60 天运行
+2. **报告 v2 正式结果**：方法与证据边界已成型，待回填平台结果、稳健性图表与理论讨论
+3. **平台长期运行验证**：本地 60 天×5 seed 基准峰值 RSS 170,680 KB；在线容量标定继续记录 token、失败率、Replay 与 checkpoint 大小
+4. **提交封包**：报告、代码、AgentSociety² 工作区、manifest/hash、validator 输出与恢复演练
+5. **GitHub 推送**：远程为无凭据 HTTPS；使用用户 token 推送前先 fetch 并核对领先提交数
 
 ## 八、约定与红线
 

@@ -1,6 +1,6 @@
 # 给后续 Agent 的交接 Prompt（可直接复制发送）
 
-你接手的是一个已完成核心开发的多智能体社会涌现实验平台（仓库 /mnt/d/workspace/dsh/multiagent-town，TypeScript strict / Node 22 / 零运行时依赖 / node:test 135 项全绿 / HEAD aaae8ba）。项目经历「像素小镇 → 涌现控制台 → 涌现酒馆叙事层 + 平行世界」三次形态演进，当前目标是参加「AI 社会科学家研究挑战赛」赛道 7（智能体与计算社会科学探索），并作为实验室工具持续完善。
+你接手的是一个已完成核心开发与第一轮实验工程加固的多智能体社会涌现实验平台（仓库 `/mnt/d/workspace/dsh/multiagent-town`，TypeScript strict / Node 22 / 零运行时依赖）。先以 `git rev-parse HEAD` 和 `pnpm test && pnpm typecheck` 核对当前版本。项目经历「像素小镇 → 涌现控制台 → 涌现酒馆叙事层 + 平行世界」三次形态演进，当前目标是参加「AI 社会科学家研究挑战赛」赛道 7（智能体与计算社会科学探索），并作为实验室工具持续完善。
 
 ## 背景与核心研究问题（不可偏离）
 
@@ -11,20 +11,20 @@
 1. 世界层：48×44 网格世界、6 位居民（全档案/作息）、A* 寻路、时钟可变速。
 2. 心智层：记忆流（三因子检索）、日/小时规划、反思、多轮对话+摘要、关系（情感/尊重 ±0.2 夹紧）、谣言（选择性披露）、公开活动、声望榜（PageRank）。
 3. 协议层：town-agent CLI（login/look/map/status/walk/interact/say）+ 环境感知（事件权重×距离衰减，⚡●○ 分级）+ `/api/guest/*`。
-4. 实验层：每日 19:30 伙伴选择轮次（等价候选集独立互选+一对一对话）；因子1 关系记忆（off 随机 / on 按亲密度+近因打分）；因子2 馈礼（工资买花赠礼 → 关系升温）；选择事件携带候选快照（mode/candidates/chosen）供前台「选择场景」卡使用（勿删）；测量引擎 metrics.ts（同对重复率/互惠性/聚类系数/伙伴多样性）。
+4. 实验层：每日 19:30 伙伴选择轮次；本地参考策略为 off=seeded uniform、on=亲密度+相对近因+标签派生扰动，正式 AgentSociety² 设计则让所有条件走同一 fresh LLM completion，只改变可见历史。馈礼在 choice 后发生并写入后续 dyadic history。兼容选择事件保留 `mode/candidates/chosen`；七项指标为有向重复率、机会校正互惠、聚类、7 日多样性/HHI、双 7 日矩阵持续性和枢纽集中度。
 5. 呈现层（当前主形态）：平行世界切换（w1 记忆开实验组 / w2 记忆关对照 / w3 谣言传播，各自独立引擎与日志）；三栏仪器风 UI——左栏实验配置+运行状态+名册、中央视图（🎭叙事酒馆：对话气泡/内心独白/馈礼卡/选择场景卡、🗺极简像素块小地图、🕸力导向网络图、📈指标曲线）、右栏角色详情；SSE 事件含 worldId 由客户端过滤。
 
 ## 已有关键数据
 
-2×2 因子预实验（CLI：pnpm experiment --days 20 --seeds 3，mock LLM）：记忆开使同对重复率 0.24→0.54-0.58（2.3×）、伙伴多样性 3.55→2.19-2.34（集中化）；馈礼在记忆开下有正向交互趋势（0.582/2.189 四格极值）；互惠性跨格稳定（基线现象，鉴别性对照有效）。预实验与建议设计均已写入 docs/competition-track7-analysis.md、docs/research-narrative.md、docs/competition-report-draft.md（报告 v1 草稿含全部数据表）、docs/alicization-study.md（Alicization 对照研究）、docs/PROJECT-HANDOVER.md（本摘要的完整版）。
+本地 2×2 机制正控（20 天×3 seed，mock）按 seed 汇总后：关系加权策略的平均有向重复率为 0.553/0.608，对照为 0.222；7 日伙伴多样性为 2.317/2.139，对照为 3.458。该证据只验证本地策略和测量链，不估计正式 LLM 历史可见性效应。逐 seed 数据在 `docs/data/`；60 天×5 seed 压力基准峰值 RSS 170,680 KB。正式研究方法与证据边界见 `docs/competition-report-draft.md`、`docs/competition-execution-plan.md` 和 `docs/runtime-validation.md`。
 
 ## 待办（按优先级）
 
-1. AgentSociety² 平台移植（关键路径，等队伍 API Key；可参考 world-factory.ts/experiment.ts 移植为自定义环境模块：N=24-30、三组/2×2、5 种子、60 天、稳健性子实验、Replay 数据）。
-2. 报告 v2：补平行世界对照叙事与稳健性数据。
-3. 运行稳定性：experiment-runner 的天数扣减用精确 minute===1171 判定，调速跨窗口时扣减不生效（轮次仍触发）——改为跨日计数；长时间运行内存验证。
-4. 每个世界加「实验配置差异」徽标。
-5. GitHub 推送：本地领先远程约 7 个提交（远程 URL 已去凭据化，需用户 token；github.com 443 曾不稳定，重试 `git push origin main`）。
+1. 在线 AgentSociety² 关键路径：固定实际模型，完成真实 `AgentSociety.init/step/close` 决策，接入互动摘要，执行 append/checkpoint 三处故障注入，跑 24-agent×2 天×4 条件容量标定。
+2. 通过硬门后执行 N=24、60 天、4 主条件×5 seed；recent-3 扩展按容量优先级执行。任何跳轮、处理泄漏、不可审计 LLM 决策或 fallback>5% 的 run 不进入正式分析。
+3. 报告 v2 回填正式平台结果、逐 seed 效应、稳健性与理论讨论；唯一确认性主要结局为第 31—60 天有向同对重复率。
+4. 9 月 13 日前完成报告、代码、工作区、Replay、validator、manifest/hash 和复现说明封包。
+5. GitHub 推送前先 fetch 并核对分歧；远程为无凭据 HTTPS，需要用户 token。
 
 ## 红线与约定
 
@@ -34,4 +34,4 @@
 
 ## 你的任务
 
-先通读 docs/PROJECT-HANDOVER.md 与四份策略/报告文档，运行 pnpm test && pnpm typecheck 确认基线，然后：① 给出后续开发计划（三阶段：本周平台移植准备/下周实验与稳健性/9 月上旬报告与提交，含风险）② 在你确认可执行的第一项上直接开工并向用户汇报。若对上述任一限制（素材/交付卫生/比赛约束）有疑问，先问用户再动手。
+先通读 `docs/PROJECT-HANDOVER.md`、`docs/competition-execution-plan.md`、`docs/competition-report-draft.md`、`docs/runtime-validation.md` 与 `platform/agentsociety2/README.md`，运行 TypeScript/Python/真实 SDK 验收。随后只推进在线硬门、正式数据采集、报告回填和提交封包；本地机制正控不得替代 AgentSociety² 正式证据。若对素材、交付卫生或比赛约束有疑问，先问用户再动手。
