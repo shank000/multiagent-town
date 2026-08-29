@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#090d15" />
+  <title>深度社会统计 · multiagent-town</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body id="stats-page">
+  <header id="stats-header">
+    <a class="hud-link" href="/">返回研究台</a>
+    <div class="stats-heading">
+      <span class="eyebrow">DEEP OBSERVATION · READ ONLY</span>
+      <h1>深度社会统计</h1>
+    </div>
+    <div class="stats-toolbar" aria-label="统计查询条件">
+      <label class="stats-field">平行世界
+        <select id="stats-world" aria-label="选择统计世界">
+          <option value="">载入世界……</option>
+        </select>
+      </label>
+      <label class="stats-field">事件与对话日期
+        <select id="stats-day"><option value="">全部天数</option></select>
+      </label>
+      <button id="stats-refresh" type="button">刷新统计</button>
+      <label class="stats-auto"><input type="checkbox" id="stats-auto" /> 每 5 秒自动刷新</label>
+      <span id="stats-status" role="status" aria-live="polite"></span>
+    </div>
+    <div id="stats-meta"></div>
+  </header>
+  <main id="stats-root" aria-busy="true" aria-live="polite"></main>
+  <footer id="stats-footer">数据来自所选平行世界的运行时 SQLite；该页面只读，不改变研究台当前世界。</footer>
+  <script src="/stats.js"></script>
+</body>
+</html>

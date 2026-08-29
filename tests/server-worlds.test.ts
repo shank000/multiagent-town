@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../src/engine/world-factory';
 import { PerceptionEngine } from '../src/engine/perception';
+import { hydrateWorld } from '../src/engine/seed';
 import { createTownServer } from '../src/web/server';
 
 test('平行世界暂停、恢复与调速保持同步', async () => {
@@ -300,5 +304,81 @@ test('SSE 每个周期广播全部平行世界快照', async () => {
     await server.close();
     await Promise.all(worlds.map((world) => world.mind.dispose()));
     for (const world of worlds) world.db.raw.close();
+  }
+});
+
+test('统计与 hydration 按世界定址、幂等且数据库和种子状态互相隔离', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'town-world-stats-'));
+  const worlds = [
+    createManagedWorld('w1', 'mem-on', { dbPath: join(dir, 'w1.sqlite') }),
+    createManagedWorld('w2', 'mem-off', { dbPath: join(dir, 'w2.sqlite') }),
+    createManagedWorld('w3', 'rumor', { dbPath: join(dir, 'w3.sqlite') }),
+  ];
+  const main = worlds[0];
+  let server: Awaited<ReturnType<typeof createTownServer>> | undefined;
+  try {
+    assert.equal(new Set(worlds.map((world) => world.db)).size, 3);
+    assert.equal(new Set(worlds.map((world) => world.dbPath)).size, 3);
+    assert.notStrictEqual(worlds[0].world.allAgents()[0].persona, worlds[1].world.allAgents()[0].persona);
+    assert.notStrictEqual(worlds[0].world.allAgents()[0].persona.routine, worlds[1].world.allAgents()[0].persona.routine);
+    assert.notStrictEqual(worlds[0].world.allObjects()[0], worlds[1].world.allObjects()[0]);
+
+    const countAgents = (index: number) => (
+      worlds[index].db.raw.prepare('SELECT COUNT(*) AS n FROM agents').get() as { n: number }
+    ).n;
+    assert.deepEqual(worlds.map((_world, index) => countAgents(index)), [6, 6, 6]);
+    hydrateWorld(worlds[0].db, worlds[0].world);
+    hydrateWorld(worlds[0].db, worlds[0].world);
+    assert.deepEqual(worlds.map((_world, index) => countAgents(index)), [6, 6, 6]);
+
+    server = await createTownServer({
+      world: main.world, time: main.time, loop: main.loop, log: main.log,
+      mind: main.mind, player: main.player, experiment: main.experiment ?? undefined,
+      worlds, port: 0,
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    const login = await fetch(`${base}/api/guest/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '统计访客' }),
+    });
+    assert.equal(login.status, 200);
+    hydrateWorld(worlds[0].db, worlds[0].world);
+    hydrateWorld(worlds[0].db, worlds[0].world);
+    assert.deepEqual(worlds.map((_world, index) => countAgents(index)), [7, 6, 6]);
+
+    worlds[0].log.addEvent({
+      id: 'stats-only-w1', type: 'system', actorId: null, targetIds: [], description: 'w1 独有',
+      location: null, gameTime: 100, payload: { kind: 'stats_scope_w1' },
+    });
+    worlds[1].log.addEvent({
+      id: 'stats-only-w2', type: 'system', actorId: null, targetIds: [], description: 'w2 独有',
+      location: null, gameTime: 100, payload: { kind: 'stats_scope_w2' },
+    });
+
+    const statsW1 = await (await fetch(`${base}/api/stats?worldId=w1`)).json() as {
+      worldId: string; overview: { dbPath: string; counts: { agents: number } };
+      events: { byPayloadKind: Record<string, number> };
+    };
+    const statsW2 = await (await fetch(`${base}/api/stats?worldId=w2`)).json() as typeof statsW1;
+    assert.equal(statsW1.worldId, 'w1');
+    assert.equal(statsW2.worldId, 'w2');
+    assert.equal(statsW1.overview.dbPath, worlds[0].dbPath);
+    assert.equal(statsW2.overview.dbPath, worlds[1].dbPath);
+    assert.equal(statsW1.overview.counts.agents, 7);
+    assert.equal(statsW2.overview.counts.agents, 6);
+    assert.equal(statsW1.events.byPayloadKind.stats_scope_w1, 1);
+    assert.equal(statsW1.events.byPayloadKind.stats_scope_w2, undefined);
+    assert.equal(statsW2.events.byPayloadKind.stats_scope_w2, 1);
+    assert.equal(statsW2.events.byPayloadKind.stats_scope_w1, undefined);
+
+    assert.equal((await fetch(`${base}/api/stats?worldId=missing`)).status, 404);
+    for (const day of ['0', '-2', '2.5', 'NaN']) {
+      assert.equal((await fetch(`${base}/api/stats?worldId=w3&day=${encodeURIComponent(day)}`)).status, 400);
+    }
+  } finally {
+    if (server) await server.close();
+    await Promise.all(worlds.map((world) => world.mind.dispose()));
+    for (const world of worlds) world.db.raw.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -169,6 +169,7 @@ function resetDetailCamera(): void {
 
 function applyCamera(): void {
   const dpr = window.devicePixelRatio || 1;
+  // 设备像素对齐和最近邻采样共同保持像素素材边缘稳定。
   ctx.setTransform(camera.scale * dpr, 0, 0, camera.scale * dpr, Math.round(camera.offX * dpr), Math.round(camera.offY * dpr));
   ctx.imageSmoothingEnabled = false;
 }
@@ -1243,6 +1244,7 @@ function draw(): void {
   const nowMs = performance.now();
   const worldW = snap.gridW * TILE;
   const worldH = snap.gridH * TILE;
+  // 每帧覆盖完整位图，避免天气和屏幕层元素留下残影。
   resetCamera();
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#090d15';

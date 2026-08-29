@@ -9,13 +9,15 @@ import type { TimeEngine } from '../core/time';
 import type { WorldState } from '../core/world';
 import type { WorldLoop } from '../engine/loop';
 import type { EventLog } from '../store/events';
+import type { DbHandle } from '../store/db';
 import type { RelationshipStore } from '../store/relationships';
 import type { RumorTracker } from '../engine/rumors';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import { computeStanding } from '../engine/status';
-import { createGuestAgent } from '../engine/seed';
+import { analyzeTown } from '../engine/analyze';
+import { createGuestAgent, hydrateWorld } from '../engine/seed';
 import { PerceptionEngine } from '../engine/perception';
 import { metricsOf, type Choice } from '../engine/metrics';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
@@ -29,6 +31,8 @@ export interface TownWebOptions {
   player?: PlayerDirector;    // 玩家扮演
   rels?: RelationshipStore;  // M3 关系存储（声望/关系 API 数据源）
   rumors?: RumorTracker;  // M3 谣言追踪（种子 API 数据源）
+  db?: DbHandle;         // 数据统计与分析（/api/stats）数据源；缺省则该接口 404
+  dbPath?: string;       // 展示用库路径（/api/stats 报告内），缺省空串
   publicDir?: string;   // 默认 <cwd>/public
   snapshotMs?: number;  // 默认 200
   experiment?: { state(): unknown; setConfig(cfg: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number, now: number): void; stop(): void };
@@ -60,6 +64,8 @@ interface HubAccess {
   time: TimeEngine;
   loop: WorldLoop;
   log: EventLog;
+  db: DbHandle | undefined;
+  dbPath: string;
   mind: MindEngine;
   player: PlayerDirector | undefined;
   experiment: { state(): unknown; setConfig(c: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number, now: number): void; stop(): void } | null | undefined;
@@ -70,17 +76,19 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   const snapshotMs = opts.snapshotMs ?? 200;
   // 多世界模式：worlds 提供时以切换式 hub 服务；否则单世界包装
   let activeId = (opts.worlds?.[0] as { meta?: { id?: string } } | undefined)?.meta?.id ?? '';
-  let hubWorlds: { get meta(): HubAccess['meta']; get world(): HubAccess['world']; get time(): HubAccess['time']; get loop(): HubAccess['loop']; get log(): HubAccess['log']; get mind(): HubAccess['mind']; get player(): HubAccess['player']; get experiment(): HubAccess['experiment'] }[] | null = null;
+  let hubWorlds: HubAccess[] | null = null;
   if (opts.worlds && opts.worlds.length) {
-    hubWorlds = (opts.worlds as { meta: HubAccess['meta']; world: HubAccess['world']; time: HubAccess['time']; loop: HubAccess['loop']; log: HubAccess['log']; mind: HubAccess['mind']; player: HubAccess['player']; experiment: HubAccess['experiment'] }[]).map((w) => ({
+    hubWorlds = (opts.worlds as HubAccess[]).map((w) => ({
       get meta() { return w.meta; },
-      get world() { return (w as unknown as { world: HubAccess['world'] }).world; },
-      get time() { return (w as unknown as { time: HubAccess['time'] }).time; },
-      get loop() { return (w as unknown as { loop: HubAccess['loop'] }).loop; },
-      get log() { return (w as unknown as { log: HubAccess['log'] }).log; },
-      get mind() { return (w as unknown as { mind: HubAccess['mind'] }).mind; },
-      get player() { return (w as unknown as { player: HubAccess['player'] }).player; },
-      get experiment() { return (w as unknown as { experiment: HubAccess['experiment'] }).experiment; },
+      get world() { return w.world; },
+      get time() { return w.time; },
+      get loop() { return w.loop; },
+      get log() { return w.log; },
+      get db() { return w.db; },
+      get dbPath() { return w.dbPath; },
+      get mind() { return w.mind; },
+      get player() { return w.player; },
+      get experiment() { return w.experiment; },
     }));
   }
   const hub = (): HubAccess => {
@@ -88,7 +96,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       const found = hubWorlds.find((x) => x.meta.id === activeId) ?? hubWorlds[0];
       return {
         meta: found.meta, world: found.world, time: found.time, loop: found.loop,
-        log: found.log, mind: found.mind, player: found.player, experiment: found.experiment,
+        log: found.log, db: found.db, dbPath: found.dbPath,
+        mind: found.mind, player: found.player, experiment: found.experiment,
       };
     }
     return {
@@ -97,6 +106,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         badges: [{ label: '模式', value: '单世界', tone: 'neutral' }],
       },
       world: opts.world, time: opts.time, loop: opts.loop, log: opts.log,
+      db: opts.db, dbPath: opts.dbPath ?? '',
       mind: opts.mind!, player: opts.player, experiment: opts.experiment,
     };
   };
@@ -109,7 +119,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     const found = hubWorlds.find((world) => world.meta.id === id);
     return found ? {
       meta: found.meta, world: found.world, time: found.time, loop: found.loop,
-      log: found.log, mind: found.mind, player: found.player, experiment: found.experiment,
+      log: found.log, db: found.db, dbPath: found.dbPath,
+      mind: found.mind, player: found.player, experiment: found.experiment,
     } : null;
   };
   const clients = new Set<ServerResponse>();
@@ -171,6 +182,36 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           ...buildSnapshot(selected.world, selected.time, paused, ++seq),
           worldId: selected.meta.id,
         }));
+        return;
+      }
+      if (url.pathname === '/api/stats' && req.method === 'GET') {
+        const selected = hubById(url.searchParams.get('worldId'));
+        if (!selected) {
+          res.writeHead(404);
+          res.end('未知世界');
+          return;
+        }
+        if (!selected.db) {
+          res.writeHead(404);
+          res.end('数据统计未启用');
+          return;
+        }
+        const dayRaw = url.searchParams.get('day');
+        let day: number | undefined;
+        if (dayRaw !== null) {
+          const parsed = Number(dayRaw);
+          if (!/^\d+$/.test(dayRaw) || !Number.isSafeInteger(parsed) || parsed <= 0) {
+            res.writeHead(400);
+            res.end('day 必须是正整数');
+            return;
+          }
+          day = parsed;
+        }
+        // 名册优先用内存世界（含访客），与 agents 表保持一致（两者都由 hydrateWorld 维护）
+        const names = new Map(selected.world.allAgents().map((agent) => [agent.id, agent.name]));
+        const report = analyzeTown(selected.db, { day, top: 10, dbPath: selected.dbPath, names });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ...report, worldId: selected.meta.id }));
         return;
       }
       if (url.pathname === '/api/status' && req.method === 'GET') {
@@ -260,14 +301,16 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         const body = (await readBody(req)) as { name?: unknown };
         const name = typeof body.name === 'string' ? body.name.trim().slice(0, 20) : '';
         if (!name) { res.writeHead(400); res.end('名字不能为空'); return; }
-        let guest = hub().world.allAgents().find((a) => a.id === `agent:${name}`);
+        const selected = hub();
+        let guest = selected.world.allAgents().find((agent) => agent.id === `agent:${name}`);
         if (!guest) {
           guest = createGuestAgent(name);
-          hub().world.addAgent(guest);
-          hub().log.addEvent({
+          selected.world.addAgent(guest);
+          if (selected.db) hydrateWorld(selected.db, selected.world);
+          selected.log.addEvent({
             id: randomUUID(), type: 'system', actorId: guest.id, targetIds: [],
             description: `访客「${name}」登录了小镇。`, location: 'obj:plaza',
-            gameTime: hub().time.state.totalMinutes, payload: { kind: 'guest_login', name },
+            gameTime: selected.time.state.totalMinutes, payload: { kind: 'guest_login', name },
           });
         }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -585,7 +628,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         return await file(res, resolve(publicDir, 'assets', name));
       }
       if (url.pathname === '/') return await file(res, resolve(publicDir, 'index.html'));
-      if (url.pathname === '/client.js' || url.pathname === '/style.css') {
+      if (url.pathname === '/stats.html') return await file(res, resolve(publicDir, 'stats.html'));
+      if (url.pathname === '/client.js' || url.pathname === '/stats.js' || url.pathname === '/style.css') {
         return await file(res, resolve(publicDir, url.pathname.slice(1)));
       }
       res.writeHead(404);

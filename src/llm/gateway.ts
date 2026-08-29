@@ -2,11 +2,13 @@
 
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
 import { DeepSeekProvider } from './deepseek';
+import { OllamaProvider } from './ollama';
 import { MockProvider } from './mock';
 
 export interface GatewayConfig {
-  provider?: LLMProvider | 'mock' | 'deepseek';
+  provider?: LLMProvider | 'mock' | 'deepseek' | 'ollama';
   deepseek?: { apiKey: string; baseUrl?: string; model?: string; timeoutMs?: number };
+  ollama?: { baseUrl?: string; model?: string; smallModel?: string; timeoutMs?: number };
   retries?: number;   // 默认 2（共 3 次尝试）
   backoffMs?: number; // 默认 100，指数退避基数
 }
@@ -39,6 +41,13 @@ export class LLMGateway {
         baseUrl: cfg.deepseek.baseUrl ?? 'https://api.deepseek.com',
         model: cfg.deepseek.model ?? 'deepseek-chat',
         timeoutMs: cfg.deepseek.timeoutMs ?? 30_000,
+      });
+    } else if (p === 'ollama') {
+      this.provider = new OllamaProvider({
+        baseUrl: cfg.ollama?.baseUrl ?? 'http://127.0.0.1:11434',
+        model: cfg.ollama?.model ?? 'qwen2.5:7b',
+        ...(cfg.ollama?.smallModel ? { smallModel: cfg.ollama.smallModel } : {}),
+        timeoutMs: cfg.ollama?.timeoutMs ?? 120_000,
       });
     } else {
       this.provider = new MockProvider();
@@ -77,7 +86,13 @@ export class LLMGateway {
         if (attempt < this.retries) await sleep(this.backoffMs * 2 ** attempt);
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    const err = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    if (err.name === 'TimeoutError' || /aborted due to timeout|timed out/i.test(err.message)) {
+      // DOMException.message 是只读 getter，不能原地改写，改用带 cause 的包装 Error
+      const hint = this.provider.name === 'ollama' ? '；可通过 OLLAMA_TIMEOUT_MS 调整本地推理上限' : '';
+      throw new Error(`${err.message}（${this.provider.name} 请求超时，已重试 ${this.retries} 次${hint}）`, { cause: err });
+    }
+    throw err;
   }
 
   /** 等待已发出的模型调用全部结算；停止世界循环后用于安全关闭。 */

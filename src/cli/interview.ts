@@ -5,6 +5,7 @@ import { buildTown } from '../engine/seed';
 import { openDb } from '../store/db';
 import { MemoryStore } from '../store/memory';
 import { LLMGateway } from '../llm/gateway';
+import { gatewayConfigFromEnv } from '../llm/provider-config';
 import { interviewAgent } from '../engine/interview';
 
 export interface InterviewArgs {
@@ -34,8 +35,7 @@ async function main(): Promise<void> {
     console.error(`找不到 agent：${args.agentName}`);
     process.exit(1);
   }
-  const provider = process.env.LLM_PROVIDER === 'deepseek' ? 'deepseek' : 'mock';
-  const llm = new LLMGateway({ provider, deepseek: { apiKey: process.env.DEEPSEEK_API_KEY ?? '' }, retries: 2 });
+  const llm = new LLMGateway(gatewayConfigFromEnv());
   const db = openDb(args.dbPath);
   const store = new MemoryStore(db);
   const now = Number(db.getMeta('game_time') ?? '0');

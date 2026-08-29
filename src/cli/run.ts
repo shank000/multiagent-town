@@ -6,6 +6,7 @@ import { buildTown } from '../engine/seed';
 import { openDb } from '../store/db';
 import { EventLog } from '../store/events';
 import { LLMGateway } from '../llm/gateway';
+import { providerNameFromEnv, gatewayConfigFromEnv } from '../llm/provider-config';
 import { AgentExecutor } from '../core/state-machine';
 import { WorldLoop } from '../engine/loop';
 import { SocialTicker } from '../engine/social';
@@ -37,12 +38,8 @@ const STATE_ICON: Record<string, string> = { idle: '·', thinking: '…', moving
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
-  const provider = process.env.LLM_PROVIDER === 'deepseek' ? 'deepseek' : 'mock';
-  const gateway = new LLMGateway({
-    provider,
-    deepseek: { apiKey: process.env.DEEPSEEK_API_KEY ?? '' },
-    retries: 2,
-  });
+  const provider = providerNameFromEnv();
+  const gateway = new LLMGateway(gatewayConfigFromEnv());
   const db = openDb(args.dbPath);
   const log = new EventLog(db);
   const world = buildTown();

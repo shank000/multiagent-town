@@ -1,7 +1,7 @@
-# 斯坦福小镇式多智能体交互系统 · 技术方案文档
+# 多智能体小镇 · 概念设计参考
 
-> 版本：v1.0（开发蓝图）
-> 目标：25 个左右 agent 的 2D 虚拟小镇，agent 自主生活、社交、传播信息，玩家可观察或扮演。
+> 文档角色：机制与规模扩展的概念参考。当前可执行架构、命令和 API 以 `docs/ARCHITECTURE.md` 为准，正式实验合同以 `platform/agentsociety2/` 与 `docs/competition-execution-plan.md` 为准。
+> 研究规模：本地可视化世界使用 6 位常驻居民；AgentSociety² 正式矩阵使用 24–30 位 agent。
 > 参考：Generative Agents 论文（arXiv:2304.03442）、joonspk-research/generative_agents、a16z-infra/ai-town。
 
 ---
@@ -416,7 +416,7 @@ interface LLMGateway {
   complete(req: LLMRequest): Promise<LLMResponse>;
 }
 ```
-- 路由：small → 本地 Qwen-14B（vLLM）或低价 API；large → DeepSeek-chat；
+- 路由：small → 本地小模型（当前实现 `OllamaProvider` 的 `smallModel`，如 Qwen2.5-1.5B）或低价 API；large → DeepSeek-chat 或本地大模型（`OllamaProvider` 的 `model`，如 Qwen2.5-7B）；
 - 重试（指数退避 ×2，超时 30s）；JSON 解析失败自动重试一次；
 - **计量**：按 template 聚合 token 消耗与成本 → `/api/cost` 实时查看；
 - **缓存**：persona 摘要等静态前缀缓存；对话摘要只算一次写两方。

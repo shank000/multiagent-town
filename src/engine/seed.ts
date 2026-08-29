@@ -2,6 +2,34 @@
 
 import type { Agent, Persona, WorldObject } from '../core/types';
 import { WorldState, GRID_W, GRID_H } from '../core/world';
+import type { DbHandle } from '../store/db';
+
+/** 世界水合：把内存中的居民/对象同步写入 SQLite 的 agents/objects 表（幂等 upsert）。
+ * 这两张表是统计/回放的“名册”，与实际运行的内存世界保持一致。由 WorldLoop 构造时
+ * 与访客登录时调用；数据统计（/api/stats）据此解析居民名与对象。 */
+export function hydrateWorld(db: DbHandle, world: WorldState): void {
+  const upsertAgent = db.raw.prepare(
+    `INSERT INTO agents(id, name, persona_json, home_object, state_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, persona_json = excluded.persona_json,
+       home_object = excluded.home_object, state_json = excluded.state_json, updated_at = excluded.updated_at`
+  );
+  const now = Date.now();
+  for (const a of world.allAgents()) {
+    upsertAgent.run(a.id, a.name, JSON.stringify(a.persona), a.homeObjectId,
+      JSON.stringify({ x: a.x, y: a.y, state: a.state, locationId: a.locationId }), now, now);
+  }
+  const upsertObject = db.raw.prepare(
+    `INSERT INTO objects(id, parent_id, name, type, x, y, w, h, state_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name,
+       type = excluded.type, x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h,
+       state_json = excluded.state_json`
+  );
+  for (const o of world.allObjects()) {
+    upsertObject.run(o.id, o.parentId, o.name, o.type, o.x, o.y, o.w, o.h, '{}');
+  }
+}
 
 export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: GRID_W, h: GRID_H },
@@ -221,10 +249,25 @@ export const DEFAULT_SEED: TownSeed = {
 };
 
 export function buildTown(seed: TownSeed = DEFAULT_SEED): WorldState {
-  const agents: Agent[] = seed.personas.map((p) => {
+  // 平行世界从同一份种子构造，但运行态对象必须完全独立，避免一个世界的
+  // persona / routine / 地图对象变更通过共享引用影响另一个世界。
+  const objects = seed.objects.map((object) => ({ ...object }));
+  const personas = seed.personas.map((persona): Persona => ({
+    ...persona,
+    appearance: { ...persona.appearance },
+    hobbies: [...persona.hobbies],
+    skills: { ...persona.skills },
+    values: [...persona.values],
+    traits: [...persona.traits],
+    goals: [...persona.goals],
+    routine: persona.routine.map((slot) => ({ ...slot })),
+    greetingPool: persona.greetingPool ? [...persona.greetingPool] : undefined,
+    personality: persona.personality ? { ...persona.personality } : undefined,
+  }));
+  const agents: Agent[] = personas.map((p) => {
     const homeId = HOME_BY_NAME[p.name];
     if (!homeId) throw new Error(`persona 没有对应住宅: ${p.name}`);
-    const home = seed.objects.find((o) => o.id === homeId);
+    const home = objects.find((o) => o.id === homeId);
     if (!home) throw new Error(`对象不存在: ${homeId}`);
     return {
       id: `agent:${p.name}`,
@@ -243,7 +286,7 @@ export function buildTown(seed: TownSeed = DEFAULT_SEED): WorldState {
       thought: null,
     };
   });
-  return new WorldState(seed.objects, agents);
+  return new WorldState(objects, agents);
 }
 
 /** 协议访客：外部 AI 通过 town-agent CLI 驱动的临时角色（无作息，指令驱动） */

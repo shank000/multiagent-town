@@ -70,6 +70,7 @@ export interface ManagedWorld {
   loop: WorldLoop;
   log: EventLog;
   db: DbHandle;
+  dbPath: string;
   mind: MindEngine;
   player: PlayerDirector;
   experiment: ExperimentRunner | null;
@@ -88,7 +89,8 @@ export interface ManagedWorldOptions {
 export function createManagedWorld(id: string, kind: WorldKind, options: ManagedWorldOptions = {}): ManagedWorld {
   const seed = options.seed ?? 1;
   const meta: WorldMeta = { id, ...KINDS[kind] };
-  const db = openDb(options.dbPath ?? ':memory:');
+  const dbPath = options.dbPath ?? ':memory:';
+  const db = openDb(dbPath);
   const log = new EventLog(db);
   const world = buildTown(DEFAULT_SEED);
   const time = new TimeEngine(options.gameMinutesPerTick ?? 30);
@@ -117,7 +119,7 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
     void mind.rumors.seed(lin.id, text, 0);
     mind.store.addMemory({ agentId: lin.id, kind: 'observation', content: `我知道了一个秘密：${text}`, importance: 9, createdGameTime: 0 });
   };
-  return { meta, world, time, loop, log, db, mind, player, experiment, seedRumor };
+  return { meta, world, time, loop, log, db, dbPath, mind, player, experiment, seedRumor };
 }
 
 /** 启动全部世界的时钟（每世界独立循环） */

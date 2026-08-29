@@ -1,0 +1,532 @@
+# multiagent-town 工程导读：整体架构 / 子系统 / 使用 / 贡献
+
+> 本文档面向第一次阅读本仓库的开发者，目标是用 30 分钟建立完整心智模型。
+> 配套文档：
+> - 技术方案设计：`docs/ai-town-design.md`
+> - 论文机制分析：`docs/agentopia-analysis.md`
+> - 赛道 7 研究设计：`docs/competition-track7-analysis.md`
+> - AgentSociety² 适配合同：`docs/agentsociety2-migration-contract.md`
+> - 外部 AI 接入协议：`skills/town-agent/SKILL.md`
+> - 素材许可：`ATTRIBUTION.md`
+
+---
+
+## 1. 这是什么
+
+一个以中文像素小镇为可观察环境的**多智能体社会涌现实验平台**：
+- 小镇上生活着 6 位居民（林晚晴、陈默、沈屿、周岚、白露、老周），每位都有自己的作息、记忆、目标、性格；
+- 居民会自主移动、工作、闲聊、经营关系、传播消息、参加公开活动、睡觉；
+- 浏览器可实时观察 48×44 小镇（Canvas 2D 像素渲染），也可“扮演”任意 NPC 下达指令；
+- 外部 AI（Claude Code / OpenClaw / 任意智能体）可通过 `town-agent` 协议以“访客”身份住进小镇。
+- 三个平行世界提供关系记忆开/关与谣言传播处理，支持伙伴选择因果实验和结构化社会网络测量。
+
+**核心设计取舍**：
+- **零运行时依赖**：不使用 React/Phaser/Fastify 等框架；后端只用 Node 22+ 内置 `node:http`、`node:sqlite`，前端用原生 Canvas + SSE。
+- **LLM 可插拔**：默认 `MockProvider` 可离线跑全流程；`DeepSeekProvider` 走 OpenAI 兼容 API（云端），`OllamaProvider` 走本地 Ollama（免费、离线）。
+- **认知引擎轻量自研**：记忆流、三因子检索、日/小时计划、反思、对话摘要、关系/谣言/活动全部在 `src/` 内实现，便于二次开发与研究实验。
+
+---
+
+## 2. 技术栈与工程约束
+
+| 项 | 选择 |
+|---|---|
+| 语言 | TypeScript（严格模式，`strict: true`） |
+| 运行时 | Node.js ≥ 22.5 |
+| 后端服务 | `node:http` + SSE（无框架） |
+| 数据库 | SQLite（`node:sqlite` 内置模块，零依赖） |
+| 前端 | 原生 Canvas 2D + DOM，`esbuild` 打包成 `public/client.js` |
+| LLM | 自研 `LLMGateway`；`mock` / `deepseek` / `ollama` 三种 provider |
+| 测试 | `node:test`（内置），`tsx` 直接跑 TS |
+| 包管理 | pnpm（`package.json` + `pnpm-lock.yaml`） |
+
+验证入口包括 `pnpm typecheck`、`pnpm test`、AgentSociety² Python 协议测试与真实 SDK/Replay/checkpoint 冒烟。
+
+---
+
+## 3. 整体架构
+
+### 3.1 分层视图
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ 呈现层 (public/ + src/web/client)                                  │
+│   浏览器 HUD / Canvas 像素地图 / 建筑内饰 / 昼夜 / 粒子特效 /        │
+│   事件流 ticker / 心智面板(详情/档案/记忆/反思/对话/关系)            │
+└───────────────┬────────────────────────────────────────────────────┘
+                │ SSE: snapshot(200ms) + event / HTTP: /api/*
+┌───────────────▼────────────────────────────────────────────────────┐
+│ Web 服务层 (src/web/server.ts + snapshot.ts)                        │
+│   静态文件 / SSE 事件流 / 世界控制 / 扮演接口 / 访客接口             │
+│   /api/state /api/status /api/relationships /api/agents/*/mind      │
+│   /api/guest/* /api/player/* /api/broadcast /api/rumor /api/stats   │
+│   static: index.html / stats.html / client.js / stats.js / style.css│
+└───────────────┬────────────────────────────────────────────────────┘
+┌───────────────▼────────────────────────────────────────────────────┐
+│ 模拟引擎层 (src/engine + src/core)                                  │
+│   WorldLoop 主循环 → AgentExecutor 状态机 → SocialTicker/Dialogue    │
+│   → TownModel 公开活动 → MindEngine(Planner/Reflection/MemoryWriter)│
+│   → PartnerChoiceExperiment（预实验，可插拔）                       │
+└───────────────┬────────────────────────────────────────────────────┘
+┌───────────────▼────────────────────────────────────────────────────┐
+│ 认知/LLM 层 (src/llm + src/store)                                   │
+│   LLMGateway(重试/超时/计量/安全 drain) → Mock|DeepSeek|Ollama     │
+│   Prompt 模板：决策/重要性/日计划/小时计划/反思/对话/访谈             │
+│   MemoryStore(记忆流+三因子检索) / RelationshipStore / RumorTracker   │
+└───────────────┬────────────────────────────────────────────────────┘
+┌───────────────▼────────────────────────────────────────────────────┐
+│ 持久化层 (src/store/db.ts)                                          │
+│   world_meta / agents / objects / events / memories / reflections   │
+│   plans / messages / relationships / rumors                          │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 核心数据流（一个游戏 tick）
+
+```
+WorldLoop.step()
+  ├─ TimeEngine.tick()                    # 推进游戏时间
+  ├─ for agent: AgentExecutor.progress()  # idle→thinking→moving→acting
+  │     ├─ 需要决策：装配记忆/洞察/议程/玩家指令 → LLMGateway.complete()
+  │     ├─ 输出 JSON → validateDecision() 校验
+  │     ├─ move_to：A* 寻路 → 逐步移动
+  │     └─ interact/idle：持续 actionEndsAt 游戏分钟
+  ├─ SocialTicker.tick()                  # 相邻久坐触发对话/招呼
+  ├─ MindEngine.tick()                    # 5:00 日计划、整点小时分解、反思检查、对话推进、活动规划
+  ├─ 跨天系统事件"第 N 天开始"
+  └─ db.setMeta('game_time')              # 落库；通知订阅者（SSE/CLI/记忆写入）
+```
+
+事件总线：所有行为统一走 `EventLog.addEvent()`，同时
+1. 写入 `events` 表（可回放）；
+2. 推送给 Web SSE 客户端（实时画面）；
+3. 通知 `MemoryWriter`（把事件变成记忆流）；
+4. 通知 `PerceptionEngine`（访客的注意力缓冲）。
+
+### 3.3 多世界单服务模型
+
+- 一个 Web 服务同时承载 `w1`、`w2`、`w3` 三个独立世界循环；每个世界使用独立 SQLite、事件日志、心智、感知与实验实例；
+- REST 读写通过 `worldId` 定址，SSE 快照与事件携带 `worldId`，客户端仅消费当前观察世界；
+- LLM 调用全部**异步非阻塞**，agent 处于 `thinking` 状态等待结果，tick 不等待；
+- 关闭顺序为停止定时器、等待实时 tick、心智写入与 LLM 请求结算，再关闭数据库；
+- 正式 24–30 人实验由 `platform/agentsociety2/` 接入 AgentSociety² 工作区并输出 Replay。
+
+---
+
+## 4. 目录结构
+
+```
+multiagent-town/
+├── README.md                  # 快速上手总入口
+├── ATTRIBUTION.md             # 像素素材许可/署名
+├── package.json               # 脚本：test/typecheck/town/replay/interview/town-web/town-agent
+├── tsconfig.json              # 严格 TS 配置
+├── demo.bat                   # Windows 快速演示（WSL 环境）
+├── src/
+│   ├── index.ts               # 公共导出（供库方式复用）
+│   ├── core/                  # 世界与执行基础
+│   │   ├── types.ts           # Agent/Persona/WorldObject/Action/Event 等共享类型
+│   │   ├── world.ts           # WorldState：对象树、可走网格、碰撞/A* 查询
+│   │   ├── pathfinding.ts     # A* 寻路
+│   │   ├── state-machine.ts   # AgentExecutor：4 态状态机 + 异步决策
+│   │   ├── time.ts            # TimeEngine：游戏时钟、日/分钟换算
+│   │   └── weather.ts         # 逐日确定性天气（每 3 天 1 雨，纯视觉）
+│   ├── engine/                # 模拟引擎（行为/认知/社交）
+│   │   ├── seed.ts            # 小镇对象树 + 6 位居民 Persona + buildTown()
+│   │   ├── loop.ts            # WorldLoop：主循环、跨天事件、runUntil
+│   │   ├── mind.ts            # MindEngine：认知子系统门面
+│   │   ├── memory-writer.ts   # 事件→观察记忆、重要性打分
+│   │   ├── reflection.ts      # 反思引擎（importance 累计触发）
+│   │   ├── dialogue.ts        # 多轮对话 + 摘要写回记忆/关系
+│   │   ├── social.ts          # SocialTicker：邻近闲聊触发
+│   │   ├── rumors.ts          # 谣言追踪（传播链）
+│   │   ├── status.ts          # Weighted PageRank 声望计算
+│   │   ├── town-model.ts      # 公开活动目录/报名/成行广播
+│   │   ├── player.ts          # PlayerDirector：玩家指令覆盖
+│   │   ├── interview.ts       # 上帝视角访谈
+│   │   └── experiment.ts      # 伙伴选择预实验（研究模式）
+│   ├── llm/                   # LLM 层
+│   │   ├── types.ts           # Provider/Request/Response/Usage
+│   │   ├── gateway.ts         # 重试/超时/JSON 解析/计量
+│   │   ├── deepseek.ts        # DeepSeek OpenAI 兼容实现
+│   │   ├── ollama.ts          # Ollama 本地 /api/chat 实现（按 tier 选模型）
+│   │   ├── provider-config.ts # 环境变量 → 网关配置（LLM_PROVIDER 等设置）
+│   │   ├── mock.ts            # 全模板确定性离线实现
+│   │   ├── prompts.ts         # 中文提示词模板库
+│   │   ├── planner.ts         # 日计划 + 小时分解
+│   │   └── action-validator.ts# 结构化动作校验
+│   ├── store/                 # SQLite 持久化
+│   │   ├── db.ts              # schema + openDb
+│   │   ├── events.ts          # EventLog：事件表 + 订阅
+│   │   ├── memory.ts          # MemoryStore：记忆流/检索/反思/计划/消息
+│   │   └── relationships.ts   # 有向双维关系 + 知识叙事层
+│   ├── web/                   # Web 服务与客户端
+│   │   ├── server.ts          # node:http 服务 + SSE + REST API
+│   │   ├── snapshot.ts        # 世界快照序列化
+│   │   └── client/            # 浏览器前端
+│   │       ├── main.ts        # 入口：SSE、状态同步、交互、扮演
+│   │       ├── stats.ts       # 数据统计页客户端（/stats.html，拉取 /api/stats）
+│   │       ├── render.ts      # 地形/建筑/湖水/昼夜
+│   │       ├── tiles.ts       # 像素图集加载与瓦片映射
+│   │       ├── sprites.ts     # NPC 行走图/姿态
+│   │       ├── camera.ts      # 全屏自适应/滚轮缩放
+│   │       ├── effects.ts     # 粒子（Zzz/蒸汽/星光/雨）
+│   │       ├── hud.ts         # HUD：气泡/横幅/tooltip/动作图标
+│   │       ├── panel.ts       # 侧边心智面板
+│   │       └── types.ts       # 前端共享类型
+│   └── cli/                   # 命令行入口
+│       ├── run.ts             # pnpm town：观察台/虚拟快跑
+│       ├── town-web.ts        # pnpm town-web：本机网页服务
+│       ├── replay.ts          # pnpm replay：事件回放
+│       ├── interview.ts       # pnpm interview：访谈
+│       ├── experiment.ts      # pnpm experiment：研究预实验
+│       └── town-agent.ts      # pnpm town-agent：外部 AI 访客协议
+├── platform/agentsociety2/    # 正式平台适配、Replay、运行矩阵与验证器
+├── tests/                     # node:test 测试
+│   ├── helpers.ts             # 测试通用工具
+│   ├── acceptance*.test.ts    # 端到端验收
+│   └── *.test.ts              # 单元/子系统测试
+├── public/                    # 前端静态资源
+│   ├── index.html             # 小镇页面骨架
+│   ├── stats.html             # 数据统计与分析页面（/stats.html）
+│   ├── style.css
+│   ├── client.js              # esbuild 产物 → 小镇页面（.gitignore）
+│   ├── stats.js               # esbuild 产物 → 统计页（.gitignore）
+│   └── assets/                # 像素素材（见 ATTRIBUTION.md）
+├── data/                      # 运行时 SQLite（.gitignore）
+├── docs/                      # 设计/论文/竞赛文档
+└── skills/town-agent/SKILL.md # AI 接入协议手册
+```
+
+---
+
+## 5. 各子系统架构
+
+### 5.1 `src/core` —— 世界内核
+
+**职责**：不依赖 LLM 的确定性物理世界与执行基础。
+
+| 文件 | 类/函数 | 说明 |
+|---|---|---|
+| `types.ts` | `Agent`/`Persona`/`WorldObject`/`Action`/`GameEvent` | 全工程共享数据契约；Persona 含作息、性格五维、台词池 |
+| `time.ts` | `TimeEngine` | 浮点累计游戏分钟；`day/minutesOfDay/totalMinutes`；格式化 |
+| `world.ts` | `WorldState` | 48×44 网格；对象树注册；**可走性计算**（建筑边界为墙、开房门、水域阻挡、房间/家具开口）；A* 查询、对象中心/定位 |
+| `pathfinding.ts` | `findPath()` | 4 方向 A*，曼哈顿启发，返回含起点终点路径 |
+| `state-machine.ts` | `AgentExecutor` | 4 态（idle/thinking/moving/acting）状态机；异步 LLM 决策不阻塞 tick；移动排队让行 + 死锁解除；动作校验失败自动降级 idle |
+| `weather.ts` | `weatherForDay()` | 确定性天气，不参与行为决策 |
+
+**关键设计**：
+- 世界地图不是 tilemap 位图，而是**对象树**（town→building→room/furniture/zone/water），每个对象有瓦片坐标与尺寸；
+- 建筑可走性由 `WorldState.computeWalkable()` 在构造时计算：默认建筑边界为墙，房间/家具开口，门取底边中点，若门被堵则逐步开放边界直到建筑外可达；
+- 状态机的 `MOVE_SPEED_TILES_PER_MIN = 1`，决策间隔 `DECISION_INTERVAL_MIN = 10`。
+
+### 5.2 `src/engine` —— 行为与认知引擎
+
+**职责**：把“世界内核”变成“有生活的小镇”。
+
+| 文件 | 类 | 职责 |
+|---|---|---|
+| `seed.ts` | `buildTown()` / `createGuestAgent()` | 小镇对象树（约 50 个对象）+ 6 个居民 Persona；访客角色生成 |
+| `loop.ts` | `WorldLoop` | 主循环；`step()`/`runUntil()`/`start()`/`stop()`；跨天事件；依赖注入 Social/Mind |
+| `mind.ts` | `MindEngine` | 认知门面：组合 MemoryStore/Planner/Reflection/MemoryWriter/RelationshipStore/RumorTracker/Dialogue/TownModel；定时 5:00 日计划、整点小时分解、反思、对话、活动 |
+| `memory-writer.ts` | `MemoryWriter` | 订阅 EventLog；把事件转成观察记忆；调用 LLM 打重要性 1–10 |
+| `reflection.ts` | `ReflectionEngine` | 重要性累计 >150 触发；3 问题 → 检索证据 → 最多 5 条洞察 → 写反思树与 insight 记忆；每天每 agent ≤2 次控成本 |
+| `dialogue.ts` | `DialogueEngine` | 相邻居民多轮对话（≤12 轮、每 2 分钟一句）；结束摘要写回双方记忆/关系；顺带传播谣言（选择性披露：关系 ≥0.2） |
+| `social.ts` | `SocialTicker` | 邻近累计 3 游戏分钟触发打招呼；有 DialogueEngine 时转真对话，否则台词池单句 |
+| `rumors.ts` | `RumorTracker` | 谣言 seed/spread/传播链查询；会话中按关系门槛传播 |
+| `status.ts` | `computeStanding()` | Weighted PageRank + 互惠加成（Agentopia/Sociometer），输入全量关系输出声望分 |
+| `analyze.ts` | `analyzeTown()` | 数据统计与分析核心：只读聚合 events/memories/reflections/plans/messages/relationships/rumors，产出 TownReport（`/api/stats` 数据源） |
+| `town-model.ts` | `TownModel` | 公开活动目录轮换（湖边派对/读书会/集市）；按性格报名；≥2 人成行广播；参与者关系升温 |
+| `player.ts` | `PlayerDirector` | 玩家自然语言指令覆盖某个 agent 决策，60 游戏分钟内最高优先级 |
+| `interview.ts` | `interviewAgent()` | 上帝视角访谈：检索记忆+洞察 → 第一人称回答 |
+| `experiment.ts` | `PartnerChoiceExperiment` | 每晚 19:30 伙伴选择预实验；historyAccess on/off 对照；用于研究分析 |
+
+**认知流**：
+
+```
+事件 → MemoryWriter → memories(importance)
+  记忆累计 >150 → ReflectionEngine → insights
+  5:00/整点 → Planner → daily_plan + hourly agenda
+  决策时 → MemoryStore.retrieve(recency+importance+关键词Jaccard)
+         + recentInsights + currentAgendaLine → AgentExecutor 决策上下文
+  对话 → DialogueEngine → dialogue_summary → 双方 memories + relationships
+```
+
+### 5.3 `src/llm` —— LLM 网关与提示词
+
+**职责**：所有“需要智能”的地方统一走 `LLMGateway`，便于计量、重试、换模型。
+
+- `LLMGateway.complete()`：按模板计量、指数退避重试（默认 2 次）、jsonMode 解析失败自动重试。
+- `MockProvider`：离线确定性输出，支持全部模板；适用于测试、CI、无 Key 演示。
+- `DeepSeekProvider`：OpenAI 兼容 `chat/completions`，价格按 ¥2/M 入、¥8/M 出估算。
+- `prompts.ts`：中文系统提示词 + 统一 `<M0_CONTEXT>` JSON 注入，模板常量（action_decision/importance/daily_plan/hour_plan/reflection_*/dialogue*/interview）。
+- `action-validator.ts`：对 LLM 输出的动作 JSON 做结构/对象存在性/时长校验，失败降级 `idle`。
+- `planner.ts`：日计划（自然语言 3–5 句）+ 小时计划（HH:MM 动作清单）写入 `plans` 表；`currentAgendaLine()` 供决策注入。
+
+### 5.4 `src/store` —— SQLite 持久化
+
+**职责**：全部可观察状态落库，支持回放与实验分析。
+
+| 表 | 用途 |
+|---|---|
+| `world_meta` | KV：游戏时间等元信息 |
+| `agents` | 居民/访客名册（WorldLoop 构造与访客登录时由 `hydrateWorld` 幂等写入内存世界） |
+| `objects` | 世界对象树（启动时水合同步） |
+| `events` | 事件日志（回放源） |
+| `memories` | 记忆流（observation/reflection/dialogue_summary/plan/insight） |
+| `reflections` | 反思树 |
+| `plans` | 日/小时计划 |
+| `messages` | 对话消息 |
+| `relationships` | 有向双维关系 + knowledge 叙事层 |
+| `rumors` | 谣言传播链 |
+
+**MemoryStore 三因子检索**（不引向量库）：
+```
+score = 0.25 * 0.995^(now-lastAccess)      # recency
+      + 0.35 * importance/10               # importance
+      + 0.40 * Jaccard(中文双字shingle)    # relevance
+```
+
+**RelationshipStore**：有向（A→B 与 B→A 分存）；`affection`/`respect` 各 -1..1；单次变化量 ±0.2 封顶（自然关系推进）；`knowledge` 保留最近 20 条。
+
+### 5.5 `src/web` —— Web 服务与浏览器
+
+**服务端**（`server.ts`）：
+- 静态文件：`/`、`/stats.html`、`/client.js`、`/stats.js`、`/style.css`、`/assets/*`；
+- SSE：`GET /events`，200ms 推 `snapshot`，实时推 `event`；
+- 世界控制：`POST /api/world/control`（pause/resume/speed）；
+- 数据统计：`GET /api/stats?worldId=w1[&day=N]`（按世界定址，日级口径一致）；
+- 声望/关系：`GET /api/status`、`GET /api/relationships/:id`；
+- 心智面板：`GET /api/agents/:id/mind`（记忆/反思/计划/对话）；
+- 扮演：`POST/DELETE /api/player/:id/act`；
+- 广播/谣言：`POST /api/broadcast`、`POST /api/rumor`；
+- 访客协议：`POST /api/guest/login`、`GET /api/guest/look`、`POST /api/guest/act`、`GET /api/guest/map`、`GET /api/guest/status`。
+
+**客户端**（`src/web/client/*`）：
+- `main.ts`：SSE 接收快照与事件；相机/交互/扮演；
+- `stats.ts`：统计页客户端——独立选择观察世界，拉取 `/api/stats?worldId=...`，并以请求序号避免旧响应覆盖新选择；
+- `render.ts` + `tiles.ts` + `sprites.ts`：Canvas 像素世界（多图集回退链、程序化 fallback、屋顶剖切、昼夜、河光）；
+- `effects.ts`：粒子系统（Zzz/蒸汽/星光/信件/炊烟/萤火/雨丝/水花）；
+- `panel.ts`：侧边六标签面板（详情/档案/记忆/反思/对话/关系）；
+- `hud.ts` + `camera.ts`：HUD/tooltip/气泡/缩放。
+
+### 5.6 `src/cli` —— 命令行入口
+
+| 命令 | 等价脚本 | 用途 |
+|---|---|---|
+| `pnpm town [--until-minutes N] [--speed S] [--db PATH]` | `src/cli/run.ts` | 无界面观察台/虚拟时钟快跑 |
+| `pnpm town-web [--port P] [--speed S] [--db PATH]` | `src/cli/town-web.ts` | 启动浏览器版小镇 |
+| `pnpm replay --day N [--db PATH]` | `src/cli/replay.ts` | 回放某天事件时间线 |
+| `pnpm interview -- --agent 名字 --question "问题"` | `src/cli/interview.ts` | 上帝视角访谈 |
+| `pnpm experiment [--days N] [--seeds N]` | `src/cli/experiment.ts` | 伙伴选择预实验（研究） |
+| `pnpm town-agent <cmd> [args]` | `src/cli/town-agent.ts` | 外部 AI 访客协议 CLI |
+
+### 5.7 `tests` —— 测试体系
+
+- 用 Node 内置 `node:test` + `tsx`；
+- 覆盖：路径/世界/时间/天气、状态机、记忆/检索/反思、对话/关系/谣言/社交/活动/声望、LLM 网关/校验/提示词、Web API/SSE/快照/访客/扮演、CLI、前端渲染（render/panel/hud/tiles/effects/camera）、数据统计（`analyze.ts` + `/api/stats` + 统计页渲染）等；
+- 验收测试（`acceptance*.test.ts`）验证“连续跑 1 天不崩、事件可回放”等端到端行为。
+
+---
+
+## 6. 快速使用说明
+
+### 6.1 安装
+
+```bash
+corepack enable              # 启用 pnpm（或先安装 pnpm）
+pnpm install
+```
+
+> 需要 Node.js ≥ 22.5（`node:sqlite` 要求）。
+
+### 6.2 运行浏览器小镇（默认 mock LLM，离线可用）
+
+```bash
+pnpm town-web --port 8787
+# 浏览器打开 http://127.0.0.1:8787
+```
+
+浏览器里可以：
+- 看小镇实时画面、事件流；
+- 滚轮缩放、双击复位、点击 NPC/建筑查看档案；
+- 点击“🎮 扮演”后输入自然语言指令指挥该 NPC；
+- 暂停/恢复/1x/60x/360x 变速；
+- 点顶栏「📊 数据统计」打开 `/stats.html` 数据统计与分析页。
+
+### 6.3 用真机 LLM（DeepSeek / Ollama）
+
+云端 DeepSeek（OpenAI 兼容）：
+
+```bash
+LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-xxx pnpm town-web --port 8787
+```
+
+本地 Ollama（先 `ollama pull qwen2.5:7b` 并保持 `ollama serve` 运行，无需 API key）：
+
+```bash
+LLM_PROVIDER=ollama pnpm town-web --port 8787
+```
+
+支持的环境变量：
+- `LLM_PROVIDER=mock|deepseek|ollama`（默认 mock）；
+- `DEEPSEEK_API_KEY`（provider=deepseek 必填）；
+- `OLLAMA_BASE_URL`（默认 `http://127.0.0.1:11434`）；
+- `OLLAMA_MODEL`（大模型，默认 `qwen2.5:7b`）；
+- `OLLAMA_SMALL_MODEL`（可选：小模型，默认同 `OLLAMA_MODEL`）；
+- `OLLAMA_TIMEOUT_MS`（默认 `120000`，只接受正整数毫秒）；
+- `TOWN_URL`（仅 `town-agent` 使用，默认 `http://127.0.0.1:8787`）
+
+Ollama 按 `LLMRequest.tier` 路由模型：small 层（动作决策/重要性打分）用 `OLLAMA_SMALL_MODEL`，large 层（日/小时计划、反思、对话）用 `OLLAMA_MODEL`；`jsonMode` 时自动带 `format=json`。Ollama 是本地推理，网关按模板计量的 `costYuan` 恒为 0。
+
+### 6.4 无界面观察/快跑
+
+```bash
+pnpm town                            # 实时观察台，Ctrl+C 停止
+pnpm town --until-minutes 1440 --speed 60   # 虚拟时钟快跑 1 个游戏日
+pnpm replay --day 1                  # 回放第 1 天事件
+pnpm interview -- --agent 林晚晴 --question "今天做了什么"
+```
+
+命令行参数：
+- `--speed`：游戏分钟/现实秒（默认 1，即 60x；`town-web`/`town` 中 `TimeEngine` 按 `speed*0.5`/tick 实现）；
+- `--db`：SQLite 路径（默认 `data/town.sqlite`）；
+- `--until-minutes`：快跑到的总游戏分钟；
+- `--port`：Web 服务端口。
+
+### 6.5 让外部 AI 住进小镇（town-agent）
+
+先启动 `pnpm town-web`，然后用：
+
+```bash
+pnpm town-agent login --name 爱丽丝                 # 登录/创建访客
+pnpm town-agent map                                # 地点目录
+pnpm town-agent look --name 爱丽丝                  # 环顾 + 环境感知
+pnpm town-agent walk --name 爱丽丝 --target 湖边公园
+pnpm town-agent interact --name 爱丽丝 --target 林间咖啡馆
+pnpm town-agent say --name 爱丽丝 --text 大家好！
+pnpm town-agent status --name 爱丽丝
+```
+
+完整协议见 `skills/town-agent/SKILL.md`。
+
+### 6.6 数据统计与分析（Web 界面）
+
+```bash
+pnpm town-web --port 8787       # 启动后浏览器打开 http://127.0.0.1:8787
+# 再打开 http://127.0.0.1:8787/stats.html（或小镇顶栏「📊 数据统计」）
+```
+
+统计页从 `GET /api/stats?worldId=...` 拉取指定世界的报告，展示：
+
+- **概览**：已模拟天数、居民名单、events/memories/reflections/plans/messages/relationships/rumors 各表计数与日均事件；
+- **事件**：按 type（move/chat/interact/broadcast/system/player）与 payload.kind 分布、每日趋势、2 小时档时段分布（作息节律）、最活跃居民/地点；
+- **记忆**：按 kind（observation/reflection/dialogue_summary/plan/insight）与按居民分布、importance 均值与直方图、从未被检索比例（记忆活跃度）、日均新增；
+- **反思 / 计划**：次数、平均触发分、洞察数、计划覆盖天数与小时条目密度；
+- **对话**：消息量、会话数、平均轮数、字数、对话最多的配对；
+- **关系**：有向记录/双向对、affection/respect 均值与极值、最紧密/最疏远配对、knowledge 叙事层条目；
+- **声望榜**：Weighted PageRank 排序（复用 `engine/status.ts`）；
+- **谣言**：记录数、去重内容、最大传播链、传播链长度分布、源头排行；
+- **公开活动**：成行活动时间表与参与人数。
+
+支持「全部天数 / 第 N 天」筛选；日级事件、消息、配对、会话和平均字数采用同一时间窗，关系与声望等结构状态明确标记为当前世界全时段口径。自动刷新不会改变服务端活跃世界。
+
+### 6.7 研究/预实验模式
+
+```bash
+pnpm experiment --days 30 --seeds 3
+```
+
+用内存 SQLite + mock LLM 跑“伙伴选择（关系记忆开/关）”对照，输出同对重复率、互惠性、聚类系数、伙伴多样性等指标。详见 `docs/competition-track7-analysis.md`。
+
+### 6.8 验证开发改动
+
+```bash
+pnpm typecheck     # tsc --noEmit
+pnpm test          # node:test 全量
+pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
+```
+
+---
+
+## 7. REST API 速查
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/state` | 当前世界快照 JSON |
+| GET | `/events` | SSE：snapshot/event |
+| POST | `/api/world/control` | `{action:"pause"|"resume"|"speed", value?}` |
+| GET | `/api/worlds` | 平行世界元数据与当前活跃世界 |
+| POST | `/api/world/switch` | 切换主控制台观察世界 |
+| GET | `/api/stats?worldId=w1[&day=N]` | 指定世界的数据统计报告 |
+| GET | `/api/status` | 声望榜（Weighted PageRank） |
+| GET | `/api/relationships/:id` | 某 agent 的关系 + 声望 |
+| GET | `/api/agents/:id/mind` | 记忆/反思/计划/对话 |
+| POST | `/api/player/:id/act` | 扮演指令（`{instruction}`） |
+| DELETE | `/api/player/:id/act` | 退出扮演 |
+| POST | `/api/broadcast` | 全镇广播 `{text}` |
+| POST | `/api/rumor` | 谣言种子 `{text, sourceId?}` |
+| POST | `/api/guest/login` | 访客登录 `{name}` |
+| GET | `/api/guest/look?name=` | 访客环顾 |
+| POST | `/api/guest/act` | 访客动作 `{name, action:walk\|interact\|say, target?, text?}` |
+| GET | `/api/guest/map` | 地点目录 |
+| GET | `/api/guest/status?name=` | 访客状态 |
+
+---
+
+## 8. 贡献说明
+
+### 8.1 开发流程建议
+
+1. 先读 `docs/ai-town-design.md` 了解设计蓝图，再读本架构文档；
+2. 从一个小改动开始：例如给某位居民加一条 `routine`、加一个对象、加一种事件类型；
+3. 改动后跑 `pnpm typecheck` 与 `pnpm test`；
+4. 前端改动后运行 `pnpm build:web` 并重新打开页面验证；
+5. 涉及协议/命令时同步更新 `skills/town-agent/SKILL.md` 与 `README.md`；
+6. 新增素材必须更新 `ATTRIBUTION.md`（本项目混用 CC0/CC-BY 素材，需保留署名）。
+
+### 8.2 扩展点
+
+- **新增居民**：在 `src/engine/seed.ts` 添加 `Persona`（含 `routine`、`greetingPool`、`personality`），在 `TOWN_OBJECTS` 添加家/床/沙发等对象，并加入 `HOME_BY_NAME`。
+- **新增地点/建筑**：在 `TOWN_OBJECTS` 添加 `building/room/furniture/zone/water` 对象；可走性由 `WorldState.computeWalkable()` 自动处理；如需前端渲染新的样式，扩展 `client/tiles.ts`/`render.ts`。
+- **新增行为/机制**：优先以“事件”为接口——写 `EventLog.addEvent(...)`，再在 `MemoryWriter`/`DialogueEngine`/`PerceptionEngine` 里订阅消费；若是对外 API，在 `web/server.ts` 增加路由。
+- **新增 LLM 能力**：在 `llm/prompts.ts` 增加模板与消息构建函数，在 `llm/mock.ts` 增加确定性分支，在 `llm/deepseek.ts` / `llm/ollama.ts`（通常无需改）复用 OpenAI 兼容 / Ollama 调用；新增 provider 时同步改 `gateway.ts` 与 `provider-config.ts`。
+- **新增研究实验**：参考 `engine/experiment.ts` + `cli/experiment.ts` 的模式：独立环境/种子/指标文件，保持“可复现、可对照”。
+- **新增测试**：在 `tests/` 下按子系统命名 `*.test.ts`，用 `node:test` + `assert/strict`；端到端行为放 `acceptance*.test.ts`。
+
+### 8.3 代码约定
+
+- TypeScript 严格模式；文件头写清楚职责注释（现有代码风格）；
+- 目录边界：`core` 不放 LLM/记忆逻辑；`engine` 编排认知/社交；`store` 只做持久化；`web/server.ts` 不写业务模拟；
+- 中文命名与中文事件描述保持一致（居民名、地点名、verb 用中文）；
+- 事件 payload 用 `kind` 字段区分事件子类型，便于前端/记忆/感知过滤；
+- 不引入新的运行时依赖（如需必须先在文档说明理由）。
+
+### 8.4 文档与素材
+
+- 主要文档集中在 `docs/`，入口是 `README.md`；
+- 任何用户可见行为变化都应更新 `README.md`；
+- 外部 AI 协议变化必须同步 `skills/town-agent/SKILL.md`；
+- 素材必须遵守 `ATTRIBUTION.md` 中的许可要求（尤其 CC-BY 需署名、CC0 可选署名）。
+
+### 8.5 运行边界
+
+- `data/town.sqlite` 与 `public/client.js`、`public/stats.js` 由运行/构建生成，已加入 `.gitignore`；
+- 当前地图约 50 个对象、6 位常驻居民；更多居民/对象可直接由 seed 扩展；
+- 本地 TypeScript 小镇承担机制正控与可视化；正式比赛数据由 AgentSociety² 在线工作区生成，二者的证据范围分别记录在 `docs/runtime-validation.md`。
+
+---
+
+## 9. 常见问题
+
+**Q：没有 DeepSeek Key 能跑吗？**
+能。默认 `LLM_PROVIDER=mock`，所有模板都有确定性离线输出，可用于演示、测试与预实验；也可以 `LLM_PROVIDER=ollama` 接本地模型，同样不需要 API key。
+
+**Q：为什么用 SQLite 而不是内存？**
+`data/town.sqlite` 保留事件/记忆/关系，支持 `pnpm replay` 回放和后续研究分析；测试可以用 `:memory:`。
+
+**Q：前端改了但页面没变化？**
+`pnpm town-web` 会先 `pnpm build:web`，手动运行 `pnpm build:web` 重新生成 `public/client.js`。
+
+**Q：`thinking` 状态看起来卡住？**
+LLM 调用是异步的；mock 下几乎立即返回，deepseek 下受网络/API 限流影响。若使用真机，建议设置 `DEEPSEEK_API_KEY` 并检查网络。

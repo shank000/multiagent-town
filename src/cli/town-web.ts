@@ -1,6 +1,7 @@
 // 像素小镇 Web 版：世界循环 + 本地网页服务（浏览器可视化，mock 默认离线）
 
 import { LLMGateway } from '../llm/gateway';
+import { providerNameFromEnv, gatewayConfigFromEnv } from '../llm/provider-config';
 import { createTownServer } from '../web/server';
 import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../engine/world-factory';
 import { assertFreshWorldDbPaths, parseArgs } from './town-web-config';
@@ -8,12 +9,8 @@ import { assertFreshWorldDbPaths, parseArgs } from './town-web-config';
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPaths = assertFreshWorldDbPaths(args);
-  const provider = process.env.LLM_PROVIDER === 'deepseek' ? 'deepseek' : 'mock';
-  const gateway = new LLMGateway({
-    provider,
-    deepseek: { apiKey: process.env.DEEPSEEK_API_KEY ?? '' },
-    retries: 2,
-  });
+  const provider = providerNameFromEnv();
+  const gateway = new LLMGateway(gatewayConfigFromEnv());
   // 平行世界：三种社会实验各一世界（极简像素块示意见客户端小地图）
   const worlds = [
     createManagedWorld('w1', 'mem-on', {

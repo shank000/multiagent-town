@@ -6,6 +6,8 @@ export { AgentExecutor } from './core/state-machine';
 export { LLMGateway } from './llm/gateway';
 export { MockProvider } from './llm/mock';
 export { DeepSeekProvider } from './llm/deepseek';
+export { OllamaProvider } from './llm/ollama';
+export { providerNameFromEnv, gatewayConfigFromEnv } from './llm/provider-config';
 export { openDb } from './store/db';
 export { EventLog } from './store/events';
 export { buildTown, TOWN_OBJECTS, LIN_PERSONA, CHEN_PERSONA, SHEN_PERSONA, ZHOU_PERSONA } from './engine/seed';
