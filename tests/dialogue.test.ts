@@ -234,17 +234,68 @@ test('首轮模型超过墙钟期限时记录异常并释放会话参与者', as
   try {
     assert.equal(dialogue.start(a, b, 10), true);
     const waiting = dialogue.activeSessions()[0];
-    assert.equal(waiting.phase, 'waiting_model');
+    assert.equal(waiting.phase, 'generating_model');
     assert.equal(waiting.speakerId, null);
     await new Promise((resolve) => setTimeout(resolve, 30));
     dialogue.tick(world, 0, 10);
     assert.equal(dialogue.isParticipantActive(a.id), false);
     const stored = store.conversationsFor(a.id)[0];
     assert.equal(stored.status, 'error');
-    assert.match(stored.errorText, /墙钟期限/);
+    assert.match(stored.errorText, /执行槽后.*未完成生成/);
     assert.equal(stored.messages.length, 0);
   } finally {
     await dialogue.drain();
+    db.raw.close();
+  }
+});
+
+test('首轮对话排队超过生成期限后仍可在获得执行槽时正常发言', async () => {
+  let releaseBlocker!: () => void;
+  const provider: LLMProvider = {
+    name: 'queued-dialogue',
+    async complete(request): Promise<LLMResponse> {
+      if (request.template === 'blocker') {
+        await new Promise<void>((resolve) => { releaseBlocker = resolve; });
+        return { content: '{}', parsed: {}, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+      }
+      return {
+        content: '{"utterance":"今天还算平稳，你呢？","end_dialogue":false}',
+        parsed: { utterance: '今天还算平稳，你呢？', end_dialogue: false },
+        usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 },
+      };
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1 });
+  const blocker = gateway.complete({
+    tier: 'small', template: 'blocker', messages: [], jsonMode: false, maxTokens: 1,
+    priority: 'background',
+  });
+  while (gateway.schedulerSnapshot().active === 0) await flush();
+  const a = makeAgent({ id: 'agent:a', name: '甲', x: 0, y: 0 });
+  const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1 });
+  const world = new WorldState(OBJS, [a, b]);
+  const dialogue = new DialogueEngine(gateway, store, log, 12, undefined, undefined, {
+    scopeId: 'w1', turnTimeoutMs: 20, turnQueueTimeoutMs: 200, summaryTimeoutMs: 20,
+  });
+  try {
+    assert.equal(dialogue.start(a, b, 10), true);
+    assert.equal(dialogue.activeSessions()[0].phase, 'queued_model');
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.equal(dialogue.activeSessions()[0].phase, 'queued_model');
+    releaseBlocker();
+    await blocker;
+    await flush();
+    dialogue.tick(world, 0, 10);
+    const stored = store.conversationsFor(a.id)[0];
+    assert.equal(stored.status, 'active');
+    assert.equal(stored.messages.length, 1);
+    assert.equal(stored.messages[0].content, '今天还算平稳，你呢？');
+  } finally {
+    await dialogue.drain();
+    await gateway.drain();
     db.raw.close();
   }
 });

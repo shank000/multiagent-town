@@ -87,6 +87,16 @@ test('活动预告不能支持已参加叙述，现场核验必须包含说话�
   assert.equal(planned.ok, false);
   assert.ok(planned.reasons.some((reason) => reason.includes('没有现场到场证据')));
 
+  const splitClaim = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们参加过湖边派对吗？',
+    priorTurns: ['我们参加过湖边派对吗？'],
+    evidence: ['活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。'],
+    utterance: '参加过，湖边派对挺热闹。',
+  });
+  assert.equal(splitClaim.ok, false);
+  assert.ok(splitClaim.reasons.some((reason) => reason.includes('没有现场到场证据')));
+
   const verified = assessDialogueTurn({
     ...base,
     latestPrompt: '我们参加过湖边派对吗？',
@@ -147,4 +157,44 @@ test('任意共同活动与共同经历都需要对应的完成证据', () => {
     utterance: '我们之前一起去湖边散步了。',
   });
   assert.equal(groundedWalk.ok, true);
+});
+
+test('否定虚假共同经历时仍拒绝顺带编造无证据的过去事件', () => {
+  const inventedAside = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们昨天一起参加了湖边派对，你记得吗？',
+    priorTurns: ['我们昨天一起参加了湖边派对，你记得吗？'],
+    evidence: ['活动现场核验：无人实际到场，湖边派对取消。'],
+    utterance: '没印象，那天湖面风大，我钓着鱼呢，哪有派对。',
+  });
+  assert.equal(inventedAside.ok, false);
+  assert.ok(inventedAside.reasons.some((reason) => reason.includes('无当前证据支持的过去事件')));
+
+  const inventedNight = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们昨天一起参加了湖边派对，你记得吗？',
+    priorTurns: ['我们昨天一起参加了湖边派对，你记得吗？'],
+    evidence: ['「湖边派对」现场核验未达到两人：无人实际到场，活动取消。'],
+    utterance: '没印象，那晚湖面刮风，我钓的鱼都翻了船，哪有派对？',
+  });
+  assert.equal(inventedNight.ok, false);
+  assert.ok(inventedNight.reasons.some((reason) => reason.includes('无当前证据支持的过去事件')));
+
+  const groundedDenial = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们昨天一起参加了湖边派对，你记得吗？',
+    priorTurns: ['我们昨天一起参加了湖边派对，你记得吗？'],
+    evidence: ['活动现场核验：无人实际到场，湖边派对取消。'],
+    utterance: '没参加，湖边派对现场没有人，后来已经取消了。',
+  });
+  assert.equal(groundedDenial.ok, true);
+
+  const groundedCancellation = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们昨天一起参加了湖边派对，你记得吗？',
+    priorTurns: ['我们昨天一起参加了湖边派对，你记得吗？'],
+    evidence: ['「湖边派对」现场核验未达到两人：无人实际到场，活动取消。'],
+    utterance: '我能确认的是：「湖边派对」现场核验未达到两人：无人实际到场，活动取消。',
+  });
+  assert.equal(groundedCancellation.ok, true);
 });

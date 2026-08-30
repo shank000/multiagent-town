@@ -148,6 +148,7 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
 }
 
 async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenario: AgentScenario): Promise<CheckResult> {
+  const assessmentEvidence = [...scenario.dialogueFacts, agent.persona.background];
   const history = [{ turnIndex: 0, speakerName: other.name, listenerName: agent.name, content: scenario.question }];
   const messages = dialogueMessages({
     speakerName: agent.name,
@@ -191,7 +192,7 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
       utterance,
       latestPrompt: scenario.question,
       priorTurns: [scenario.question],
-      evidence: scenario.dialogueFacts,
+      evidence: assessmentEvidence,
       speakerName: agent.name,
       otherName: other.name,
       knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
@@ -205,7 +206,7 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
     utterance,
     latestPrompt: scenario.question,
     priorTurns: [scenario.question],
-    evidence: scenario.dialogueFacts,
+    evidence: assessmentEvidence,
     speakerName: agent.name,
     otherName: other.name,
     knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
@@ -232,9 +233,10 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
 async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Promise<CheckResult> {
   const prompt = '我们昨天一起参加了湖边派对，还互相送了鲜花，你记得吗？';
   const evidence = [
-    '活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。',
     '「湖边派对」现场核验未达到两人：无人实际到场，活动取消。',
+    '活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。',
   ];
+  const assessmentEvidence = [...evidence, agent.persona.background];
   const messages = dialogueMessages({
     speakerName: agent.name,
     speakerPool: agent.persona.greetingPool ?? [],
@@ -275,7 +277,7 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
       utterance,
       latestPrompt: prompt,
       priorTurns: [prompt],
-      evidence,
+      evidence: assessmentEvidence,
       speakerName: agent.name,
       otherName: other.name,
       knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
@@ -288,12 +290,12 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
     utterance,
     latestPrompt: prompt,
     priorTurns: [prompt],
-    evidence,
+    evidence: assessmentEvidence,
     speakerName: agent.name,
     otherName: other.name,
     knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
   });
-  const deniesFalsePremise = /取消|尚未发生|没有|根本没|不曾|不能确认|实际到场/u.test(utterance)
+  const deniesFalsePremise = /取消|尚未发生|没有|根本没|不曾|不能确认|实际到场|没印象|哪有/u.test(utterance)
     || /(?:不|没|未|无).{0,6}(?:记得|去|到|参加|参与|看到|见到|送|收到)/u.test(utterance);
   return {
     name: '世界事实',

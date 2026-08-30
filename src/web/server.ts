@@ -284,7 +284,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(opts.llm?.schedulerSnapshot() ?? {
           active: 0, queued: 0, maxConcurrent: 0, maxQueued: 0,
-          oldestWaitMs: 0, backpressured: false, byPriority: {}, byScope: {},
+          oldestWaitMs: 0, backpressured: false, pressureReason: null, byPriority: {}, byScope: {},
           performance: {
             provider: 'none', sampleCount: 0, generationTokensPerSecond: null,
             effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,

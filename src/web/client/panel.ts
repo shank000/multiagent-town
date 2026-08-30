@@ -325,8 +325,10 @@ interface DyadConversationView {
 }
 
 interface ConversationRuntimeView {
-  phase: 'waiting_model' | 'ready' | 'summarizing';
+  phase: 'waiting_model' | 'queued_model' | 'generating_model' | 'ready' | 'summarizing';
   waitMs: number;
+  queueWaitMs?: number;
+  generationMs?: number;
 }
 
 function conversationWaitingLabel(runtime: ConversationRuntimeView | null | undefined): string {
@@ -334,6 +336,15 @@ function conversationWaitingLabel(runtime: ConversationRuntimeView | null | unde
   if (runtime?.phase === 'waiting_model') {
     const seconds = Math.max(1, Math.ceil((runtime.waitMs || 0) / 1000));
     return `本地模型排队或生成中 · ${seconds} 秒`;
+  }
+  if (runtime?.phase === 'queued_model') {
+    const seconds = Math.max(1, Math.ceil((runtime.queueWaitMs || runtime.waitMs || 0) / 1000));
+    return `本地模型排队中 · ${seconds} 秒`;
+  }
+  if (runtime?.phase === 'generating_model') {
+    const generationSeconds = Math.max(1, Math.ceil((runtime.generationMs || 0) / 1000));
+    const queueSeconds = Math.ceil((runtime.queueWaitMs || 0) / 1000);
+    return `本地模型生成中 · ${generationSeconds} 秒${queueSeconds ? `（排队 ${queueSeconds} 秒）` : ''}`;
   }
   return '等待第一轮发言';
 }

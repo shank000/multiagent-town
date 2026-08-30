@@ -124,6 +124,28 @@ test('对话提示词允许结束对话（end_dialogue 非写死 false）', () =
   assert.ok(sys.includes('禁止编造书名'));
 });
 
+test('对话提示仅携带有限会话窗口且 M0 上下文保持紧凑', () => {
+  const messages = dialogueMessages({
+    speakerName: '甲', speakerPool: Array.from({ length: 10 }, (_, index) => `问候${index}`),
+    otherName: '乙', goal: '了解近况', turns: 12,
+    rumors: Array.from({ length: 5 }, (_, index) => ({ id: `r${index}`, content: `传闻${index}` })),
+    affection: 0.2, honesty: 0.7,
+    speakerPersona: persona({ name: '甲' }), otherPersona: persona({ name: '乙' }),
+    relationshipHistory: Array.from({ length: 6 }, (_, index) => `关系摘要${index}`),
+    speakerMemories: Array.from({ length: 12 }, (_, index) => `个人记忆${index}`),
+    worldFacts: Array.from({ length: 12 }, (_, index) => `世界事实${index}`),
+    history: Array.from({ length: 12 }, (_, index) => ({
+      turnIndex: index, speakerName: index % 2 ? '甲' : '乙', listenerName: index % 2 ? '乙' : '甲', content: `第${index + 1}句`,
+    })),
+  });
+  assert.ok(!messages[0].content.includes('1. 乙 → 甲：第1句'));
+  assert.ok(messages[0].content.includes('7. 乙 → 甲：第7句'));
+  assert.ok(messages[0].content.includes('12. 甲 → 乙：第12句'));
+  assert.ok(!messages[1].content.includes('speakerPersona'));
+  assert.ok(!messages[1].content.includes('worldFacts'));
+  assert.ok(messages[1].content.length < 1600);
+});
+
 test('反思日记提示规定紧凑且完整的证据约束 JSON', () => {
   const agent = makeAgent({ persona: persona({ name: '甲', occupation: '木匠' }) });
   const messages = reflectionJournalMessages({

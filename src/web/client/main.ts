@@ -28,8 +28,10 @@ interface ActiveConversationView {
   aId: string;
   bId: string;
   speakerId: string | null;
-  phase?: 'waiting_model' | 'ready' | 'summarizing';
+  phase?: 'waiting_model' | 'queued_model' | 'generating_model' | 'ready' | 'summarizing';
   waitMs?: number;
+  queueWaitMs?: number;
+  generationMs?: number;
 }
 interface WorldSnapshot {
   clock: ClockState; speedPerRealSecond: number; paused: boolean;
@@ -1022,6 +1024,7 @@ setInterval(pollExperiment, 2000);
 function pollLLMStatus(): void {
   void fetch('/api/llm/status').then((response) => response.json()).then((status: {
     active?: number; queued?: number; maxQueued?: number; oldestWaitMs?: number; backpressured?: boolean;
+    pressureReason?: 'queue_capacity' | 'queue_wait' | null;
     performance?: { generationTokensPerSecond?: number | null; recommendedMaxWorldSpeed?: number | null; confidence?: string };
   }) => {
     const element = document.getElementById('llm-status');
@@ -1036,8 +1039,9 @@ function pollLLMStatus(): void {
       : ' · 待校准';
     element.classList.toggle('busy', !status.backpressured && (active > 0 || queued > 0));
     element.classList.toggle('pressure', !!status.backpressured);
+    const pressureLabel = status.pressureReason === 'queue_wait' ? '等待过长' : '队列拥塞';
     element.innerHTML = status.backpressured
-      ? `<span class="llm-dot"></span>认知背压 · ${queued} 排队${calibration}`
+      ? `<span class="llm-dot"></span>认知背压 · ${pressureLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
       : queued > 0
         ? `<span class="llm-dot"></span>本地推理 · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
         : `<span class="llm-dot"></span>本地推理 · ${active ? '生成中' : '就绪'}${calibration}`;

@@ -44,7 +44,9 @@ interface Session {
 interface Pending {
   resolved: { utterance: string; end: boolean; quality: DialogueQualityResult } | null;
   error: string | null;
-  startedAtMs: number;
+  queuedAtMs: number;
+  dispatchedAtMs: number | null;
+  lastQueueWaitMs: number;
 }
 
 interface DialogueQualityResult {
@@ -59,8 +61,10 @@ export interface ActiveConversation {
   aId: string;
   bId: string;
   speakerId: string | null;
-  phase?: 'waiting_model' | 'ready' | 'summarizing';
+  phase?: 'queued_model' | 'generating_model' | 'ready' | 'summarizing';
   waitMs?: number;
+  queueWaitMs?: number;
+  generationMs?: number;
 }
 
 export interface DialogueStartOptions {
@@ -74,7 +78,9 @@ export interface DialogueStartOptions {
 export interface DialogueEngineOptions {
   scopeId?: string;
   turnTimeoutMs?: number;
+  turnQueueTimeoutMs?: number;
   summaryTimeoutMs?: number;
+  summaryQueueTimeoutMs?: number;
 }
 
 function pairKey(a: string, b: string): string {
@@ -97,12 +103,16 @@ export class DialogueEngine {
     private options: DialogueEngineOptions = {},
   ) {
     if (!Number.isSafeInteger(this.turnTimeoutMs) || this.turnTimeoutMs <= 0) throw new Error('turnTimeoutMs 必须是正整数');
+    if (!Number.isSafeInteger(this.turnQueueTimeoutMs) || this.turnQueueTimeoutMs <= 0) throw new Error('turnQueueTimeoutMs 必须是正整数');
     if (!Number.isSafeInteger(this.summaryTimeoutMs) || this.summaryTimeoutMs <= 0) throw new Error('summaryTimeoutMs 必须是正整数');
+    if (!Number.isSafeInteger(this.summaryQueueTimeoutMs) || this.summaryQueueTimeoutMs <= 0) throw new Error('summaryQueueTimeoutMs 必须是正整数');
   }
 
   private get scopeId(): string { return this.options.scopeId?.trim() || 'default'; }
   private get turnTimeoutMs(): number { return this.options.turnTimeoutMs ?? 90_000; }
+  private get turnQueueTimeoutMs(): number { return this.options.turnQueueTimeoutMs ?? 240_000; }
   private get summaryTimeoutMs(): number { return this.options.summaryTimeoutMs ?? 60_000; }
+  private get summaryQueueTimeoutMs(): number { return this.options.summaryQueueTimeoutMs ?? 180_000; }
 
   isActive(aId: string, bId: string): boolean {
     return this.sessions.has(pairKey(aId, bId));
@@ -121,14 +131,23 @@ export class DialogueEngine {
       .filter((session) => session.phase !== 'completed')
       .map((session) => {
         const pending = this.pending.get(pairKey(session.a, session.b));
-        const phase = session.phase === 'finishing' ? 'summarizing' : pending ? 'waiting_model' : 'ready';
+        const phase = session.phase === 'finishing'
+          ? 'summarizing'
+          : pending
+            ? pending.dispatchedAtMs === null ? 'queued_model' : 'generating_model'
+            : 'ready';
+        const now = Date.now();
         return {
           conversationId: session.conversationId,
           aId: session.a,
           bId: session.b,
           speakerId: phase === 'ready' ? (session.turns.length % 2 === 0 ? session.a : session.b) : null,
           phase,
-          waitMs: pending ? Math.max(0, Date.now() - pending.startedAtMs) : 0,
+          waitMs: pending ? Math.max(0, now - pending.queuedAtMs) : 0,
+          queueWaitMs: pending
+            ? pending.dispatchedAtMs === null ? Math.max(0, now - pending.queuedAtMs) : pending.lastQueueWaitMs
+            : 0,
+          generationMs: pending?.dispatchedAtMs ? Math.max(0, now - pending.dispatchedAtMs) : 0,
         };
       });
   }
@@ -202,7 +221,13 @@ export class DialogueEngine {
   private speak(speaker: Agent, other: Agent, s: Session, now: number, world?: WorldState): void {
     const key = pairKey(s.a, s.b);
     s.lastUtterAt = now;
-    const entry: Pending = { resolved: null, error: null, startedAtMs: Date.now() };
+    const entry: Pending = {
+      resolved: null,
+      error: null,
+      queuedAtMs: Date.now(),
+      dispatchedAtMs: null,
+      lastQueueWaitMs: 0,
+    };
     this.pending.set(key, entry);
     const task = (async () => {
       try {
@@ -243,16 +268,25 @@ export class DialogueEngine {
         const baseMessages = dialogueMessages(ctx);
         const qualityEvidence = [
           ...speakerMemories, ...(relationship?.knowledge ?? []), ...carried.map((item) => item.content),
+          speaker.persona.background,
         ];
         let rejectedReasons: string[] = [];
         for (let attempt = 1; attempt <= 2; attempt += 1) {
+          entry.queuedAtMs = Date.now();
+          entry.dispatchedAtMs = null;
+          entry.lastQueueWaitMs = 0;
           const messages = baseMessages.map((message) => ({ ...message }));
           if (attempt > 1) messages[messages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
           const res = await this.llm.complete({
             tier: 'small', template: DIALOGUE_TEMPLATE, jsonMode: true, jsonSchema: DIALOGUE_JSON_SCHEMA,
             maxTokens: 192, temperature: attempt === 1 ? 0.25 : 0.1,
             messages, agentId: speaker.id, reasoning: false,
-            priority: 'dialogue', scopeId: this.scopeId, timeoutMs: this.turnTimeoutMs,
+            priority: 'dialogue', scopeId: this.scopeId,
+            timeoutMs: this.turnTimeoutMs, queueTimeoutMs: this.turnQueueTimeoutMs,
+            onDispatch: (queueWaitMs) => {
+              entry.dispatchedAtMs = Date.now();
+              entry.lastQueueWaitMs = queueWaitMs;
+            },
           });
           const parsed = res.parsed as { utterance?: string; end_dialogue?: boolean } | null;
           const utterance = (parsed?.utterance ?? '').trim().slice(0, 120);
@@ -348,7 +382,8 @@ export class DialogueEngine {
         tier: 'small', template: DIALOGUE_SUMMARY_TEMPLATE, jsonMode: true, jsonSchema: DIALOGUE_SUMMARY_JSON_SCHEMA,
         maxTokens: 192, temperature: 0.1,
         messages: dialogueSummaryMessages(lines), agentId: s.a, reasoning: false,
-        priority: 'dialogue', scopeId: this.scopeId, timeoutMs: this.summaryTimeoutMs,
+        priority: 'dialogue', scopeId: this.scopeId,
+        timeoutMs: this.summaryTimeoutMs, queueTimeoutMs: this.summaryQueueTimeoutMs,
       });
       summary = (((summaryRes.parsed as { summary?: string } | null)?.summary) ?? summary).slice(0, 100);
     } catch {

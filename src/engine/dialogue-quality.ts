@@ -94,10 +94,15 @@ export function dialogueRepairInstruction(reasons: readonly string[]): string {
 
 function worldClaimReasons(context: DialogueQualityContext): string[] {
   const reasons: string[] = [];
-  const clauses = context.utterance.split(/[。！？!?；\n]/u).map((item) => item.trim()).filter(Boolean);
+  const sentences = context.utterance.split(/[。！？!?；\n]/u).map((item) => item.trim()).filter(Boolean);
+  const clauses = sentences.flatMap((sentence) => {
+    const parts = sentence.split(/[，,]/u).map((item) => item.trim()).filter(Boolean);
+    const adjacent = parts.slice(1).map((part, index) => `${parts[index]}，${part}`);
+    return [...parts, ...adjacent];
+  });
   for (const clause of clauses) {
     const activity = activityNameIn(clause);
-    if (activity && completedActivityClaim(clause) && !prospectiveClaim(clause)) {
+    if (activity && completedActivityClaim(clause) && !prospectiveClaim(clause) && !negatedPastClaim(clause)) {
       const requiredNames = claimParticipants(clause, context.speakerName, context.otherName);
       const supported = context.evidence.some((item) => (
         activityNameIn(item) === activity
@@ -106,7 +111,7 @@ function worldClaimReasons(context: DialogueQualityContext): string[] {
       ));
       if (!supported) reasons.push(`把没有现场到场证据的「${activity}」写成已参加`);
     }
-    if (completedFlowerClaim(clause) && !prospectiveClaim(clause)) {
+    if (completedFlowerClaim(clause) && !prospectiveClaim(clause) && !negatedPastClaim(clause)) {
       const requiredNames = claimParticipants(clause, context.speakerName, context.otherName);
       const supported = context.evidence.some((item) => (
         /鲜花|花束|送花/u.test(item)
@@ -115,12 +120,38 @@ function worldClaimReasons(context: DialogueQualityContext): string[] {
       ));
       if (!supported) reasons.push('把没有履约证据的送花或收花意向写成已完成');
     }
-    if (!activity && !completedFlowerClaim(clause) && completedSharedClaim(clause) && !prospectiveClaim(clause)) {
+    if (!activity && !completedFlowerClaim(clause) && completedSharedClaim(clause) && !prospectiveClaim(clause) && !negatedPastClaim(clause)) {
       const supported = context.evidence.some((item) => completedSharedEvidence(clause, item));
       if (!supported) reasons.push('把没有完成证据的共同经历写成已经发生');
     }
   }
+  for (const sentence of sentences) {
+    let pastContext = false;
+    for (const clause of sentence.split(/[，,]/u).map((item) => item.trim()).filter(Boolean)) {
+      if (/昨天|昨晚|那天|那晚|当晚|当时|上次|之前|过去|曾经|刚才/u.test(clause)) pastContext = true;
+      if (!pastContext || negatedPastClaim(clause) || pastClaimSupported(clause, context.evidence)) continue;
+      reasons.push('叙述无当前证据支持的过去事件');
+    }
+  }
   return reasons;
+}
+
+function negatedPastClaim(text: string): boolean {
+  return /没印象|不记得|不能确认|哪有|并非|不是|不对|从未|不曾|并未|并没有|没有|尚未|还没|取消/u.test(text)
+    || /(?:不|没|未|无).{0,6}(?:去|到|参加|参与|看到|见到|送|收到|做|发生)/u.test(text);
+}
+
+function pastClaimSupported(claim: string, evidence: readonly string[]): boolean {
+  const claimTerms = meaningfulBigrams(claim);
+  return evidence.some((item) => {
+    const normalizedClaim = normalize(claim);
+    const normalizedEvidence = normalize(item);
+    if (normalizedClaim.length >= 4 && normalizedEvidence.includes(normalizedClaim)) return true;
+    const evidenceTerms = meaningfulBigrams(item);
+    let overlap = 0;
+    for (const term of claimTerms) if (evidenceTerms.has(term)) overlap += 1;
+    return overlap >= 2;
+  });
 }
 
 function activityNameIn(text: string): string | null {

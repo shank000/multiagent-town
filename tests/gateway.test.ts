@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LLMDeadlineExceededError, LLMGateway, LLMQueueFullError } from '../src/llm/gateway';
+import { LLMDeadlineExceededError, LLMGateway, LLMQueueFullError, LLMQueueWaitExceededError } from '../src/llm/gateway';
 import { StubProvider } from './helpers';
 import type { ChatMessage, LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 
@@ -191,7 +191,9 @@ test('有界队列为高优先级对话释放容量，等待期限会清理过�
   const evicted = await evictedResult;
   assert.ok(evicted instanceof LLMQueueFullError);
   assert.equal(gateway.isBackpressured(), true);
-  await assert.rejects(dialogue, (error: unknown) => error instanceof LLMDeadlineExceededError);
+  await assert.rejects(dialogue, (error: unknown) => (
+    error instanceof LLMDeadlineExceededError && error instanceof LLMQueueWaitExceededError
+  ));
   releases.shift()?.();
   await active;
   await waitFor(() => releases.length === 1);
@@ -199,6 +201,86 @@ test('有界队列为高优先级对话释放容量，等待期限会清理过�
   await oldBackground;
   await gateway.drain();
   assert.equal(gateway.schedulerSnapshot().backpressured, false);
+});
+
+test('排队时间不占用 provider 生成期限', async () => {
+  let releaseActive!: () => void;
+  let dialogueQueueWaitMs = 0;
+  const provider: LLMProvider = {
+    name: 'separate-deadlines',
+    async complete(request): Promise<LLMResponse> {
+      if (request.template === 'active') {
+        await new Promise<void>((resolve) => { releaseActive = resolve; });
+      }
+      return { content: '{}', parsed: {}, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1, maxQueued: 4 });
+  const active = gateway.complete({ ...req([]), template: 'active', priority: 'background' });
+  await waitFor(() => gateway.schedulerSnapshot().active === 1);
+  const dialogue = gateway.complete({
+    ...req([]), template: 'dialogue', priority: 'dialogue',
+    timeoutMs: 20, queueTimeoutMs: 200,
+    onDispatch: (queueWaitMs) => { dialogueQueueWaitMs = queueWaitMs; },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  releaseActive();
+  await Promise.all([active, dialogue]);
+  assert.ok(dialogueQueueWaitMs >= 25);
+});
+
+test('非对话任务老化后仍不会抢占新到达的首轮对话', async () => {
+  const started: string[] = [];
+  const releases: (() => void)[] = [];
+  const provider: LLMProvider = {
+    name: 'strict-dialogue-priority',
+    async complete(request): Promise<LLMResponse> {
+      started.push(request.template);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return { content: '{}', parsed: {}, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1, maxQueued: 8, priorityAgingMs: 1 });
+  const active = gateway.complete({ ...req([]), template: 'active', priority: 'background' });
+  await waitFor(() => started.length === 1);
+  const aged = gateway.complete({ ...req([]), template: 'aged-action', priority: 'action' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const dialogue = gateway.complete({ ...req([]), template: 'first-turn', priority: 'dialogue' });
+  releases.shift()?.();
+  await waitFor(() => started.length === 2);
+  assert.equal(started[1], 'first-turn');
+  releases.shift()?.();
+  await waitFor(() => started.length === 3);
+  assert.equal(started[2], 'aged-action');
+  releases.shift()?.();
+  await Promise.all([active, aged, dialogue]);
+});
+
+test('最老请求等待过久时触发世界时钟背压并公开原因', async () => {
+  const releases: (() => void)[] = [];
+  const provider: LLMProvider = {
+    name: 'wait-pressure',
+    async complete(): Promise<LLMResponse> {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return { content: '{}', parsed: {}, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({
+    provider, retries: 0, maxConcurrent: 1, maxQueued: 8,
+    highWaterMark: 8, lowWaterMark: 0, backpressureWaitMs: 10, backpressureResumeWaitMs: 0,
+  });
+  const active = gateway.complete({ ...req([]), template: 'active', priority: 'background' });
+  await waitFor(() => releases.length === 1);
+  const queued = gateway.complete({ ...req([]), template: 'queued', priority: 'background' });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const pressured = gateway.schedulerSnapshot();
+  assert.equal(pressured.backpressured, true);
+  assert.equal(pressured.pressureReason, 'queue_wait');
+  releases.shift()?.();
+  await waitFor(() => releases.length === 1);
+  releases.shift()?.();
+  await Promise.all([active, queued]);
+  assert.equal(gateway.schedulerSnapshot().pressureReason, null);
 });
 
 test('真实响应时序形成吞吐快照与可持续世界倍速建议', async () => {

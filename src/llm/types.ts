@@ -26,8 +26,12 @@ export interface LLMRequest {
   priority?: LLMRequestPriority;
   /** 平行世界调度范围；同优先级按范围轮询，避免固定世界长期先发。 */
   scopeId?: string;
-  /** 从进入网关到得到结果的墙钟时间上限，包含排队与重试。 */
+  /** 请求获得执行槽后，provider 生成与重试的墙钟时间上限。 */
   timeoutMs?: number;
+  /** 在共享调度器中等待执行槽的墙钟时间上限；缺省与 timeoutMs 相同。 */
+  queueTimeoutMs?: number;
+  /** 调度生命周期通知；只用于运行态观测，不进入提示词、记忆或研究数据。 */
+  onDispatch?: (queueWaitMs: number) => void;
 }
 
 export interface LLMUsage {

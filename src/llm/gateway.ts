@@ -23,6 +23,9 @@ export interface GatewayConfig {
   maxQueued?: number; // 有界等待队列；高优先级请求可替换最低优先级等待项
   highWaterMark?: number; // 世界时钟背压高水位
   lowWaterMark?: number; // 世界时钟背压解除水位
+  backpressureWaitMs?: number; // 最老请求达到该排队时长后暂缓世界时钟
+  backpressureResumeWaitMs?: number; // 排队时长降至该值后允许解除背压
+  priorityAgingMs?: number; // 非对话任务每经过该时长提升一级，但不会进入对话等级
   expectedActiveAgents?: number; // 持续倍速估算所覆盖的居民数；三世界 Web 为 18
 }
 
@@ -41,6 +44,7 @@ export interface SchedulerSnapshot {
   maxQueued: number;
   oldestWaitMs: number;
   backpressured: boolean;
+  pressureReason: 'queue_capacity' | 'queue_wait' | null;
   byPriority: Record<LLMRequestPriority, number>;
   byScope: Record<string, number>;
   performance: ThroughputSnapshot;
@@ -72,7 +76,7 @@ interface QueueItem {
   priority: LLMRequestPriority;
   scopeId: string;
   enqueuedAt: number;
-  deadlineAt: number | null;
+  queueDeadlineAt: number | null;
   resolve: (response: LLMResponse) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout> | null;
@@ -93,7 +97,11 @@ export class LLMQueueFullError extends Error {
 }
 
 export class LLMDeadlineExceededError extends Error {
-  override readonly name = 'LLMDeadlineExceededError';
+  override readonly name: string = 'LLMDeadlineExceededError';
+}
+
+export class LLMQueueWaitExceededError extends LLMDeadlineExceededError {
+  override readonly name: string = 'LLMQueueWaitExceededError';
 }
 
 export class LLMGateway {
@@ -104,6 +112,9 @@ export class LLMGateway {
   private maxQueued: number;
   private highWaterMark: number;
   private lowWaterMark: number;
+  private backpressureWaitMs: number;
+  private backpressureResumeWaitMs: number;
+  private priorityAgingMs: number;
   private metrics = new Map<string, TemplateMetric>();
   private queue: QueueItem[] = [];
   private activeCount = 0;
@@ -111,6 +122,7 @@ export class LLMGateway {
   private lastScopeByRank = new Map<number, string>();
   private drainWaiters = new Set<() => void>();
   private pressureLatched = false;
+  private pressureReason: SchedulerSnapshot['pressureReason'] = null;
   private expectedActiveAgents: number;
   private performanceSamples: PerformanceSample[] = [];
   private calibrationTask: Promise<ThroughputSnapshot> | null = null;
@@ -132,6 +144,14 @@ export class LLMGateway {
       0,
       this.highWaterMark,
     );
+    this.backpressureWaitMs = boundedInteger(cfg.backpressureWaitMs ?? 10_000, 'backpressureWaitMs', 1, 2_147_483_647);
+    this.backpressureResumeWaitMs = boundedInteger(
+      cfg.backpressureResumeWaitMs ?? Math.min(2_500, this.backpressureWaitMs),
+      'backpressureResumeWaitMs',
+      0,
+      this.backpressureWaitMs,
+    );
+    this.priorityAgingMs = boundedInteger(cfg.priorityAgingMs ?? 30_000, 'priorityAgingMs', 1, 2_147_483_647);
     this.expectedActiveAgents = boundedInteger(cfg.expectedActiveAgents ?? 6, 'expectedActiveAgents', 1, 10_000);
     const p = cfg.provider;
     if (p && typeof p !== 'string') {
@@ -160,23 +180,25 @@ export class LLMGateway {
 
   complete(req: LLMRequest): Promise<LLMResponse> {
     validateRequestTimeout(req.timeoutMs);
+    validateQueueTimeout(req.queueTimeoutMs);
     return new Promise<LLMResponse>((resolve, reject) => {
       const now = Date.now();
       const priority = req.priority ?? inferPriority(req.template);
+      const queueTimeoutMs = req.queueTimeoutMs ?? req.timeoutMs;
       const item: QueueItem = {
         sequence: ++this.sequence,
         request: req,
         priority,
         scopeId: req.scopeId?.trim() || 'default',
         enqueuedAt: now,
-        deadlineAt: req.timeoutMs === undefined ? null : now + req.timeoutMs,
+        queueDeadlineAt: queueTimeoutMs === undefined ? null : now + queueTimeoutMs,
         resolve,
         reject,
         timer: null,
       };
       if (!this.admit(item)) return;
-      if (item.deadlineAt !== null) {
-        item.timer = setTimeout(() => this.expireQueued(item), Math.max(1, item.deadlineAt - now));
+      if (item.queueDeadlineAt !== null) {
+        item.timer = setTimeout(() => this.expireQueued(item), Math.max(1, item.queueDeadlineAt - now));
       }
       this.queue.push(item);
       this.updatePressure();
@@ -246,6 +268,7 @@ export class LLMGateway {
       maxQueued: this.maxQueued,
       oldestWaitMs: this.queue.length ? Math.max(0, now - Math.min(...this.queue.map((item) => item.enqueuedAt))) : 0,
       backpressured: this.isBackpressured(),
+      pressureReason: this.pressureReason,
       byPriority,
       byScope,
       performance: this.throughputSnapshot(),
@@ -306,7 +329,7 @@ export class LLMGateway {
   private expireQueued(item: QueueItem): void {
     if (!this.queue.includes(item)) return;
     this.removeQueued(item);
-    item.reject(deadlineError(item.request));
+    item.reject(queueWaitError(item.request));
     this.pump();
   }
 
@@ -325,13 +348,20 @@ export class LLMGateway {
       if (!item) break;
       if (item.timer) clearTimeout(item.timer);
       item.timer = null;
-      if (item.deadlineAt !== null && item.deadlineAt <= Date.now()) {
-        item.reject(deadlineError(item.request));
+      if (item.queueDeadlineAt !== null && item.queueDeadlineAt <= Date.now()) {
+        item.reject(queueWaitError(item.request));
         continue;
+      }
+      const dispatchedAt = Date.now();
+      const executionDeadlineAt = item.request.timeoutMs === undefined ? null : dispatchedAt + item.request.timeoutMs;
+      try {
+        item.request.onDispatch?.(Math.max(0, dispatchedAt - item.enqueuedAt));
+      } catch (error) {
+        console.warn('[llm-gateway] dispatch observer failed', error);
       }
       this.activeCount += 1;
       this.updatePressure();
-      void this.completeWithRetry(item.request, item.deadlineAt).then(item.resolve, item.reject).finally(() => {
+      void this.completeWithRetry(item.request, executionDeadlineAt).then(item.resolve, item.reject).finally(() => {
         this.activeCount -= 1;
         this.updatePressure();
         this.pump();
@@ -343,7 +373,10 @@ export class LLMGateway {
 
   private takeNext(now = Date.now()): QueueItem | null {
     if (!this.queue.length) return null;
-    const effectiveRank = (item: QueueItem) => Math.max(0, PRIORITY_RANK[item.priority] - Math.floor((now - item.enqueuedAt) / 30_000));
+    const effectiveRank = (item: QueueItem) => {
+      if (item.priority === 'dialogue') return 0;
+      return Math.max(1, PRIORITY_RANK[item.priority] - Math.floor((now - item.enqueuedAt) / this.priorityAgingMs));
+    };
     const bestRank = Math.min(...this.queue.map(effectiveRank));
     const eligible = this.queue.filter((item) => effectiveRank(item) === bestRank).sort((a, b) => a.sequence - b.sequence);
     const lastScope = this.lastScopeByRank.get(bestRank);
@@ -367,10 +400,27 @@ export class LLMGateway {
     return chosen;
   }
 
-  private updatePressure(): void {
+  private updatePressure(now = Date.now()): void {
     const load = this.activeCount + this.queue.length;
-    if (!this.pressureLatched && load >= this.highWaterMark) this.pressureLatched = true;
-    else if (this.pressureLatched && load <= this.lowWaterMark) this.pressureLatched = false;
+    const oldestWaitMs = this.queue.length
+      ? Math.max(0, now - Math.min(...this.queue.map((item) => item.enqueuedAt)))
+      : 0;
+    if (!this.pressureLatched) {
+      if (load >= this.highWaterMark) {
+        this.pressureLatched = true;
+        this.pressureReason = 'queue_capacity';
+      } else if (oldestWaitMs >= this.backpressureWaitMs) {
+        this.pressureLatched = true;
+        this.pressureReason = 'queue_wait';
+      }
+    } else if (load <= this.lowWaterMark && oldestWaitMs <= this.backpressureResumeWaitMs) {
+      this.pressureLatched = false;
+      this.pressureReason = null;
+    } else if (oldestWaitMs >= this.backpressureWaitMs) {
+      this.pressureReason = 'queue_wait';
+    } else if (load >= this.highWaterMark) {
+      this.pressureReason = 'queue_capacity';
+    }
   }
 
   private resolveDrainIfIdle(): void {
@@ -492,12 +542,21 @@ function validateRequestTimeout(value: number | undefined): void {
   boundedInteger(value, 'LLMRequest.timeoutMs', 1, 2_147_483_647);
 }
 
+function validateQueueTimeout(value: number | undefined): void {
+  if (value === undefined) return;
+  boundedInteger(value, 'LLMRequest.queueTimeoutMs', 1, 2_147_483_647);
+}
+
 function remainingMs(deadlineAt: number | null): number | null {
   return deadlineAt === null ? null : Math.max(0, deadlineAt - Date.now());
 }
 
 function deadlineError(req: LLMRequest): LLMDeadlineExceededError {
-  return new LLMDeadlineExceededError(`${req.template} 在 ${req.timeoutMs ?? 0}ms 墙钟期限内未完成`);
+  return new LLMDeadlineExceededError(`${req.template} 获得执行槽后在 ${req.timeoutMs ?? 0}ms 内未完成生成`);
+}
+
+function queueWaitError(req: LLMRequest): LLMQueueWaitExceededError {
+  return new LLMQueueWaitExceededError(`${req.template} 排队等待超过 ${req.queueTimeoutMs ?? req.timeoutMs ?? 0}ms，尚未开始生成`);
 }
 
 async function withDeadline<T>(task: Promise<T>, timeoutMs: number | null, req: LLMRequest): Promise<T> {

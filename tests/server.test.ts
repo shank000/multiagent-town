@@ -105,6 +105,7 @@ test('推理状态接口公开有界队列与背压指标', async () => {
       maxQueued: 256,
       oldestWaitMs: 0,
       backpressured: false,
+      pressureReason: null,
       byPriority: { dialogue: 0, action: 0, planning: 0, reflection: 0, background: 0 },
       byScope: {},
       performance: {

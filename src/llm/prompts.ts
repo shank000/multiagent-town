@@ -208,11 +208,13 @@ export function dialogueMessages(ctx: {
   participants?: [string, string];
   history?: { turnIndex: number; speakerName: string; listenerName: string; content: string }[];
 }): ChatMessage[] {
-  const rumorLines = ctx.rumors.length
-    ? `\n你可能听说了这些传闻（关系足够近才适合提起）：\n${ctx.rumors.map((r) => `- ${r.content}`).join('\n')}`
+  const rumors = ctx.rumors.slice(0, 2).map((rumor) => ({ ...rumor, content: compactDialogueText(rumor.content) }));
+  const history = ctx.history?.slice(-6).map((turn) => ({ ...turn, content: compactDialogueText(turn.content) })) ?? [];
+  const rumorLines = rumors.length
+    ? `\n你可能听说了这些传闻（关系足够近才适合提起）：\n${rumors.map((r) => `- ${r.content}`).join('\n')}`
     : '';
-  const transcript = ctx.history?.length
-    ? `\n本次会话前文（按轮次，必须承接对方最后一句）：\n${ctx.history.map((turn) => (
+  const transcript = history.length
+    ? `\n本次会话前文（保留最近六句，按轮次，必须承接对方最后一句）：\n${history.map((turn) => (
       `${turn.turnIndex + 1}. ${turn.speakerName} → ${turn.listenerName}：${turn.content}`
     )).join('\n')}`
     : '\n本次会话尚无前文，请自然开启话题。';
@@ -223,13 +225,13 @@ export function dialogueMessages(ctx: {
     ? `\n对话对象背景（只用于理解对方，不要替对方发言）：${personaText(ctx.otherPersona)}`
     : '';
   const relationshipHistory = ctx.relationshipHistory?.length
-    ? `\n你们过去互动的已知摘要：\n${ctx.relationshipHistory.slice(-3).map((item) => `- ${item}`).join('\n')}`
+    ? `\n你们过去互动的已知摘要：\n${ctx.relationshipHistory.slice(-2).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n你们没有可用的既往互动摘要，不要虚构共同经历。';
   const speakerMemories = ctx.speakerMemories?.length
-    ? `\n你近期可确认的个人记忆：\n${ctx.speakerMemories.slice(-8).map((item) => `- ${item}`).join('\n')}`
+    ? `\n你近期可确认的个人记忆：\n${ctx.speakerMemories.slice(-4).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n没有可确认的近期个人记忆。';
   const worldFacts = ctx.worldFacts?.length
-    ? `\n当前场景与世界功能（功能存在不等于事件已发生）：\n${ctx.worldFacts.map((item) => `- ${item}`).join('\n')}`
+    ? `\n当前场景与世界功能（功能存在不等于事件已发生）：\n${ctx.worldFacts.slice(0, 6).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n没有额外的现场功能信息。';
   const location = ctx.locationId ? `\n当前会话地点：${ctx.locationId}。` : '';
   return simpleMessages(
@@ -243,8 +245,23 @@ export function dialogueMessages(ctx: {
     '6. 关于“最近做了什么、读了什么、谁说了什么”等事实，只能使用人物背景、近期记忆、既往摘要或本次前文中明确给出的内容；没有依据时自然说明不知道、没印象或最近没有，禁止编造书名、引语和共同经历。\n' +
     '7. 世界事件有明确状态边界：「活动预告（尚未发生）」只表示计划，不能说自己已经参加；只有「活动现场（已核验）」且名单包含自己时才能声称参加。只有「花店订单（已履约）」或明确的赠送/收到证据才能声称鲜花已经送达。场景功能清单只说明可执行条件；清单外活动只能作为愿望或提议，任何已经发生的共同经历都必须有完成证据。\n' +
     '只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}',
-    ctx
+    {
+      speakerName: ctx.speakerName,
+      speakerPool: ctx.speakerPool.slice(0, 6).map(compactDialogueText),
+      otherName: ctx.otherName,
+      turns: ctx.turns,
+      rumors,
+      affection: ctx.affection,
+      honesty: ctx.honesty,
+      conversationId: ctx.conversationId,
+      participants: ctx.participants,
+      history,
+    }
   );
+}
+
+function compactDialogueText(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim().slice(0, 120);
 }
 
 export function dialogueSummaryMessages(lines: string[]): ChatMessage[] {
