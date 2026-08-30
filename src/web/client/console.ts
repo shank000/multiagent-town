@@ -1,6 +1,12 @@
 // 社会研究控制台：有向伙伴选择网络、结构指标主图与实验控制。
 
 import type { AgentView } from './panel';
+import type {
+  DirectedRelationalMeasures,
+  DyadRelationalMeasures,
+  RelationalMeasureDefinition,
+  RelationalMeasureKey,
+} from '../../engine/social-relations';
 
 export interface MetricsPayload {
   repeat: number[];
@@ -11,6 +17,70 @@ export interface MetricsPayload {
   persistence: number[];
   hub: number[];
   pairs: { pair: string; count: number }[];
+}
+
+export type NetworkMode = 'social' | 'choice';
+
+export interface SocialNetworkEdge {
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  strength: number;
+  valence: number;
+  recentChange: number;
+  evidenceCount: number;
+  relationshipStateObserved?: boolean;
+  tieType: 'close' | 'supportive' | 'respect_based' | 'familiar' | 'strained' | 'asymmetric' | 'acquaintance';
+  tieLabel: string;
+  dimensions: {
+    closeness: number; trust: number; respect: number;
+    support: number; tension: number; frequency: number;
+  };
+  measures: DirectedRelationalMeasures;
+}
+
+export interface SocialNetworkPayload {
+  worldId: string;
+  modelVersion: string;
+  generatedGameTime: number;
+  window: { days: number | null; startGameTime: number; endGameTime: number; label: string };
+  proxyNotice: string;
+  measureSchema: readonly RelationalMeasureDefinition[];
+  dataQuality: string[];
+  observationSummary: { relationshipEvidence: number; partnerChoices: number };
+  directions: SocialNetworkEdge[];
+  dyads: {
+    aId: string; aName: string; bId: string; bName: string; reciprocity: number; asymmetry: number;
+    strength: number; recentChange: number; tieType: SocialNetworkEdge['tieType']; tieLabel: string;
+    measures: DyadRelationalMeasures;
+  }[];
+}
+
+export type NetworkLens = 'overall' | RelationalMeasureKey;
+export type NetworkLensLevel = 'directed' | 'dyad' | 'actor';
+
+export const NETWORK_LENSES: ReadonlyArray<{
+  key: NetworkLens;
+  label: string;
+  family: 'overview' | 'existing-six' | 'added-four';
+  level: NetworkLensLevel;
+}> = [
+  { key: 'overall', label: '综合关系强度', family: 'overview', level: 'directed' },
+  { key: 'partnerReturn', label: '伙伴回返', family: 'existing-six', level: 'directed' },
+  { key: 'tiePersistence', label: '关系持续性', family: 'existing-six', level: 'directed' },
+  { key: 'recencyEffect', label: '近因暴露代理', family: 'existing-six', level: 'directed' },
+  { key: 'reciprocity', label: '互惠交换', family: 'existing-six', level: 'dyad' },
+  { key: 'relationalCarryOver', label: '关系延续效应', family: 'existing-six', level: 'directed' },
+  { key: 'partnerConcentration', label: '伙伴集中度', family: 'existing-six', level: 'actor' },
+  { key: 'interactionIntensity', label: '互动强度', family: 'added-four', level: 'directed' },
+  { key: 'multiplexity', label: '关系多重性', family: 'added-four', level: 'directed' },
+  { key: 'dependenceAsymmetry', label: '依赖不对称', family: 'added-four', level: 'dyad' },
+  { key: 'embeddedness', label: '网络嵌入性', family: 'added-four', level: 'dyad' },
+];
+
+export function networkLensLevel(lens: NetworkLens): NetworkLensLevel {
+  return NETWORK_LENSES.find((item) => item.key === lens)?.level ?? 'directed';
 }
 
 export type MetricKey = Exclude<keyof MetricsPayload, 'pairs'>;
@@ -37,6 +107,50 @@ export interface NetworkNodeLayout {
   x: number;
   y: number;
   radius: number;
+  actorValue?: number | null;
+  actorValueVisible?: boolean;
+}
+
+export interface NetworkEdgeLayout {
+  id: string;
+  mode: NetworkMode;
+  fromId: string;
+  toId: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  hitWidth: number;
+  lineWidth: number;
+  displayValue: number;
+  evidenceCount: number;
+  directed: boolean;
+  level: 'directed' | 'dyad';
+  relationshipStateObserved: boolean | null;
+}
+
+export interface NetworkRenderResult {
+  nodes: NetworkNodeLayout[];
+  edges: NetworkEdgeLayout[];
+  totalEdges: number;
+  missingEdges: number;
+  countUnit: 'edge' | 'actor';
+  totalActors?: number;
+  visibleActors?: number;
+  missingActors?: number;
+}
+
+export interface NetworkDrawState {
+  selectedId?: string | null;
+  hoveredId?: string | null;
+  socialEdges?: readonly SocialNetworkEdge[];
+  socialDyads?: ReadonlyArray<SocialNetworkPayload['dyads'][number]>;
+  mode?: NetworkMode;
+  lens?: NetworkLens;
+  threshold?: number;
+  egoId?: string | null;
+  selectedEdgeId?: string | null;
+  hoveredEdgeId?: string | null;
 }
 
 interface Point { x: number; y: number }
@@ -49,6 +163,70 @@ function parsePair(pair: string, count: number, n: number): { from: number; to: 
   const [from, to] = pair.split(':').map(Number);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= n || to >= n || from === to || count <= 0) return null;
   return { from, to, count };
+}
+
+interface GraphEdge {
+  id: string;
+  from: number;
+  to: number;
+  fromId: string;
+  toId: string;
+  weight: number;
+  strength: number;
+  displayValue: number;
+  recentChange: number;
+  valence: number;
+  evidenceCount: number;
+  tieType: SocialNetworkEdge['tieType'] | 'choice';
+  directed: boolean;
+  level: 'directed' | 'dyad';
+  relationshipStateObserved: boolean | null;
+}
+
+export function networkEdgeId(mode: NetworkMode, fromId: string, toId: string): string {
+  return `${mode}:${encodeURIComponent(fromId)}>${encodeURIComponent(toId)}`;
+}
+
+export function networkDyadEdgeId(mode: NetworkMode, aId: string, bId: string): string {
+  const [left, right] = aId < bId ? [aId, bId] : [bId, aId];
+  return `${mode}:${encodeURIComponent(left)}<>${encodeURIComponent(right)}`;
+}
+
+const graphDyadKey = (a: string, b: string) => a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
+const graphDirectionKey = (fromId: string, toId: string) => `${fromId}\u0000${toId}`;
+
+export function networkLensValue(
+  edge: SocialNetworkEdge,
+  dyad: SocialNetworkPayload['dyads'][number] | undefined,
+  lens: NetworkLens,
+): number | null {
+  if (lens === 'overall') return edge.strength;
+  if (lens === 'reciprocity' || lens === 'dependenceAsymmetry' || lens === 'embeddedness') {
+    return dyad?.measures[lens].value ?? null;
+  }
+  return edge.measures[lens].value;
+}
+
+function socialEdgeRgb(edge: GraphEdge, lens: NetworkLens): string {
+  if (lens === 'overall') {
+    if (edge.valence <= -0.08) return '245,119,119';
+    if (edge.valence >= 0.08) return '98,218,203';
+    return '143,161,183';
+  }
+  if (lens === 'dependenceAsymmetry') return '195,156,255';
+  if (lens === 'multiplexity') return '242,198,109';
+  if (lens === 'reciprocity') return '119,184,255';
+  if (lens === 'embeddedness') return '125,215,160';
+  return '98,218,203';
+}
+
+function directedObservationCount(edge: SocialNetworkEdge, lens: NetworkLens): number {
+  if (lens === 'overall') return edge.evidenceCount;
+  if (lens === 'interactionIntensity') return edge.measures.interactionEventCount;
+  if (lens === 'multiplexity' || lens === 'recencyEffect') {
+    return edge.measures.interactionEventCount + edge.measures.choiceCount;
+  }
+  return edge.measures.choiceCount;
 }
 
 function preparePositions(agents: AgentView[], w: number, h: number): Point[] {
@@ -91,7 +269,41 @@ export function hitTestNetwork(nodes: readonly NetworkNodeLayout[], x: number, y
   return best?.id ?? null;
 }
 
-/** 有向伙伴选择网络：箭头表示选择方向，线宽表示累计次数。 */
+/** 点到线段距离，坐标统一为 CSS px；零长度线段按点距离处理。 */
+export function distanceToSegment(
+  x: number,
+  y: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): number {
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= Number.EPSILON) return Math.hypot(x - startX, y - startY);
+  const t = Math.max(0, Math.min(1, ((x - startX) * dx + (y - startY) * dy) / lengthSquared));
+  return Math.hypot(x - (startX + t * dx), y - (startY + t * dy));
+}
+
+/** 命中最近的关系边；双向平行边按实际偏移几何分别识别。 */
+export function hitTestNetworkEdge(
+  edges: readonly NetworkEdgeLayout[],
+  x: number,
+  y: number,
+): NetworkEdgeLayout | null {
+  let best: { edge: NetworkEdgeLayout; distance: number } | null = null;
+  for (const edge of edges) {
+    const distance = distanceToSegment(x, y, edge.startX, edge.startY, edge.endX, edge.endY);
+    if (distance <= edge.hitWidth && (!best || distance < best.distance)) best = { edge, distance };
+  }
+  return best?.edge ?? null;
+}
+
+/**
+ * 多层关系网络。有向量用箭头、双人共同量用无向线、行动者量用节点外环；
+ * 返回几何与实际绘制完全一致，供鼠标、触控替代入口与键盘选择共享。
+ */
 export function drawNetwork(
   ctx: CanvasRenderingContext2D,
   agents: AgentView[],
@@ -99,9 +311,18 @@ export function drawNetwork(
   w: number,
   h: number,
   nowMs: number,
-  selectedId: string | null = null,
-  hoveredId: string | null = null
-): NetworkNodeLayout[] {
+  state: NetworkDrawState = {},
+): NetworkRenderResult {
+  const selectedId = state.selectedId ?? null;
+  const hoveredId = state.hoveredId ?? null;
+  const socialEdges = state.socialEdges ?? [];
+  const socialDyads = state.socialDyads ?? [];
+  const mode = state.mode ?? 'choice';
+  const lens = state.lens ?? 'overall';
+  const threshold = Math.max(0, Math.min(1, state.threshold ?? 0));
+  const egoId = state.egoId ?? null;
+  const selectedEdgeId = state.selectedEdgeId ?? null;
+  const hoveredEdgeId = state.hoveredEdgeId ?? null;
   ctx.fillStyle = '#09111d';
   ctx.fillRect(0, 0, w, h);
   if (!agents.length) {
@@ -110,11 +331,141 @@ export function drawNetwork(
     ctx.textAlign = 'center';
     ctx.fillText('等待伙伴选择数据', w / 2, h / 2);
     ctx.textAlign = 'left';
-    return [];
+    return { nodes: [], edges: [], totalEdges: 0, missingEdges: 0, countUnit: 'edge' };
   }
 
   const n = agents.length;
-  const edges = pairs.map((pair) => parsePair(pair.pair, pair.count, n)).filter((edge): edge is NonNullable<typeof edge> => edge !== null);
+  const indexById = new Map(agents.map((agent, index) => [agent.id, index]));
+  const dyadByKey = new Map(socialDyads.map((dyad) => [graphDyadKey(dyad.aId, dyad.bId), dyad]));
+  const socialDirectionByKey = new Map(socialEdges.map((edge) => [graphDirectionKey(edge.fromId, edge.toId), edge]));
+  const lensLevel = mode === 'social' ? networkLensLevel(lens) : 'directed';
+  let totalEdges = 0;
+  let missingEdges = 0;
+  let totalActors = 0;
+  let visibleActors = 0;
+  let missingActors = 0;
+  const actorValues = new Map<string, number | null>();
+  const actorValueVisible = new Set<string>();
+  const edges: GraphEdge[] = [];
+
+  if (mode === 'social' && lensLevel === 'actor') {
+    const observedConcentration = new Map<string, number>();
+    for (const edge of socialEdges) {
+      const value = edge.measures.partnerConcentration.value;
+      if (value !== null && Number.isFinite(value) && !observedConcentration.has(edge.fromId)) {
+        observedConcentration.set(edge.fromId, value);
+      }
+    }
+    for (const agent of agents) {
+      if (egoId && agent.id !== egoId) continue;
+      totalActors++;
+      const value = observedConcentration.get(agent.id) ?? null;
+      actorValues.set(agent.id, value);
+      if (value === null) {
+        missingActors++;
+        continue;
+      }
+      const normalizedValue = Math.max(0, Math.min(1, value));
+      if (normalizedValue >= threshold) {
+        visibleActors++;
+        actorValueVisible.add(agent.id);
+      }
+    }
+  } else if (mode === 'social' && lensLevel === 'dyad') {
+    const dyadLens = lens as 'reciprocity' | 'dependenceAsymmetry' | 'embeddedness';
+    for (const dyad of socialDyads) {
+      const from = indexById.get(dyad.aId);
+      const to = indexById.get(dyad.bId);
+      if (from === undefined || to === undefined || from === to) continue;
+      if (egoId && dyad.aId !== egoId && dyad.bId !== egoId) continue;
+      totalEdges++;
+      const measure = dyad.measures[dyadLens];
+      const displayValue = measure.value;
+      if (displayValue === null || !Number.isFinite(displayValue)) {
+        missingEdges++;
+        continue;
+      }
+      const normalizedValue = Math.max(0, Math.min(1, displayValue));
+      if (normalizedValue < threshold) continue;
+      const aToB = socialDirectionByKey.get(graphDirectionKey(dyad.aId, dyad.bId));
+      const bToA = socialDirectionByKey.get(graphDirectionKey(dyad.bId, dyad.aId));
+      const choiceObservations = (aToB?.measures.choiceCount ?? 0) + (bToA?.measures.choiceCount ?? 0);
+      const interactionObservations = (aToB?.measures.interactionEventCount ?? 0)
+        + (bToA?.measures.interactionEventCount ?? 0);
+      const observationCount = dyadLens === 'dependenceAsymmetry'
+        ? choiceObservations
+        : dyadLens === 'reciprocity' && choiceObservations > 0
+          ? choiceObservations
+          : choiceObservations + interactionObservations;
+      edges.push({
+        id: networkDyadEdgeId('social', dyad.aId, dyad.bId),
+        from, to, fromId: dyad.aId, toId: dyad.bId,
+        weight: 1 + normalizedValue * 10,
+        strength: Math.max(0, Math.min(1, dyad.strength)),
+        displayValue: normalizedValue,
+        recentChange: dyad.recentChange,
+        valence: 0,
+        evidenceCount: observationCount,
+        tieType: dyad.tieType,
+        directed: false,
+        level: 'dyad',
+        relationshipStateObserved: Boolean(
+          (aToB && aToB.relationshipStateObserved !== false)
+          || (bToA && bToA.relationshipStateObserved !== false),
+        ),
+      });
+    }
+  } else if (mode === 'social') {
+    for (const edge of socialEdges) {
+      const from = indexById.get(edge.fromId);
+      const to = indexById.get(edge.toId);
+      if (from === undefined || to === undefined || from === to) continue;
+      if (egoId && edge.fromId !== egoId && edge.toId !== egoId) continue;
+      totalEdges++;
+      const displayValue = networkLensValue(edge, dyadByKey.get(graphDyadKey(edge.fromId, edge.toId)), lens);
+      if (displayValue === null || !Number.isFinite(displayValue)) {
+        missingEdges++;
+        continue;
+      }
+      const normalizedValue = Math.max(0, Math.min(1, displayValue));
+      if (normalizedValue < threshold) continue;
+      edges.push({
+        id: networkEdgeId('social', edge.fromId, edge.toId),
+        from, to, fromId: edge.fromId, toId: edge.toId,
+        weight: 1 + normalizedValue * 10,
+        strength: Math.max(0, Math.min(1, edge.strength)),
+        displayValue: normalizedValue,
+        recentChange: edge.recentChange,
+        valence: edge.valence,
+        evidenceCount: directedObservationCount(edge, lens),
+        tieType: edge.tieType,
+        directed: true,
+        level: 'directed',
+        relationshipStateObserved: edge.relationshipStateObserved !== false,
+      });
+    }
+  } else {
+    const maxChoiceCount = Math.max(1, ...pairs.map((item) => Math.max(0, item.count)));
+    for (const pair of pairs) {
+      const edge = parsePair(pair.pair, pair.count, n);
+      if (!edge) continue;
+      const fromId = agents[edge.from].id;
+      const toId = agents[edge.to].id;
+      if (egoId && fromId !== egoId && toId !== egoId) continue;
+      totalEdges++;
+      const normalizedValue = edge.count / maxChoiceCount;
+      if (normalizedValue < threshold) continue;
+      edges.push({
+        id: networkEdgeId('choice', fromId, toId),
+        from: edge.from, to: edge.to, fromId, toId, weight: edge.count,
+        strength: normalizedValue, displayValue: edge.count, recentChange: 0,
+        valence: 0, evidenceCount: edge.count, tieType: 'choice',
+        directed: true,
+        level: 'directed',
+        relationshipStateObserved: null,
+      });
+    }
+  }
   const agentIds = new Set(agents.map((agent) => agent.id));
   let removedResident = false;
   for (const id of POS.keys()) {
@@ -129,11 +480,11 @@ export function drawNetwork(
     || layoutW !== w
     || layoutH !== h;
   const positions = preparePositions(agents, w, h);
-  const directed = new Set(edges.map((edge) => `${edge.from}:${edge.to}`));
+  const directed = new Set(edges.filter((edge) => edge.directed).map((edge) => `${edge.from}:${edge.to}`));
   const undirected = new Map<string, number>();
   for (const edge of edges) {
     const key = edge.from < edge.to ? `${edge.from}:${edge.to}` : `${edge.to}:${edge.from}`;
-    undirected.set(key, (undirected.get(key) ?? 0) + edge.count);
+    undirected.set(key, (undirected.get(key) ?? 0) + edge.weight);
   }
 
   // 斥力、加权弹簧与中心引力以约 13 FPS 更新，绘制仍保持屏幕刷新率。
@@ -170,12 +521,15 @@ export function drawNetwork(
       p.x += (w / 2 - p.x) * .014;
       p.y += (h / 2 - p.y) * .014;
       p.x = Math.max(34, Math.min(w - 34, p.x));
-      p.y = Math.max(42, Math.min(h - 48, p.y));
+      const topBoundary = h >= 230 ? 82 : 42;
+      p.y = Math.max(topBoundary, Math.min(h - 48, p.y));
     }
   }
 
   const selectedIndex = agents.findIndex((agent) => agent.id === selectedId);
   const hoveredIndex = agents.findIndex((agent) => agent.id === hoveredId);
+  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+  const edgeLayouts: NetworkEdgeLayout[] = [];
   ctx.lineCap = 'round';
   for (const edge of edges) {
     const from = positions[edge.from];
@@ -185,30 +539,74 @@ export function drawNetwork(
     const distance = Math.max(1, Math.hypot(dx, dy));
     const ux = dx / distance;
     const uy = dy / distance;
-    const hasReverse = directed.has(`${edge.to}:${edge.from}`);
-    const side = hasReverse ? (edge.from < edge.to ? 1 : -1) : 0;
-    const ox = -uy * side * 5;
-    const oy = ux * side * 5;
+    const hasReverse = edge.directed && directed.has(`${edge.to}:${edge.from}`);
+    // 每个方向都沿自身法线取同一侧；反向边的法线自然翻转，因此得到两条平行边。
+    const side = hasReverse ? 1 : 0;
+    const ox = -uy * side * 9;
+    const oy = ux * side * 9;
     const startX = from.x + ux * 27 + ox;
     const startY = from.y + uy * 27 + oy;
     const endX = to.x - ux * 29 + ox;
     const endY = to.y - uy * 29 + oy;
     const ego = selectedIndex < 0 || edge.from === selectedIndex || edge.to === selectedIndex;
     const hover = hoveredIndex < 0 || edge.from === hoveredIndex || edge.to === hoveredIndex;
-    ctx.strokeStyle = `rgba(242,198,109,${ego && hover ? Math.min(.92, .34 + edge.count * .055) : .1})`;
-    ctx.lineWidth = ego && hover ? Math.min(7, 1.4 + Math.sqrt(edge.count)) : 1;
+    const isSelected = edge.id === selectedEdgeId;
+    const isHovered = edge.id === hoveredEdgeId;
+    const isReverse = Boolean(selectedEdge && selectedEdge.fromId === edge.toId && selectedEdge.toId === edge.fromId);
+    const focus = ego && hover;
+    const visualValue = mode === 'choice' ? edge.strength : edge.displayValue;
+    const baseWidth = 1.3 + visualValue * 5.4;
+    const lineWidth = isSelected ? baseWidth + 2.6 : isHovered ? baseWidth + 1.6 : isReverse ? baseWidth + .7 : focus ? baseWidth : 1;
+    const alpha = isSelected ? 1 : isHovered ? .96 : isReverse ? .72 : focus ? Math.min(.92, .28 + visualValue * .62) : .09;
+    const rgb = mode === 'choice' ? '119,184,255' : socialEdgeRgb(edge, lens);
+    const behaviorOnly = mode === 'social' && edge.relationshipStateObserved === false;
+    if (typeof ctx.setLineDash === 'function') ctx.setLineDash(behaviorOnly ? [5, 4] : []);
+    if (isSelected) {
+      ctx.strokeStyle = 'rgba(255,255,255,.92)';
+      ctx.lineWidth = lineWidth + 3;
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = `rgba(${rgb},${alpha})`;
+    ctx.lineWidth = lineWidth;
     ctx.beginPath();
     ctx.moveTo(startX, startY);
     ctx.lineTo(endX, endY);
     ctx.stroke();
-    const arrow = 7;
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.beginPath();
-    ctx.moveTo(endX, endY);
-    ctx.lineTo(endX - ux * arrow - uy * arrow * .55, endY - uy * arrow + ux * arrow * .55);
-    ctx.lineTo(endX - ux * arrow + uy * arrow * .55, endY - uy * arrow - ux * arrow * .55);
-    ctx.closePath();
-    ctx.fill();
+    if (edge.directed) {
+      const arrow = 7;
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - ux * arrow - uy * arrow * .55, endY - uy * arrow + ux * arrow * .55);
+      ctx.lineTo(endX - ux * arrow + uy * arrow * .55, endY - uy * arrow - ux * arrow * .55);
+      ctx.closePath();
+      ctx.fill();
+    }
+    edgeLayouts.push({
+      id: edge.id,
+      mode,
+      fromId: edge.fromId,
+      toId: edge.toId,
+      startX, startY, endX, endY,
+      hitWidth: Math.max(7, lineWidth / 2 + 4),
+      lineWidth,
+      displayValue: edge.displayValue,
+      evidenceCount: edge.evidenceCount,
+      directed: edge.directed,
+      level: edge.level,
+      relationshipStateObserved: edge.relationshipStateObserved,
+    });
+    if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
+    if (mode === 'social' && lens === 'overall' && (isSelected || isHovered) && Math.abs(edge.recentChange) >= 0.01) {
+      ctx.fillStyle = edge.recentChange > 0 ? '#7dd7a0' : '#f58f8f';
+      ctx.font = '700 11px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      const change = `${edge.recentChange > 0 ? '+' : ''}${edge.recentChange.toFixed(2)}`;
+      ctx.fillText(change, (startX + endX) / 2, (startY + endY) / 2 - 7);
+    }
   }
 
   const nodes: NetworkNodeLayout[] = [];
@@ -219,6 +617,15 @@ export function drawNetwork(
     const hovered = agent.id === hoveredId;
     const pulse = agent.state === 'acting' ? Math.sin(nowMs / 300) * 1.5 : 0;
     const radius = (selected ? 26 : hovered ? 25 : 23) + pulse;
+    const actorValue = actorValues.get(agent.id) ?? null;
+    const showActorValue = actorValueVisible.has(agent.id);
+    if (lensLevel === 'actor' && showActorValue && actorValue !== null) {
+      ctx.strokeStyle = `rgba(242,198,109,${Math.min(.98, .48 + actorValue * .5)})`;
+      ctx.lineWidth = 2 + actorValue * 5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius + 7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.fillStyle = selected ? '#ffe19a' : hovered ? '#70dfd0' : '#e9bb55';
     ctx.beginPath();
     ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
@@ -234,10 +641,28 @@ export function drawNetwork(
     ctx.font = '12px "Microsoft YaHei UI", sans-serif';
     const activity = agent.verb && agent.state === 'acting' ? agent.verb.slice(0, 7) : agent.occupation.slice(0, 7);
     ctx.fillText(activity, p.x, p.y + 40);
-    nodes.push({ agentId: agent.id, x: p.x, y: p.y, radius: Math.max(23, radius) });
+    nodes.push({
+      agentId: agent.id,
+      x: p.x,
+      y: p.y,
+      radius: Math.max(23, radius),
+      actorValue,
+      actorValueVisible: showActorValue,
+    });
   }
   ctx.textAlign = 'left';
-  return nodes;
+  return lensLevel === 'actor'
+    ? {
+      nodes,
+      edges: edgeLayouts,
+      totalEdges,
+      missingEdges,
+      countUnit: 'actor',
+      totalActors,
+      visibleActors,
+      missingActors,
+    }
+    : { nodes, edges: edgeLayouts, totalEdges, missingEdges, countUnit: 'edge' };
 }
 
 /** 单指标主图；指标切换由 DOM tabs 驱动，保证在窄视窗中仍可阅读。 */
@@ -311,15 +736,43 @@ export function drawMetrics(ctx: CanvasRenderingContext2D, metrics: MetricsPaylo
 }
 
 /** 拉取当前平行世界的实验指标。 */
-export async function fetchMetrics(worldId?: string): Promise<MetricsPayload> {
+export async function fetchMetrics(worldId?: string, signal?: AbortSignal): Promise<MetricsPayload> {
   const query = worldId ? `?worldId=${encodeURIComponent(worldId)}` : '';
-  const res = await fetch(`/api/experiment/metrics${query}`);
+  const res = await fetch(`/api/experiment/metrics${query}`, { signal });
   if (!res.ok) throw new Error(`metrics unavailable (${res.status})`);
   const result = (await res.json()) as MetricsPayload & { worldId?: string };
   if (worldId && result.worldId && result.worldId !== worldId) throw new Error('metrics world mismatch');
   return {
     repeat: result.repeat ?? [], recip: result.recip ?? [], clus: result.clus ?? [], div: result.div ?? [],
     hhi: result.hhi ?? [], persistence: result.persistence ?? [], hub: result.hub ?? [], pairs: result.pairs ?? [],
+  };
+}
+
+/** 拉取只读社会关系投影；该结果不参与实验处理或 agent 决策。 */
+export async function fetchSocialNetwork(
+  worldId: string,
+  windowDays: number | null = 7,
+  signal?: AbortSignal,
+): Promise<SocialNetworkPayload> {
+  const window = windowDays === null ? 'all' : String(windowDays);
+  const res = await fetch(
+    `/api/relationships?worldId=${encodeURIComponent(worldId)}&windowDays=${encodeURIComponent(window)}`,
+    { signal },
+  );
+  if (!res.ok) throw new Error(`relationships unavailable (${res.status})`);
+  const result = (await res.json()) as SocialNetworkPayload;
+  if (result.worldId !== worldId) throw new Error('relationships world mismatch');
+  return {
+    worldId: result.worldId,
+    modelVersion: result.modelVersion,
+    generatedGameTime: result.generatedGameTime,
+    window: result.window,
+    proxyNotice: result.proxyNotice,
+    measureSchema: result.measureSchema ?? [],
+    dataQuality: result.dataQuality ?? [],
+    observationSummary: result.observationSummary ?? { relationshipEvidence: 0, partnerChoices: 0 },
+    directions: result.directions ?? [],
+    dyads: result.dyads ?? [],
   };
 }
 

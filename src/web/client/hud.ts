@@ -112,8 +112,19 @@ export function drawBubbles(
     const rows = isDialogue ? [`${prefix} ${b.speaker}`, ...textLines] : textLines.map((l) => `${prefix}${l}`);
     const w = isDialogue ? 180 : Math.max(...textLines.map((l) => l.length)) * 12 + 14;
     const h = rows.length * 14 + 12;
-    const bx = d.x + TILE / 2 - w / 2;
-    const by = d.y - 40 - h;
+    const anchorX = Math.round(d.x + TILE / 2);
+    const anchorY = Math.round(d.y - 18);
+    const bx = Math.round(anchorX - w / 2);
+    const by = Math.round(d.y - 40 - h);
+    if (isDialogue) {
+      // 世界层像素尾从气泡底边连续指到说话者头顶，镜头缩放后仍保持最近邻边缘。
+      const tailY = by + h - 2;
+      const tailH = Math.max(4, anchorY - tailY);
+      ctx.fillStyle = '#241d12';
+      ctx.fillRect(anchorX - 3, tailY, 6, tailH);
+      ctx.fillStyle = 'rgba(245,233,200,0.95)';
+      ctx.fillRect(anchorX - 1, tailY, 2, Math.max(2, tailH - 2));
+    }
     ctx.fillStyle = 'rgba(245,233,200,0.95)';
     ctx.fillRect(bx, by, w, h);
     ctx.strokeStyle = '#241d12';

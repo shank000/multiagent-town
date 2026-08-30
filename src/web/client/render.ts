@@ -38,6 +38,15 @@ function fillTerrainTile(
 ): void {
   const [sx, sy] = TILE_MAP.terrain[key];
   const sheet = TERRAIN_SHEETS[key];
+  if (!sheetReady(sheet)) {
+    const fallback: Record<typeof key, string> = {
+      grass: '#7ca968', dirt: '#b99568', path: '#b99568', plaza: '#c3a77b',
+      flowers: '#789e61', crops: '#6f934c', flowerBed: '#829b55',
+    };
+    ctx.fillStyle = fallback[key];
+    ctx.fillRect(px, py, pw, ph);
+    return;
+  }
   for (let y = py; y < py + ph; y += TILE) {
     for (let x = px; x < px + pw; x += TILE) drawTile(ctx, sheet, sx, sy, x, y, TILE);
   }
@@ -69,22 +78,33 @@ export function drawRiver(ctx: CanvasRenderingContext2D, px: number, py: number,
     for (let x = px + off; x < px + pw; x += 26) ctx.fillRect(x, y, 8, 2);
   }
   ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  const shimmer = Math.sin(nowMs / 700);
-  ctx.fillRect(px + 10 + shimmer * 8, py + 3, 6, 2);
-  ctx.fillRect(px + pw - 20 - shimmer * 8, py + ph - 6, 6, 2);
+  const shimmer = Math.round(Math.sin(nowMs / 700) * 8);
+  ctx.fillRect(px + 10 + shimmer, py + 3, 6, 2);
+  ctx.fillRect(px + pw - 20 - shimmer, py + ph - 6, 6, 2);
 }
 
 /** 装饰树：树冠随 sin 摇曳（phase 由位置 hash 决定，避免整齐划一） */
 export function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, nowMs: number, phase: number): void {
   const sway = Math.round(Math.sin(nowMs / 900 + phase));
+  // 方块投影固定在树根，树冠轻摆时地面不会跟着漂移。
+  ctx.fillStyle = 'rgba(35,68,38,.28)';
+  ctx.fillRect(x - 10, y + 12, 20, 4);
+  ctx.fillRect(x - 7, y + 16, 14, 2);
   ctx.fillStyle = '#4a3520';
-  ctx.fillRect(x - 2, y + 6, 4, 10);
+  ctx.fillRect(x - 3, y + 3, 6, 13);
+  ctx.fillStyle = '#735137';
+  ctx.fillRect(x - 1, y + 4, 2, 10);
   ctx.fillStyle = '#2f7a3a';
-  ctx.fillRect(x - 9 + sway, y - 8, 18, 14);
+  ctx.fillRect(x - 11 + sway, y - 7, 22, 13);
+  ctx.fillRect(x - 8 + sway, y - 12, 16, 8);
   ctx.fillStyle = '#3f9a4a';
-  ctx.fillRect(x - 6 + sway, y - 11, 12, 8);
+  ctx.fillRect(x - 6 + sway, y - 15, 12, 8);
+  ctx.fillRect(x + 4 + sway, y - 9, 8, 9);
   ctx.fillStyle = '#4f8a5a';
-  ctx.fillRect(x - 14 + sway, y - 3, 10, 7);
+  ctx.fillRect(x - 14 + sway, y - 5, 9, 8);
+  ctx.fillStyle = '#73b65d';
+  ctx.fillRect(x - 4 + sway, y - 13, 4, 3);
+  ctx.fillRect(x + 6 + sway, y - 6, 3, 3);
 }
 
 /** 路灯夜间暖光晕 */
@@ -116,11 +136,37 @@ export function drawTerrain(ctx: CanvasRenderingContext2D, w: number, h: number)
         else drawTile(ctx, TERRAIN_SHEETS.grass, gax, gay, x, y, TILE);
       }
     }
-    return;
+  } else {
+    // 程序化 fallback：底色与分块暗纹保持整数像素。
+    ctx.fillStyle = '#7ca968';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#759f61';
+    for (let y = 0; y < h; y += TILE * 2) {
+      for (let x = (y / TILE) % 4 === 0 ? 0 : TILE; x < w; x += TILE * 2) {
+        ctx.fillRect(x, y, TILE, TILE);
+      }
+    }
   }
-  // —— 程序化 fallback ——
-  ctx.fillStyle = '#7fb069';
-  ctx.fillRect(0, 0, w, h);
+  drawGrassDetails(ctx, w, h);
+}
+
+/** 稀疏草叶与野花：位置完全由格坐标决定，不闪烁、不依赖随机数。 */
+function drawGrassDetails(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  for (let y = 0; y < h; y += TILE) {
+    for (let x = 0; x < w; x += TILE) {
+      const seed = hash(`grass:${x}:${y}`);
+      if (seed % 3 !== 0) continue;
+      const dx = x + 5 + seed % 20;
+      const dy = y + 7 + Math.floor(seed / 23) % 17;
+      ctx.fillStyle = seed % 2 ? 'rgba(47,105,54,.58)' : 'rgba(187,218,124,.52)';
+      ctx.fillRect(dx, dy, 1, 3);
+      ctx.fillRect(dx + 2, dy + 1, 1, 2);
+      if (seed % 17 === 0) {
+        ctx.fillStyle = seed % 34 === 0 ? '#f1d77b' : '#eaa2aa';
+        ctx.fillRect(dx - 1, dy - 2, 2, 2);
+      }
+    }
+  }
 }
 
 export function drawLake(ctx: CanvasRenderingContext2D, px: number, py: number, pw: number, ph: number, nowMs: number): void {
@@ -149,16 +195,78 @@ export function drawFence(ctx: CanvasRenderingContext2D, px: number, py: number,
   ctx.fillRect(px, py + ph - 8, pw, 3);
 }
 
+function drawRoadFinish(
+  ctx: CanvasRenderingContext2D,
+  px: number, py: number, pw: number, ph: number,
+  plaza: boolean
+): void {
+  ctx.fillStyle = 'rgba(105,72,42,.28)';
+  ctx.fillRect(px, py, pw, 2);
+  ctx.fillRect(px, py + ph - 2, pw, 2);
+  ctx.fillRect(px, py, 2, ph);
+  ctx.fillRect(px + pw - 2, py, 2, ph);
+  if (plaza) {
+    // 广场用错列石缝与少量亮面砖形成铺装层次。
+    for (let y = py + 8; y < py + ph - 4; y += 16) {
+      const offset = Math.floor((y - py) / 16) % 2 ? 8 : 0;
+      for (let x = px + 6 + offset; x < px + pw - 4; x += 16) {
+        ctx.fillStyle = 'rgba(110,78,48,.22)';
+        ctx.fillRect(x, y, 8, 1);
+        ctx.fillRect(x, y, 1, 6);
+        if (hash(`plaza:${x}:${y}`) % 5 === 0) {
+          ctx.fillStyle = 'rgba(255,236,181,.24)';
+          ctx.fillRect(x + 3, y + 2, 3, 2);
+        }
+      }
+    }
+  } else {
+    // 主街两道浅车辙与散落小石让长条道路不再是一块平面。
+    ctx.fillStyle = 'rgba(130,91,50,.18)';
+    ctx.fillRect(px + 4, py + Math.floor(ph * .32), pw - 8, 2);
+    ctx.fillRect(px + 4, py + Math.floor(ph * .68), pw - 8, 2);
+    for (let x = px + 10; x < px + pw - 6; x += 29) {
+      const y = py + 6 + hash(`road:${x}`) % Math.max(1, ph - 12);
+      ctx.fillStyle = 'rgba(92,66,43,.35)';
+      ctx.fillRect(x, y, 3, 2);
+    }
+  }
+}
+
+function drawForestFloor(ctx: CanvasRenderingContext2D, px: number, py: number, pw: number, ph: number, dense: boolean): void {
+  ctx.fillStyle = dense ? 'rgba(27,70,38,.20)' : 'rgba(75,95,43,.14)';
+  for (let y = py + 4; y < py + ph; y += dense ? 24 : 32) {
+    for (let x = px + 4; x < px + pw; x += dense ? 24 : 32) {
+      if (hash(`forest-shadow:${x}:${y}`) % 3 === 0) continue;
+      ctx.fillRect(x, y, dense ? 18 : 14, dense ? 8 : 6);
+    }
+  }
+}
+
+function drawUndergrowth(ctx: CanvasRenderingContext2D, px: number, py: number, pw: number, ph: number, dense: boolean): void {
+  const spacing = dense ? 27 : 39;
+  for (let y = py + 14; y < py + ph - 4; y += spacing) {
+    for (let x = px + 10; x < px + pw - 4; x += spacing) {
+      const seed = hash(`undergrowth:${x}:${y}`);
+      const dx = x + seed % 9;
+      const dy = y + Math.floor(seed / 13) % 7;
+      ctx.fillStyle = seed % 2 ? '#326f3c' : '#4f8a48';
+      ctx.fillRect(dx, dy, 2, 5);
+      ctx.fillRect(dx - 2, dy + 2, 2, 3);
+      ctx.fillRect(dx + 2, dy + 1, 2, 4);
+      if (seed % 11 === 0) {
+        ctx.fillStyle = '#d9c77a';
+        ctx.fillRect(dx + 4, dy + 3, 2, 2);
+      }
+    }
+  }
+}
+
 export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, nowMs: number, minuteOfDay = -1): void {
   const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
   if (o.type === 'zone') {
     if (o.id === 'obj:path_main' || o.id === 'obj:plaza') {
       fillTerrainTile(ctx, o.id === 'obj:plaza' ? 'plaza' : 'path', px, py, pw, ph);
-      if (o.id === 'obj:plaza') {
-        ctx.strokeStyle = 'rgba(119, 82, 45, .28)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px + 2, py + 2, pw - 4, ph - 4);
-      }
+      drawRoadFinish(ctx, px, py, pw, ph, o.id === 'obj:plaza');
     } else if (o.id === 'obj:park') {
       fillTerrainTile(ctx, 'grass', px, py, pw, ph);
       if (sheetReady(TERRAIN_SHEETS.tree2)) {
@@ -179,6 +287,7 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
     } else if (o.id === 'obj:orchard' || o.id === 'obj:forest_ne') {
       fillTerrainTile(ctx, 'grass', px, py, pw, ph);
       const dense = o.id === 'obj:forest_ne';
+      drawForestFloor(ctx, px, py, pw, ph, dense);
       // Serene Village 树木保持原生 32×32；树林交替针叶树和低冠树。
       if (sheetReady(TERRAIN_SHEETS.tree2)) {
         for (let ty = py + 8; ty < py + ph - 8; ty += dense ? 40 : 52) {
@@ -196,6 +305,7 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
           }
         }
       }
+      drawUndergrowth(ctx, px, py, pw, ph, dense);
     } else if (o.id === 'obj:farm' || o.id === 'obj:farm_east') {
       fillTerrainTile(ctx, 'crops', px, py, pw, ph);
       ctx.fillStyle = '#8a6a3a';
@@ -275,24 +385,33 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
       const [sx, sy, sw, sh] = b.sprite;
       fillTerrainTile(ctx, 'dirt', px, py, pw, ph);
       const fitted = fitPixelSprite(sw, sh, px, py, pw, ph);
+      ctx.fillStyle = 'rgba(31,37,31,.28)';
+      ctx.fillRect(fitted.dx + 5, fitted.dy + fitted.dh - 5, fitted.dw - 10, 8);
       drawTileW(ctx, sheet, sx, sy, sw, sh, fitted.dx, fitted.dy, fitted.dw, fitted.dh);
+      drawBuildingAccents(ctx, o, fitted.dx, fitted.dy, fitted.dw, fitted.dh);
       // 夜间窗户点亮：暖色覆盖房体两侧窗位
       const night = minuteOfDay >= 1200 || (minuteOfDay >= 0 && minuteOfDay < 300);
       if (night) {
+        const windowY = Math.round(fitted.dy + fitted.dh * .48);
         ctx.fillStyle = 'rgba(255,217,138,0.30)';
-        ctx.fillRect(fitted.dx + 18, fitted.dy + fitted.dh * .48, 14, 10);
-        ctx.fillRect(fitted.dx + fitted.dw - 32, fitted.dy + fitted.dh * .48, 14, 10);
+        ctx.fillRect(fitted.dx + 18, windowY, 14, 10);
+        ctx.fillRect(fitted.dx + fitted.dw - 32, windowY, 14, 10);
       }
-      drawMapLabel(ctx, o.name, px + pw / 2, py + ph - 5);
       return;
     }
-    /* 现有程序化建筑分支原样保留为 fallback */
+    // 程序化建筑 fallback：地基、屋檐、墙面、窗框与门阶分层。
+    ctx.fillStyle = 'rgba(35,45,36,.30)';
+    ctx.fillRect(px + 5, py + ph - 4, pw - 10, 8);
     ctx.fillStyle = '#e8d5b7';
     ctx.fillRect(px, py, pw, ph);
     ctx.fillStyle = ROOFS[hash(o.id) % ROOFS.length];
-    ctx.fillRect(px, py, pw, 10);
+    ctx.fillRect(px - 2, py, pw + 4, 11);
+    ctx.fillStyle = 'rgba(54,38,29,.35)';
+    ctx.fillRect(px - 2, py + 9, pw + 4, 3);
     ctx.fillStyle = 'rgba(255,255,255,0.25)';
     ctx.fillRect(px + 4, py + 3, pw - 8, 3);
+    ctx.fillStyle = 'rgba(142,104,71,.16)';
+    for (let wy = py + 14; wy < py + ph - 10; wy += 12) ctx.fillRect(px + 3, wy, pw - 6, 1);
     // 窗（夜间点亮）
     const night = minuteOfDay >= 1200 || (minuteOfDay >= 0 && minuteOfDay < 300);
     ctx.fillStyle = night ? '#ffd98a' : '#7a5a3a';
@@ -300,16 +419,23 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
       ctx.fillRect(wx, py + 16, 8, 8);
       ctx.strokeStyle = '#4a3520';
       ctx.strokeRect(wx, py + 16, 8, 8);
+      ctx.fillRect(wx + 3, py + 16, 1, 8);
+      ctx.fillRect(wx, py + 19, 8, 1);
     }
     // 门
     ctx.fillStyle = '#6b4a2f';
     const doorX = px + pw / 2 - 6;
     ctx.fillRect(doorX, py + ph - 14, 12, 14);
+    ctx.fillStyle = '#d4af63';
+    ctx.fillRect(doorX + 8, py + ph - 8, 2, 2);
+    ctx.fillStyle = '#8c6a45';
+    ctx.fillRect(doorX - 3, py + ph - 2, 18, 3);
     // 招牌
     if (o.id === 'obj:cafe' || o.id === 'obj:bookstore' || o.id === 'obj:post_office') {
       ctx.fillStyle = '#e3b23c';
       ctx.fillRect(px + pw - 16, py + 2, 12, 8);
     }
+    drawBuildingAccents(ctx, o, px, py, pw, ph);
   } else if (o.type === 'room') {
     ctx.fillStyle = '#d9b48f';
     ctx.fillRect(px, py, pw, ph);
@@ -330,20 +456,34 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
     ctx.fillStyle = '#8a6f4d';
     ctx.fillRect(px + 6, py + 6, pw - 12, ph - 12);
   }
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.font = '11px monospace';
-  ctx.fillText(o.name, px + 3, py + 24);
 }
 
-function drawMapLabel(ctx: CanvasRenderingContext2D, name: string, cx: number, baseline: number): void {
+function drawBuildingAccents(
+  ctx: CanvasRenderingContext2D,
+  o: ObjectView,
+  px: number, py: number, pw: number, ph: number
+): void {
+  const seed = hash(o.id);
+  // 门阶与两侧植被把房体压在地面上，坐标均取整。
+  ctx.fillStyle = '#806044';
+  ctx.fillRect(Math.round(px + pw / 2 - 9), py + ph - 4, 18, 4);
+  ctx.fillStyle = seed % 2 ? '#3c7d45' : '#577d3f';
+  ctx.fillRect(px + 5, py + ph - 7, 5, 5);
+  ctx.fillRect(px + pw - 10, py + ph - 6, 5, 4);
+  ctx.fillStyle = seed % 3 === 0 ? '#f0c86e' : '#dd8d82';
+  ctx.fillRect(px + 6, py + ph - 9, 2, 2);
+}
+
+/** 选中对象只绘制轮廓；名称由屏幕 tooltip 与右侧检查器承载。 */
+export function drawObjectSelection(ctx: CanvasRenderingContext2D, o: ObjectView): void {
+  const px = o.x * TILE;
+  const py = o.y * TILE;
+  const pw = o.w * TILE;
+  const ph = o.h * TILE;
   ctx.save();
-  ctx.font = 'bold 11px "Microsoft YaHei UI", sans-serif';
-  ctx.textAlign = 'center';
-  const width = Math.ceil(ctx.measureText(name).width) + 10;
-  ctx.fillStyle = 'rgba(15, 20, 24, .78)';
-  ctx.fillRect(Math.round(cx - width / 2), baseline - 14, width, 16);
-  ctx.fillStyle = '#fff5d8';
-  ctx.fillText(name, cx, baseline - 2);
+  ctx.strokeStyle = '#ffe09a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 2, py + 2, Math.max(1, pw - 4), Math.max(1, ph - 4));
   ctx.restore();
 }
 

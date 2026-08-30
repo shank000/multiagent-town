@@ -8,6 +8,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const html = readFileSync(`${root}/public/index.html`, 'utf8');
 const css = readFileSync(`${root}/public/style.css`, 'utf8');
 const client = readFileSync(`${root}/src/web/client/main.ts`, 'utf8');
+const panelClient = readFileSync(`${root}/src/web/client/panel.ts`, 'utf8');
+const consoleClient = readFileSync(`${root}/src/web/client/console.ts`, 'utf8');
 const statsHtml = readFileSync(`${root}/public/stats.html`, 'utf8');
 const statsClient = readFileSync(`${root}/src/web/client/stats.ts`, 'utf8');
 const packageJson = readFileSync(`${root}/package.json`, 'utf8');
@@ -25,9 +27,16 @@ test('research console exposes town, relationship and inspector viewports simult
 test('three-view layout has desktop and responsive grid contracts', () => {
   assert.match(css, /#research-workspace\s*\{[^}]*display:\s*grid/s);
   assert.match(css, /grid-template-columns:\s*minmax\(480px,[^;]+;/);
-  assert.match(css, /@media \(max-width:\s*1500px\)/);
+  assert.match(css, /@media \(max-width:\s*1380px\)/);
   assert.match(css, /@media \(max-width:\s*980px\)/);
   assert.match(css, /#research-workspace\[data-focus/);
+  assert.match(css, /#research-workspace\[data-focus="relations"\]\s*\{[^}]*overflow-y:\s*auto/s);
+  assert.match(css, /#research-workspace\[data-focus="relations"\] \.relation-viewport\s*\{[^}]*min-height:\s*980px/s);
+  assert.match(css, /grid-template-rows:\s*minmax\(520px,\s*1fr\)\s*minmax\(300px,\s*\.9fr\)/);
+  assert.match(css, /\.relation-viewport \.viewport-actions\s*\{[^}]*flex-wrap:\s*wrap/s);
+  assert.match(css, /@media \(max-width:\s*620px\)[\s\S]*?\.network-stage\s*\{[^}]*min-height:\s*320px/s);
+  assert.match(css, /grid-template-rows:\s*minmax\(720px,\s*1fr\)\s*minmax\(320px,\s*\.75fr\)/);
+  assert.match(css, /@media \(max-width:\s*420px\)[\s\S]*?grid-template-rows:\s*minmax\(900px,\s*1fr\)\s*minmax\(320px,\s*\.6fr\)/s);
 });
 
 test('research console exposes readable controls and keyboard-accessible semantics', () => {
@@ -49,11 +58,56 @@ test('hidden research canvases preserve their last usable layout', () => {
   assert.match(client, /pendingCameraTarget = \{ x: worldX, y: worldY \}/);
 });
 
-test('frequently used research controls meet the desktop target baseline', () => {
-  assert.match(css, /\.mini-action\s*\{[^}]*min-height:\s*36px/s);
-  assert.match(css, /\.metric-tab\s*\{[^}]*min-height:\s*36px/s);
-  assert.match(css, /\.nar-ava\s*\{[^}]*width:\s*36px;\s*height:\s*36px/s);
-  assert.match(css, /\.cand\s*\{[^}]*min-height:\s*36px/s);
+test('relationship viewport switches between social projection and choice network with world/window-safe refresh', () => {
+  assert.match(html, /data-network-mode="social"/);
+  assert.match(html, /data-network-mode="choice"/);
+  assert.match(client, /fetchSocialNetwork\(requestedWorld, requestedWindow, controller\.signal\)/);
+  assert.match(client, /requestSeq !== socialNetworkRequestSeq \|\| activeWorldId !== requestedWorld \|\| activeSocialNetworkWindow\(\) !== requestedWindow/);
+  assert.match(client, /socialNetworkByWorld\.get\(socialNetworkCacheKey\(activeWorldId, requestedWindow\)\)/);
+  assert.match(client, /#panel-tabs \[data-tab="relation"\]/);
+  assert.match(consoleClient, /result\.worldId !== worldId/);
+  assert.match(consoleClient, /mode === 'social'/);
+});
+
+test('relationship viewport exposes edge interaction, 6+4 lenses, filters, and keyboard alternatives', () => {
+  for (const id of [
+    'network-lens', 'network-window', 'network-scope', 'network-threshold',
+    'network-edge-select', 'network-filter-reset', 'network-edge-count', 'network-edge-tooltip',
+  ]) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(html, /id="net-canvas"[^>]*tabindex="0"[^>]*aria-describedby=/);
+  assert.match(html, /aria-describedby="network-zone-label network-edge-count network-edge-tooltip"/);
+  assert.match(html, /id="network-edge-tooltip"[^>]*role="tooltip"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
+  assert.match(client, /hitTestNetworkEdge\(networkEdges/);
+  assert.match(client, /setRelationshipDyadFocus\([\s\S]*?edge\.fromId,[\s\S]*?edge\.toId/);
+  assert.match(client, /networkScope === 'ego'/);
+  assert.match(consoleClient, /NETWORK_LENSES/);
+  assert.match(consoleClient, /missingEdges/);
+  assert.match(css, /\.network-field select\s*\{[^}]*min-height:\s*40px/s);
+});
+
+test('inspector exposes directed relationship evidence and groups dialogue by persistent conversation', () => {
+  for (const label of ['情感亲密', '信任代理', '尊重/地位', '支持代理', '张力代理', '互动频率']) {
+    assert.match(panelClient, new RegExp(label));
+  }
+  assert.match(panelClient, /direction\.evidence/);
+  assert.match(panelClient, /r\.asymmetry/);
+  assert.match(panelClient, /mind\.conversations/);
+  assert.match(panelClient, /message\.fromName/);
+  assert.match(panelClient, /conversation\.status/);
+});
+
+test('frequently used research controls meet the 40px target baseline', () => {
+  assert.match(css, /button, select, input\[type="number"\]\s*\{[^}]*min-height:\s*40px/s);
+  assert.match(css, /\.network-mode button\s*\{[^}]*min-height:\s*40px;[^}]*font-size:\s*13px/s);
+  assert.match(css, /\.mini-action\s*\{[^}]*min-height:\s*40px/s);
+  assert.match(css, /\.metric-tab\s*\{[^}]*min-height:\s*40px/s);
+  assert.match(css, /#panel-tabs \.tab\s*\{[^}]*min-height:\s*40px/s);
+  assert.match(css, /\.icon-btn\s*\{[^}]*min-height:\s*40px/s);
+  assert.match(css, /\.nar-ava\s*\{[^}]*width:\s*40px;\s*height:\s*40px/s);
+  assert.match(css, /\.cand\s*\{[^}]*min-height:\s*40px/s);
+  assert.match(css, /\.conversation-summary span\s*\{[^}]*font-size:\s*12px/s);
 });
 
 test('panel text escaping is safe in both text and attribute contexts', () => {
@@ -84,7 +138,7 @@ test('deep statistics escapes dynamic markup and keeps readable targets', () => 
   assert.match(statsClient, /option\.textContent = world\.kind/);
   assert.match(css, /#stats-page\s*\{[^}]*font-size:\s*14px/s);
   assert.match(css, /\.stats-toolbar select,[\s\S]*?min-height:\s*40px/);
-  assert.match(css, /\.hud-link\s*\{[^}]*min-height:\s*36px/s);
+  assert.match(css, /\.hud-link\s*\{[^}]*min-height:\s*40px/s);
 });
 
 test('web build emits both research console and statistics clients', () => {

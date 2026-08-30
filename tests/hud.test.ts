@@ -27,3 +27,18 @@ test('drawTooltip/drawBanner/drawBubbles 冒烟：mock ctx 不抛（含 dpr 访�
   const display = new Map<string, DisplayPos>([['a1', { x: 100, y: 100 }]]);
   drawBubbles(ctx, bubbles, display, 1000);
 });
+
+test('对话气泡用整数像素尾连续指向说话者头顶', () => {
+  const rects: number[][] = [];
+  const ctx = mockCtx();
+  ctx.fillRect = (...args: number[]) => { rects.push(args); };
+  const bubbles = new Map<string, Bubble>([['a1', { kind: 'chat', speaker: '甲', text: '你好', until: 1e12 }]]);
+  const display = new Map<string, DisplayPos>([['a1', { x: 100.4, y: 100.4 }]]);
+  drawBubbles(ctx, bubbles, display, 1000);
+  const outerTail = rects[0];
+  const innerTail = rects[1];
+  assert.equal(outerTail[2], 6);
+  assert.equal(innerTail[2], 2);
+  assert.equal(outerTail[1] + outerTail[3], Math.round(100.4 - 18));
+  assert.ok(rects.every((rect) => rect.every(Number.isInteger)));
+});

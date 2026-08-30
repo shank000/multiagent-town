@@ -13,11 +13,13 @@
     <div class="hud-status"><span class="status-label">世界时钟</span><strong id="clock">第1天 00:00</strong></div>
     <div class="spacer"></div>
     <div class="research-mode" id="connection-status" role="status" aria-live="polite"><span class="live-dot"></span>纵向社会观测 · 实时</div>
+    <div class="llm-status" id="llm-status" role="status" aria-live="polite"><span class="llm-dot"></span>本地推理 · 就绪</div>
     <div class="seg" id="controls" aria-label="世界时间控制">
       <button data-action="pause">暂停</button>
       <button data-action="speed" data-value="1">1×</button>
-      <button data-action="speed" data-value="60">60×</button>
-      <button data-action="speed" data-value="360">360×</button>
+      <button data-action="adaptive-speed" title="实测本地模型吞吐并设置可持续世界倍速">自适应</button>
+      <button data-action="speed" data-value="60" title="高速认知采样；模型积压时虚拟时钟自动背压">60×</button>
+      <button data-action="speed" data-value="360" title="批量观察；模型积压时虚拟时钟自动背压">360×</button>
     </div>
     <a class="hud-link" href="/stats.html" aria-label="打开深度社会统计页">深度统计</a>
   </header>
@@ -49,8 +51,12 @@
       <header class="viewport-head">
         <div><span class="eyebrow">VIEW 02 · STRUCTURE</span><h2 id="relation-title">互动关系与伙伴选择</h2></div>
         <div class="viewport-head-tools">
-          <div class="viewport-legend"><span>箭头＝选择方向</span><span>边宽＝累计次数</span></div>
+          <div class="viewport-legend"><span id="network-legend-direction">箭头＝有向看法</span><span id="network-legend-weight">边宽＝关系强度</span></div>
           <div class="viewport-actions">
+            <div id="network-mode" class="network-mode" role="tablist" aria-label="关系网络模式">
+              <button type="button" class="active" data-network-mode="social" role="tab" aria-selected="true">社会关系</button>
+              <button type="button" data-network-mode="choice" role="tab" aria-selected="false">伙伴选择</button>
+            </div>
             <button class="tool-button" id="network-reset" type="button">重排</button>
             <button class="tool-button focus-view" type="button" data-focus-view="relations" aria-pressed="false">聚焦</button>
           </div>
@@ -58,8 +64,64 @@
       </header>
       <div class="relation-stack viewport-body">
         <div class="canvas-zone network-zone">
-          <div class="zone-label">有向伙伴选择网络 · 点击节点联动人物</div>
-          <canvas id="net-canvas" aria-label="居民关系网络"></canvas>
+          <div class="network-research-toolbar" aria-label="关系网络研究工具">
+            <div class="network-toolbar-status">
+              <span class="section-kicker">NETWORK LENS</span>
+              <span id="network-edge-count" role="status" aria-live="polite">显示 0 / 0 条边</span>
+              <button class="tool-button" id="network-filter-reset" type="button">重置筛选</button>
+            </div>
+            <div class="network-filter-grid">
+              <label class="network-field network-field-lens" for="network-lens">
+                <span>分析镜头</span>
+                <select id="network-lens">
+                  <option value="overall">总览 · 综合关系强度</option>
+                  <option value="partnerReturn">既有 · 伙伴回返</option>
+                  <option value="tiePersistence">既有 · 关系持续性</option>
+                  <option value="recencyEffect">既有 · 近因暴露代理</option>
+                  <option value="reciprocity">既有 · 互惠交换</option>
+                  <option value="relationalCarryOver">既有 · 关系延续效应</option>
+                  <option value="partnerConcentration">既有 · 伙伴集中度</option>
+                  <option value="interactionIntensity">新增 · 互动强度</option>
+                  <option value="multiplexity">新增 · 关系多重性</option>
+                  <option value="dependenceAsymmetry">新增 · 依赖不对称</option>
+                  <option value="embeddedness">新增 · 网络嵌入性</option>
+                </select>
+              </label>
+              <label class="network-field" for="network-window">
+                <span>时间窗口</span>
+                <select id="network-window">
+                  <option value="7">近 7 日</option>
+                  <option value="30">近 30 日</option>
+                  <option value="all">全部记录</option>
+                </select>
+              </label>
+              <label class="network-field" for="network-scope">
+                <span>观察范围</span>
+                <select id="network-scope">
+                  <option value="all">全网</option>
+                  <option value="ego">当前人物 Ego</option>
+                </select>
+              </label>
+              <label class="network-field network-field-threshold" for="network-threshold">
+                <span>最低显示值</span>
+                <span class="network-range-control">
+                  <input id="network-threshold" type="range" min="0" max="1" step="0.05" value="0" />
+                  <output id="network-threshold-output" for="network-threshold">≥ 0.00</output>
+                </span>
+              </label>
+              <label class="network-field network-field-edge" for="network-edge-select">
+                <span id="network-edge-field-label">关系边定位</span>
+                <select id="network-edge-select">
+                  <option value="">选择一条可见关系边</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="network-stage">
+            <div class="zone-label" id="network-zone-label">有向社会关系投影 · 点击节点或关系边查看证据</div>
+            <canvas id="net-canvas" tabindex="0" aria-label="居民关系网络" aria-describedby="network-zone-label network-edge-count network-edge-tooltip"></canvas>
+            <div id="network-edge-tooltip" class="network-edge-tooltip" role="tooltip" aria-live="polite" aria-atomic="true" hidden></div>
+          </div>
         </div>
         <div class="canvas-zone metrics-zone">
           <div class="zone-label">结构指标 · 时间序列</div>

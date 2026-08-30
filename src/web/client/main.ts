@@ -1,27 +1,46 @@
 // 像素小镇浏览器客户端：Canvas 2D 像素渲染，零依赖，SSE 实时刷新
 
-import { drawNpc, type Dir } from './sprites';
-import { drawTerrain, drawObjectDetail, drawInterior, applyDayNight, TILE } from './render';
+import {
+  drawNpc, npcAnimationPhase, npcConversationPlacement, npcPoseFor, npcRouteWaypoints, npcTargetPlacement,
+  type Dir, type NpcPose,
+} from './sprites';
+import { drawTerrain, drawObjectDetail, drawObjectSelection, drawInterior, applyDayNight, TILE } from './render';
 import { computeFit, zoomOffsets, detailScale, stepPixelZoom, clampCameraOffsets, type FitCamera } from './camera';
 import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop, rainSplash, type Particle } from './effects';
-import { escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind, bindPanel, updatePanelDeps, type AgentView } from './panel';
 import {
-  drawNetwork, drawMetrics, fetchMetrics, controlExperiment, exportMetrics,
-  hitTestNetwork, resetNetworkLayout, METRIC_DEFINITIONS,
-  type MetricsPayload, type MetricKey, type NetworkNodeLayout,
+  escapeHtml, STATE_NAME, TYPE_NAME, renderDetail, renderProfile, renderObjectCard, renderMind,
+  bindPanel, updatePanelDeps, setRelationshipDyadFocus, clearRelationshipDyadFocus, type AgentView,
+} from './panel';
+import {
+  drawNetwork, drawMetrics, fetchMetrics, fetchSocialNetwork, controlExperiment, exportMetrics,
+  hitTestNetwork, hitTestNetworkEdge, networkLensLevel, resetNetworkLayout, METRIC_DEFINITIONS, NETWORK_LENSES,
+  type MetricsPayload, type MetricKey, type NetworkNodeLayout, type NetworkEdgeLayout,
+  type NetworkMode, type NetworkLens, type NetworkRenderResult, type SocialNetworkPayload,
 } from './console';
 import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 
 interface ClockState { day: number; minutesOfDay: number; totalMinutes: number }
+interface ActiveConversationView {
+  conversationId: string;
+  aId: string;
+  bId: string;
+  speakerId: string | null;
+  phase?: 'waiting_model' | 'ready' | 'summarizing';
+  waitMs?: number;
+}
 interface WorldSnapshot {
   clock: ClockState; speedPerRealSecond: number; paused: boolean;
   gridW: number; gridH: number; objects: ObjectView[]; agents: AgentView[]; seq: number;
   weather: 'clear' | 'rain';
+  activeConversations?: ActiveConversationView[];
 }
 interface TownEvent { id: string;
   type: string; actorId: string | null; description: string;
-  payload: { kind?: string; line?: string; thought?: string; fromId?: string } | null;
+  payload: {
+    kind?: string; line?: string; thought?: string; fromId?: string; toId?: string;
+    conversationId?: string;
+  } | null;
 }
 
 interface WorldListItem {
@@ -46,15 +65,20 @@ let playWorldId: string | null = null;
 let tooltip: { text: string; x: number; y: number } | null = null;
 let banner: { text: string; until: number } | null = null;
 
-interface Display { x: number; y: number; tx: number; ty: number; lastTileX: number; lastTileY: number; moving: boolean; dir: Dir }
-/** 3 帧步态循环：站立-迈步-迈步-迈步（经典四拍） */
-const WALK_CYCLE = [0, 1, 2, 1] as const;
+interface Display {
+  x: number; y: number; tx: number; ty: number;
+  lastTileX: number; lastTileY: number;
+  dir: Dir; phase: number;
+  waypoints: { x: number; y: number }[];
+  speed: number;
+}
+interface ConversationRenderState { cx: number; cy: number; dir: Dir; speaking: boolean }
 const WALK_SPEED = TILE * 5.5; // 像素/秒（匀速行走）
 const display = new Map<string, Display>();
 const bubbles = new Map<string, Bubble>();
+const recentConversations = new Map<string, ActiveConversationView & { until: number }>();
 const ticker: string[] = [];
 const fx = new ParticleSystem();
-const poses = new Map<string, { scaleY: number }>(); // agentId -> 姿态缩放（1 站 / 0.78 坐 / 0.5 躺）
 const lastActionKey = new Map<string, string>();     // agentId -> "targetName:verb"
 const zzzLast = new Map<string, number>();
 const steamLast = new Map<string, number>();
@@ -81,14 +105,97 @@ const emptyMetrics = (): MetricsPayload => ({
 let metricsCache: MetricsPayload = emptyMetrics();
 const metricsByWorld = new Map<string, MetricsPayload>();
 let lastMetricsAt = 0;
+let metricsRequestSeq = 0;
+let metricsController: AbortController | null = null;
+let metricsStatus: 'loading' | 'ready' | 'stale' = 'loading';
+const emptySocialNetwork = (worldId: string): SocialNetworkPayload => ({
+  worldId,
+  modelVersion: 'social-relations-v2',
+  generatedGameTime: 0,
+  window: { days: 7, startGameTime: 0, endGameTime: 0, label: '近 7 日' },
+  proxyNotice: '',
+  measureSchema: [],
+  dataQuality: [],
+  observationSummary: { relationshipEvidence: 0, partnerChoices: 0 },
+  directions: [],
+  dyads: [],
+});
+let socialNetworkCache: SocialNetworkPayload = emptySocialNetwork(activeWorldId);
+const socialNetworkByWorld = new Map<string, SocialNetworkPayload>();
+let lastSocialNetworkAt = 0;
+let socialNetworkStatus: 'loading' | 'ready' | 'error' = 'loading';
+let socialNetworkRequestSeq = 0;
+let socialNetworkController: AbortController | null = null;
+let networkMode: NetworkMode = 'social';
+let networkLens: NetworkLens = 'overall';
+let networkWindowDays: number | null = 7;
+let networkScope: 'all' | 'ego' = 'all';
+let networkThreshold = 0;
 let fitScale = 1;
 let activeMetric: MetricKey = 'repeat';
 let networkNodes: NetworkNodeLayout[] = [];
+let networkEdges: NetworkEdgeLayout[] = [];
 let hoveredNetworkId: string | null = null;
+let hoveredNetworkEdgeId: string | null = null;
+let lastNetworkPointer: { x: number; y: number } | null = null;
+let selectedNetworkEdge: {
+  id: string;
+  worldId: string;
+  mode: NetworkMode;
+  fromId: string;
+  toId: string;
+} | null = null;
+let networkEdgeControlSignature = '';
+let lastSelectedDyadPanelRefreshAt = 0;
 let toastTimer = 0;
 // 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
 let lastGridW = 0;
 let lastGridH = 0;
+
+const socialNetworkCacheKey = (worldId: string, windowDays: number | null) =>
+  `${worldId}\u0000${windowDays === null ? 'all' : windowDays}`;
+const activeSocialNetworkWindow = (): number | null => networkLens === 'overall' ? null : networkWindowDays;
+
+function clearNetworkEdgeSelection(refreshRelationPanel = true): void {
+  selectedNetworkEdge = null;
+  hoveredNetworkEdgeId = null;
+  clearRelationshipDyadFocus();
+  networkEdgeControlSignature = '';
+  const select = document.getElementById('network-edge-select') as HTMLSelectElement | null;
+  if (select) {
+    select.value = '';
+    select.dataset.selected = 'false';
+  }
+  const tooltip = document.getElementById('network-edge-tooltip');
+  if (tooltip) tooltip.hidden = true;
+  const stage = document.querySelector<HTMLElement>('.network-stage');
+  if (stage) {
+    stage.classList.remove('has-edge-selection');
+    delete stage.dataset.edgeSelected;
+  }
+  if (refreshRelationPanel && activeTab === 'relation' && selectedId) updatePanel();
+}
+
+function invalidateSocialNetworkRequest(): void {
+  socialNetworkRequestSeq++;
+  socialNetworkController?.abort();
+  socialNetworkController = null;
+  lastSocialNetworkAt = 0;
+}
+
+function invalidateMetricsRequest(): void {
+  metricsRequestSeq++;
+  metricsController?.abort();
+  metricsController = null;
+  lastMetricsAt = 0;
+}
+
+function maybeRefreshSelectedDyadPanel(now = Date.now()): void {
+  if (!selectedNetworkEdge || selectedNetworkEdge.worldId !== activeWorldId || activeTab !== 'relation') return;
+  if (now - lastSelectedDyadPanelRefreshAt < 5_000) return;
+  lastSelectedDyadPanelRefreshAt = now;
+  updatePanel();
+}
 
 async function main(): Promise<void> {
   const initial = (await (await fetch('/api/state')).json()) as WorldSnapshot & { worldId?: string };
@@ -115,6 +222,9 @@ async function main(): Promise<void> {
   bindPlayBar();
   updatePanelDeps({ playing, togglePlay });
   bindPanel((tab) => { activeTab = tab; }, updatePanel);
+  document.addEventListener('relationship-dyad-focus-cleared', () => {
+    if (selectedNetworkEdge) clearNetworkEdgeSelection(false);
+  });
   renderRoster();
   renderCharacterCard(selectedId);
   updatePanel();
@@ -129,6 +239,7 @@ async function main(): Promise<void> {
   });
   es.addEventListener('event', (ev) => onEvent(JSON.parse((ev as MessageEvent<string>).data) as TownEvent));
   updateHud();
+  pollLLMStatus();
   requestAnimationFrame(loop);
 }
 
@@ -222,7 +333,11 @@ function updateZoomLabel(): void {
   if (label) label.textContent = `${Math.round(camera.scale * 100)}% · 拖拽平移`;
 }
 function initDisplay(a: AgentView): void {
-  display.set(a.id, { x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE, lastTileX: a.x, lastTileY: a.y, moving: false, dir: 'down' });
+  display.set(a.id, {
+    x: a.x * TILE, y: a.y * TILE, tx: a.x * TILE, ty: a.y * TILE,
+    lastTileX: a.x, lastTileY: a.y, dir: 'down', phase: npcAnimationPhase(a.id),
+    waypoints: [], speed: WALK_SPEED,
+  });
 }
 function applySnapshot(): void {
   if (!snap) return;
@@ -233,13 +348,27 @@ function applySnapshot(): void {
       d = display.get(a.id)!;
     }
     if (a.x !== d.lastTileX || a.y !== d.lastTileY) {
+      const next = npcRouteWaypoints(
+        a.path ?? [],
+        { x: d.lastTileX, y: d.lastTileY },
+        { x: a.x, y: a.y },
+        TILE,
+      );
+      d.waypoints.push(...next);
       d.tx = a.x * TILE;
       d.ty = a.y * TILE;
-      d.moving = true;
       d.lastTileX = a.x;
       d.lastTileY = a.y;
-    } else {
-      d.moving = false;
+      let routeLength = 0;
+      let cursorX = d.x;
+      let cursorY = d.y;
+      for (const waypoint of d.waypoints) {
+        routeLength += Math.abs(waypoint.x - cursorX) + Math.abs(waypoint.y - cursorY);
+        cursorX = waypoint.x;
+        cursorY = waypoint.y;
+      }
+      // 在下一次 500ms 快照前追上服务端；低速时维持清晰的像素游戏步速。
+      d.speed = Math.max(WALK_SPEED, routeLength / 0.42);
     }
   }
   updateHud();
@@ -255,16 +384,32 @@ function applySnapshot(): void {
 
 function onEvent(e: TownEvent & { worldId?: string }): void {
   if (e.worldId && e.worldId !== activeWorldId) return;
-  feed.unshift({ kind: e.payload?.kind ?? '', text: e.description, id: e.id });
+  const kind = e.payload?.kind;
+  if (kind === 'action_decision_quality') return;
+  feed.unshift({ kind: kind ?? '', text: e.description, id: e.id });
   if (feed.length > 200) feed.pop();
   renderFeed();
-  const kind = e.payload?.kind;
   // 广播事件 → 顶部横幅（6 秒后淡出）
   if (kind === 'broadcast') {
     banner = { text: e.description, until: performance.now() + 6000 };
     return;
   }
   const fromId = e.payload?.fromId ?? e.actorId;
+  const toId = e.payload?.toId;
+  const conversationId = e.payload?.conversationId;
+  if (kind === 'chat_summary') {
+    if (conversationId) recentConversations.delete(conversationId);
+    if (fromId && toId) recentConversations.delete(conversationKey(fromId, toId));
+  } else if (kind === 'chat' && fromId && toId) {
+    const key = conversationId ?? conversationKey(fromId, toId);
+    recentConversations.set(key, {
+      conversationId: key,
+      aId: fromId,
+      bId: toId,
+      speakerId: fromId,
+      until: performance.now() + (conversationId ? 12_000 : 6_000),
+    });
+  }
   if (fromId && (kind === 'thought' || kind === 'chat' || kind === 'chat_summary')) {
     const speaker = snap?.agents.find((x) => x.id === fromId)?.name ?? fromId;
     const text = kind === 'thought' ? (e.payload?.thought ?? '') : (e.payload?.line ?? '');
@@ -272,6 +417,33 @@ function onEvent(e: TownEvent & { worldId?: string }): void {
     const until = performance.now() + (kind === 'thought' ? 7000 : 9000);
     bubbles.set(fromId, { kind, speaker, text, until });
   }
+}
+
+function conversationKey(aId: string, bId: string): string {
+  return aId < bId ? `pair:${aId}|${bId}` : `pair:${bId}|${aId}`;
+}
+
+/** 精确快照为主，SSE 窗口补足事件与下一帧快照之间的间隙。 */
+function activeConversationsAt(nowMs: number): ActiveConversationView[] {
+  for (const [id, conversation] of recentConversations) {
+    if (conversation.until <= nowMs) recentConversations.delete(id);
+  }
+  const merged = new Map<string, ActiveConversationView>();
+  for (const conversation of snap?.activeConversations ?? []) {
+    merged.set(conversation.conversationId, conversation);
+  }
+  for (const conversation of recentConversations.values()) {
+    const exact = merged.get(conversation.conversationId);
+    merged.set(conversation.conversationId, {
+      conversationId: conversation.conversationId,
+      aId: exact?.aId ?? conversation.aId,
+      bId: exact?.bId ?? conversation.bId,
+      speakerId: conversation.speakerId ?? exact?.speakerId ?? null,
+    });
+  }
+  return [...merged.values()]
+    .filter((conversation) => conversation.aId !== conversation.bId)
+    .sort((a, b) => a.conversationId.localeCompare(b.conversationId));
 }
 
 interface FeedItem { kind: string; text: string; id: string }
@@ -453,8 +625,9 @@ function renderFeed(): void {
   }).join('') || '<p style="color:var(--ink-dim)">等待事件……</p>';
 }
 
-function selectAgent(id: string, centerMap = true): void {
+function selectAgent(id: string, centerMap = true, preserveNetworkEdge = false): void {
   if (!snap?.agents.some((agent) => agent.id === id)) return;
+  if (!preserveNetworkEdge) clearNetworkEdgeSelection(false);
   selectedId = id;
   selectedObjectId = null;
   renderRoster();
@@ -467,6 +640,7 @@ function selectAgent(id: string, centerMap = true): void {
 }
 
 function selectObject(id: string | null): void {
+  clearNetworkEdgeSelection(false);
   selectedId = null;
   selectedObjectId = id;
   renderRoster();
@@ -486,11 +660,11 @@ async function fetchWorldSnapshot(worldId: string): Promise<WorldSnapshot & { wo
 function installWorldSnapshot(next: WorldSnapshot): void {
   snap = next;
   display.clear();
-  poses.clear();
   lastActionKey.clear();
   zzzLast.clear();
   steamLast.clear();
   bubbles.clear();
+  recentConversations.clear();
   fx.particles = [];
   tooltip = null;
   banner = null;
@@ -507,7 +681,10 @@ function installWorldSnapshot(next: WorldSnapshot): void {
   lastGridW = 0;
   lastGridH = 0;
   networkNodes = [];
+  networkEdges = [];
   hoveredNetworkId = null;
+  lastNetworkPointer = null;
+  clearNetworkEdgeSelection(false);
   resetNetworkLayout();
   renderFeed();
   applySnapshot();
@@ -563,6 +740,35 @@ function pollExperiment(): void {
 }
 setInterval(pollExperiment, 2000);
 
+function pollLLMStatus(): void {
+  void fetch('/api/llm/status').then((response) => response.json()).then((status: {
+    active?: number; queued?: number; maxQueued?: number; oldestWaitMs?: number; backpressured?: boolean;
+    performance?: { generationTokensPerSecond?: number | null; recommendedMaxWorldSpeed?: number | null; confidence?: string };
+  }) => {
+    const element = document.getElementById('llm-status');
+    if (!element) return;
+    const active = Math.max(0, Number(status.active) || 0);
+    const queued = Math.max(0, Number(status.queued) || 0);
+    const waitSeconds = Math.ceil(Math.max(0, Number(status.oldestWaitMs) || 0) / 1000);
+    const tokensPerSecond = Number(status.performance?.generationTokensPerSecond);
+    const recommended = Number(status.performance?.recommendedMaxWorldSpeed);
+    const calibration = Number.isFinite(tokensPerSecond) && tokensPerSecond > 0
+      ? ` · ${tokensPerSecond.toFixed(1)} tok/s · 建议≤${recommended || 1}×`
+      : ' · 待校准';
+    element.classList.toggle('busy', !status.backpressured && (active > 0 || queued > 0));
+    element.classList.toggle('pressure', !!status.backpressured);
+    element.innerHTML = status.backpressured
+      ? `<span class="llm-dot"></span>认知背压 · ${queued} 排队${calibration}`
+      : queued > 0
+        ? `<span class="llm-dot"></span>本地推理 · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
+        : `<span class="llm-dot"></span>本地推理 · ${active ? '生成中' : '就绪'}${calibration}`;
+  }).catch(() => {
+    const element = document.getElementById('llm-status');
+    if (element) element.innerHTML = '<span class="llm-dot"></span>本地推理 · 状态未知';
+  });
+}
+setInterval(pollLLMStatus, 2000);
+
 function showToast(message: string, tone: 'info' | 'success' | 'error' = 'info'): void {
   const toast = document.getElementById('ui-toast');
   if (!toast) return;
@@ -615,7 +821,7 @@ function bindWorkspaceInteractions(): void {
   document.getElementById('map-reset')!.addEventListener('click', resetDetailCamera);
   document.getElementById('network-reset')!.addEventListener('click', () => {
     resetNetworkLayout();
-    showToast('伙伴选择网络已重新排布', 'success');
+    showToast(`${networkMode === 'social' ? '社会关系' : '伙伴选择'}网络已重新排布`, 'success');
   });
   document.getElementById('roster-toggle')!.addEventListener('click', (event) => {
     const roster = document.querySelector<HTMLElement>('.town-roster')!;
@@ -631,23 +837,400 @@ function bindWorkspaceInteractions(): void {
   }
 }
 
+function networkAgentName(id: string): string {
+  return snap?.agents.find((agent) => agent.id === id)?.name ?? id;
+}
+
+function activeNetworkLensLabel(): string {
+  return NETWORK_LENSES.find((item) => item.key === networkLens)?.label ?? '综合关系强度';
+}
+
+function setNetworkEdgeSelection(edge: NetworkEdgeLayout): void {
+  selectedNetworkEdge = {
+    id: edge.id,
+    worldId: activeWorldId,
+    mode: edge.mode,
+    fromId: edge.fromId,
+    toId: edge.toId,
+  };
+  lastSelectedDyadPanelRefreshAt = Date.now();
+  setRelationshipDyadFocus(
+    edge.fromId,
+    edge.toId,
+    edge.mode === 'choice' || networkLens === 'overall' ? 'all' : (networkWindowDays ?? 'all'),
+  );
+  selectAgent(edge.fromId, false, true);
+  const stage = document.querySelector<HTMLElement>('.network-stage');
+  if (stage) {
+    stage.classList.add('has-edge-selection');
+    stage.dataset.edgeSelected = 'true';
+  }
+  const edgeSelect = document.getElementById('network-edge-select') as HTMLSelectElement | null;
+  if (edgeSelect) {
+    edgeSelect.value = edge.id;
+    edgeSelect.dataset.selected = 'true';
+  }
+  const relationTab = document.querySelector<HTMLButtonElement>('#panel-tabs [data-tab="relation"]');
+  if (relationTab && !relationTab.classList.contains('active')) relationTab.click();
+}
+
+function showNetworkEdgeTooltip(edge: NetworkEdgeLayout, x: number, y: number): void {
+  const tooltip = document.getElementById('network-edge-tooltip') as HTMLElement | null;
+  const stage = document.querySelector<HTMLElement>('.network-stage');
+  if (!tooltip || !stage) return;
+  const fromName = networkAgentName(edge.fromId);
+  const toName = networkAgentName(edge.toId);
+  const lensLabel = edge.mode === 'choice' ? '累计伙伴选择' : activeNetworkLensLabel();
+  const value = edge.mode === 'choice' ? `${Math.round(edge.displayValue)} 次` : edge.displayValue.toFixed(3);
+  const evidence = edge.mode === 'choice' ? `选择事件 ${edge.evidenceCount}` : `焦点组合事件 ${edge.evidenceCount}`;
+  const connector = edge.directed ? '→' : '↔';
+  const stateNotice = edge.mode === 'social' && edge.relationshipStateObserved === false
+    ? ' · 仅行为观察，未建立持久化关系状态'
+    : '';
+  tooltip.innerHTML = `<strong>${escapeHtml(fromName)} ${connector} ${escapeHtml(toName)}</strong><span>${escapeHtml(lensLabel)}：${escapeHtml(value)}</span><small>${escapeHtml(evidence)}${stateNotice} · 点击查看双人证据</small>`;
+  tooltip.hidden = false;
+  const maxLeft = Math.max(8, stage.clientWidth - 286);
+  const maxTop = Math.max(8, stage.clientHeight - 102);
+  tooltip.style.left = `${Math.max(8, Math.min(maxLeft, x + 13))}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(maxTop, y + 13))}px`;
+}
+
+function syncNetworkResearchControls(): void {
+  const lens = document.getElementById('network-lens') as HTMLSelectElement | null;
+  const windowSelect = document.getElementById('network-window') as HTMLSelectElement | null;
+  const scope = document.getElementById('network-scope') as HTMLSelectElement | null;
+  const threshold = document.getElementById('network-threshold') as HTMLInputElement | null;
+  const thresholdOutput = (document.getElementById('network-threshold-output')
+    ?? document.getElementById('network-threshold-value')) as HTMLOutputElement | null;
+  const edgeSelect = document.getElementById('network-edge-select') as HTMLSelectElement | null;
+  const edgeFieldLabel = document.getElementById('network-edge-field-label');
+  if (lens) {
+    lens.value = networkLens;
+    lens.disabled = networkMode === 'choice';
+  }
+  if (windowSelect) {
+    windowSelect.value = networkMode === 'social' && networkLens !== 'overall'
+      ? (networkWindowDays === null ? 'all' : String(networkWindowDays))
+      : 'all';
+    windowSelect.disabled = networkMode === 'choice' || networkLens === 'overall';
+  }
+  if (scope) scope.value = networkScope;
+  if (threshold) threshold.value = String(networkThreshold);
+  if (thresholdOutput) {
+    thresholdOutput.value = networkMode === 'choice'
+      ? `≥ 最强边 ${Math.round(networkThreshold * 100)}%`
+      : `≥ ${networkThreshold.toFixed(2)}`;
+  }
+  const actorLens = networkMode === 'social' && networkLensLevel(networkLens) === 'actor';
+  if (edgeSelect) edgeSelect.disabled = false;
+  if (edgeFieldLabel) edgeFieldLabel.textContent = actorLens ? '行动者节点编码' : '关系边定位';
+}
+
+function renderNetworkEdgeControls(result: NetworkRenderResult): void {
+  networkNodes = result.nodes;
+  networkEdges = result.edges;
+  if (lastNetworkPointer) {
+    hoveredNetworkId = hitTestNetwork(networkNodes, lastNetworkPointer.x, lastNetworkPointer.y);
+    const pointerEdge = hoveredNetworkId
+      ? null
+      : hitTestNetworkEdge(networkEdges, lastNetworkPointer.x, lastNetworkPointer.y);
+    hoveredNetworkEdgeId = pointerEdge?.id ?? null;
+    if (pointerEdge) showNetworkEdgeTooltip(pointerEdge, lastNetworkPointer.x, lastNetworkPointer.y);
+    else {
+      const tooltip = document.getElementById('network-edge-tooltip');
+      if (tooltip) tooltip.hidden = true;
+    }
+  }
+  if (hoveredNetworkEdgeId && !networkEdges.some((edge) => edge.id === hoveredNetworkEdgeId)) {
+    hoveredNetworkEdgeId = null;
+    const tooltip = document.getElementById('network-edge-tooltip');
+    if (tooltip) tooltip.hidden = true;
+  }
+  if (!lastNetworkPointer && document.activeElement?.id === 'net-canvas' && hoveredNetworkEdgeId) {
+    const keyboardEdge = networkEdges.find((edge) => edge.id === hoveredNetworkEdgeId);
+    if (keyboardEdge) {
+      showNetworkEdgeTooltip(
+        keyboardEdge,
+        (keyboardEdge.startX + keyboardEdge.endX) / 2,
+        (keyboardEdge.startY + keyboardEdge.endY) / 2,
+      );
+    }
+  }
+  if (selectedNetworkEdge && !networkEdges.some((edge) => edge.id === selectedNetworkEdge!.id)) {
+    clearNetworkEdgeSelection();
+  }
+  const counter = document.getElementById('network-edge-count');
+  if (counter) {
+    if (result.countUnit === 'actor') {
+      const missing = result.missingActors ? ` · ${result.missingActors} 位缺少可识别观察` : '';
+      counter.textContent = `可见 ${result.visibleActors ?? 0} / ${result.totalActors ?? 0} 位行动者${missing}`;
+    } else {
+      const missing = result.missingEdges ? ` · ${result.missingEdges} 条缺少可识别观察` : '';
+      counter.textContent = `可见 ${result.edges.length} / ${result.totalEdges} 条关系${missing}`;
+    }
+  }
+  const select = document.getElementById('network-edge-select') as HTMLSelectElement | null;
+  if (!select) return;
+  const signature = [
+    activeWorldId, networkMode, networkLens, networkWindowDays ?? 'all', networkScope, networkThreshold,
+    selectedId ?? '', selectedNetworkEdge?.id ?? '',
+    ...result.edges.map((edge) => `${edge.id}:${edge.displayValue}:${edge.evidenceCount}`),
+    ...result.nodes.map((node) => `${node.agentId}:${node.actorValue ?? 'missing'}:${node.actorValueVisible ?? false}`),
+  ].join('|');
+  if (signature === networkEdgeControlSignature) return;
+  networkEdgeControlSignature = signature;
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = result.countUnit === 'actor'
+    ? (result.visibleActors ? '选择一位有观察值的行动者' : '当前筛选下没有可见行动者值')
+    : result.edges.length ? '选择一条可见关系边' : '当前筛选下没有可见边';
+  const options = result.countUnit === 'actor'
+    ? result.nodes.filter((node) => node.actorValueVisible && node.actorValue !== null).map((node) => {
+      const option = document.createElement('option');
+      option.value = `actor:${encodeURIComponent(node.agentId)}`;
+      option.dataset.agentId = node.agentId;
+      option.textContent = `${networkAgentName(node.agentId)} · ${node.actorValue!.toFixed(3)}`;
+      return option;
+    })
+    : result.edges.map((edge) => {
+    const option = document.createElement('option');
+    option.value = edge.id;
+    const value = edge.mode === 'choice' ? `${Math.round(edge.displayValue)} 次` : edge.displayValue.toFixed(3);
+    const statePrefix = edge.mode === 'social' && edge.relationshipStateObserved === false ? '仅行为 · ' : '';
+    option.textContent = `${statePrefix}${networkAgentName(edge.fromId)} ${edge.directed ? '→' : '↔'} ${networkAgentName(edge.toId)} · ${value}`;
+    return option;
+  });
+  select.replaceChildren(placeholder, ...options);
+  select.value = result.countUnit === 'actor' && selectedId
+    ? `actor:${encodeURIComponent(selectedId)}`
+    : selectedNetworkEdge?.id ?? '';
+  select.dataset.selected = String(Boolean(select.value));
+}
+
 function bindNetworkInteractions(): void {
   const network = document.getElementById('net-canvas') as HTMLCanvasElement;
+  const modeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-network-mode]'));
+  const lensSelect = document.getElementById('network-lens') as HTMLSelectElement;
+  const windowSelect = document.getElementById('network-window') as HTMLSelectElement;
+  const scopeSelect = document.getElementById('network-scope') as HTMLSelectElement;
+  const thresholdInput = document.getElementById('network-threshold') as HTMLInputElement;
+  const edgeSelect = document.getElementById('network-edge-select') as HTMLSelectElement;
+
+  lensSelect.replaceChildren(...NETWORK_LENSES.map((definition) => {
+    const option = document.createElement('option');
+    option.value = definition.key;
+    const family = definition.family === 'added-four' ? '新增' : definition.family === 'existing-six' ? '既有' : '总览';
+    option.textContent = `${family} · ${definition.label}`;
+    return option;
+  }));
+
+  const refreshModeButtons = () => {
+    for (const item of modeButtons) {
+      const active = item.dataset.networkMode === networkMode;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-selected', String(active));
+      item.tabIndex = active ? 0 : -1;
+    }
+    syncNetworkResearchControls();
+    renderNetworkModeMeta();
+  };
+  for (const button of modeButtons) {
+    button.addEventListener('click', () => {
+      networkMode = button.dataset.networkMode === 'choice' ? 'choice' : 'social';
+      clearNetworkEdgeSelection();
+      resetNetworkLayout();
+      refreshModeButtons();
+    });
+    button.addEventListener('keydown', (event) => {
+      const current = modeButtons.indexOf(button);
+      const targetIndex = event.key === 'Home' ? 0
+        : event.key === 'End' ? modeButtons.length - 1
+          : event.key === 'ArrowRight' || event.key === 'ArrowDown' ? (current + 1) % modeButtons.length
+            : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? (current - 1 + modeButtons.length) % modeButtons.length
+              : -1;
+      if (targetIndex < 0) return;
+      event.preventDefault();
+      modeButtons[targetIndex].focus();
+      modeButtons[targetIndex].click();
+    });
+  }
+  lensSelect.addEventListener('change', () => {
+    const candidate = lensSelect.value as NetworkLens;
+    if (!NETWORK_LENSES.some((item) => item.key === candidate)) return;
+    networkLens = candidate;
+    clearNetworkEdgeSelection();
+    const requestedWindow = activeSocialNetworkWindow();
+    const cached = socialNetworkByWorld.get(socialNetworkCacheKey(activeWorldId, requestedWindow));
+    socialNetworkCache = cached ?? emptySocialNetwork(activeWorldId);
+    socialNetworkStatus = cached ? 'ready' : 'loading';
+    invalidateSocialNetworkRequest();
+    syncNetworkResearchControls();
+    renderNetworkModeMeta();
+  });
+  windowSelect.addEventListener('change', () => {
+    networkWindowDays = windowSelect.value === 'all' ? null : Math.max(1, Number(windowSelect.value) || 7);
+    clearNetworkEdgeSelection();
+    const requestedWindow = activeSocialNetworkWindow();
+    const cached = socialNetworkByWorld.get(socialNetworkCacheKey(activeWorldId, requestedWindow));
+    socialNetworkCache = cached ?? emptySocialNetwork(activeWorldId);
+    socialNetworkStatus = cached ? 'ready' : 'loading';
+    invalidateSocialNetworkRequest();
+    resetNetworkLayout();
+    syncNetworkResearchControls();
+    renderNetworkModeMeta();
+  });
+  scopeSelect.addEventListener('change', () => {
+    networkScope = scopeSelect.value === 'ego' ? 'ego' : 'all';
+    if (networkScope === 'ego' && !selectedId) selectedId = snap?.agents[0]?.id ?? null;
+    clearNetworkEdgeSelection();
+    syncNetworkResearchControls();
+  });
+  thresholdInput.addEventListener('input', () => {
+    networkThreshold = Math.max(0, Math.min(1, Number(thresholdInput.value) || 0));
+    clearNetworkEdgeSelection();
+    syncNetworkResearchControls();
+  });
+  document.getElementById('network-filter-reset')!.addEventListener('click', () => {
+    networkLens = 'overall';
+    networkWindowDays = 7;
+    networkScope = 'all';
+    networkThreshold = 0;
+    clearNetworkEdgeSelection();
+    const requestedWindow = activeSocialNetworkWindow();
+    const cached = socialNetworkByWorld.get(socialNetworkCacheKey(activeWorldId, requestedWindow));
+    socialNetworkCache = cached ?? emptySocialNetwork(activeWorldId);
+    socialNetworkStatus = cached ? 'ready' : 'loading';
+    invalidateSocialNetworkRequest();
+    resetNetworkLayout();
+    syncNetworkResearchControls();
+    renderNetworkModeMeta();
+  });
+  edgeSelect.addEventListener('change', () => {
+    const agentId = edgeSelect.selectedOptions[0]?.dataset.agentId;
+    if (agentId) {
+      selectAgent(agentId);
+      const relationTab = document.querySelector<HTMLButtonElement>('#panel-tabs [data-tab="relation"]');
+      if (relationTab && !relationTab.classList.contains('active')) relationTab.click();
+      return;
+    }
+    const edge = networkEdges.find((item) => item.id === edgeSelect.value);
+    if (edge) setNetworkEdgeSelection(edge);
+    else clearNetworkEdgeSelection();
+  });
+
   const pointAt = (event: MouseEvent) => {
     const rect = network.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
   network.addEventListener('mousemove', (event) => {
     const point = pointAt(event);
+    lastNetworkPointer = point;
     hoveredNetworkId = hitTestNetwork(networkNodes, point.x, point.y);
-    network.style.cursor = hoveredNetworkId ? 'pointer' : 'default';
+    const edge = hoveredNetworkId ? null : hitTestNetworkEdge(networkEdges, point.x, point.y);
+    hoveredNetworkEdgeId = edge?.id ?? null;
+    if (edge) showNetworkEdgeTooltip(edge, point.x, point.y);
+    else {
+      const tooltip = document.getElementById('network-edge-tooltip');
+      if (tooltip) tooltip.hidden = true;
+    }
+    network.style.cursor = hoveredNetworkId || edge ? 'pointer' : 'default';
   });
-  network.addEventListener('mouseleave', () => { hoveredNetworkId = null; });
+  network.addEventListener('mouseleave', () => {
+    lastNetworkPointer = null;
+    hoveredNetworkId = null;
+    hoveredNetworkEdgeId = null;
+    const tooltip = document.getElementById('network-edge-tooltip');
+    if (tooltip) tooltip.hidden = true;
+  });
   network.addEventListener('click', (event) => {
     const point = pointAt(event);
     const id = hitTestNetwork(networkNodes, point.x, point.y);
-    if (id) selectAgent(id);
+    if (id) {
+      selectAgent(id);
+      const relationTab = document.querySelector<HTMLButtonElement>('#panel-tabs [data-tab="relation"]');
+      if (networkMode === 'social' && relationTab && !relationTab.classList.contains('active')) relationTab.click();
+      return;
+    }
+    const edge = hitTestNetworkEdge(networkEdges, point.x, point.y);
+    if (edge) setNetworkEdgeSelection(edge);
+    else clearNetworkEdgeSelection();
   });
+  network.addEventListener('keydown', (event) => {
+    if (!networkEdges.length) return;
+    if (event.key === 'Escape') {
+      clearNetworkEdgeSelection();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      const edge = networkEdges.find((item) => item.id === hoveredNetworkEdgeId)
+        ?? networkEdges.find((item) => item.id === selectedNetworkEdge?.id)
+        ?? networkEdges[0];
+      setNetworkEdgeSelection(edge);
+      return;
+    }
+    const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    lastNetworkPointer = null;
+    const current = networkEdges.findIndex((edge) => edge.id === (hoveredNetworkEdgeId ?? selectedNetworkEdge?.id));
+    const nextIndex = current < 0
+      ? (step > 0 ? 0 : networkEdges.length - 1)
+      : (current + step + networkEdges.length) % networkEdges.length;
+    const next = networkEdges[nextIndex];
+    hoveredNetworkEdgeId = next.id;
+    edgeSelect.value = next.id;
+    showNetworkEdgeTooltip(next, (next.startX + next.endX) / 2, (next.startY + next.endY) / 2);
+  });
+  network.addEventListener('blur', () => {
+    lastNetworkPointer = null;
+    hoveredNetworkEdgeId = null;
+    const tooltip = document.getElementById('network-edge-tooltip');
+    if (tooltip) tooltip.hidden = true;
+  });
+  refreshModeButtons();
+}
+
+function renderNetworkModeMeta(): void {
+  const direction = document.getElementById('network-legend-direction');
+  const weight = document.getElementById('network-legend-weight');
+  const zone = document.getElementById('network-zone-label');
+  if (!direction || !weight || !zone) return;
+  if (networkMode === 'choice') {
+    direction.textContent = '箭头＝伙伴选择方向';
+    weight.textContent = '边宽＝累计选择次数；阈值＝相对最强边';
+    zone.textContent = metricsStatus === 'stale'
+      ? '累计伙伴选择更新暂缓 · 当前显示最近成功快照'
+      : metricsStatus === 'loading'
+        ? '累计伙伴选择网络 · 正在同步选择事件'
+        : '累计伙伴选择网络 · 点击边读取该双人组合的全时段证据';
+    return;
+  }
+  const level = networkLensLevel(networkLens);
+  direction.textContent = networkLens === 'overall'
+    ? '箭头＝累计关系状态方向'
+    : level === 'actor'
+    ? '节点外环＝行动者层测量'
+    : level === 'dyad' ? '无向线＝双人共同量' : '箭头＝有向关系观察';
+  weight.textContent = networkLens === 'overall'
+    ? '边宽＝累计关系状态强度（时间窗不适用）'
+    : level === 'actor'
+    ? `外环粗细＝${activeNetworkLensLabel()}`
+    : `边宽＝${activeNetworkLensLabel()}`;
+  if (socialNetworkStatus === 'ready') {
+    zone.textContent = networkLens === 'overall'
+      ? '只读累计关系状态 · 点击关系查看全时段双人证据'
+      : level === 'actor'
+      ? `只读行动者测量 · ${socialNetworkCache.window.label} · 点击节点查看人物证据`
+      : `只读关系测量 · ${socialNetworkCache.window.label} · 点击关系查看双人证据`;
+  } else if (socialNetworkStatus === 'error') {
+    zone.textContent = socialNetworkCache.directions.length
+      ? '关系投影更新暂缓 · 当前显示最近快照'
+      : '关系投影暂不可用 · 正在等待重新连接';
+  } else {
+    zone.textContent = '有向社会关系投影 · 正在同步证据';
+  }
 }
 
 function bindMetricTabs(): void {
@@ -702,6 +1285,13 @@ function bindControls(): void {
           body: JSON.stringify(value ? { action: effectiveAction, value: Number(value) } : { action: effectiveAction }),
         });
         if (!response.ok) throw new Error(String(response.status));
+        const result = await response.json() as { speed?: number; performance?: { generationTokensPerSecond?: number | null } };
+        if (action === 'speed' && Number(value) > 1) {
+          showToast('高速观察已启用认知采样；推理积压时虚拟时钟会自动等待', 'info');
+        } else if (action === 'adaptive-speed') {
+          const rate = Number(result.performance?.generationTokensPerSecond);
+          showToast(`吞吐校准完成：${Number.isFinite(rate) ? `${rate.toFixed(1)} tok/s，` : ''}世界速度设为 ${result.speed ?? 1}×`, 'success');
+        }
       } catch {
         showToast('世界时间控制未生效，请检查服务状态', 'error');
       } finally {
@@ -767,7 +1357,13 @@ function bindControls(): void {
       const selectedWorld = w.worlds.find((item) => item.id === worldId);
       if (selectedWorld) renderWorldMeta(selectedWorld);
       metricsCache = metricsByWorld.get(worldId) ?? emptyMetrics();
-      lastMetricsAt = 0;
+      metricsStatus = metricsByWorld.has(worldId) ? 'ready' : 'loading';
+      invalidateMetricsRequest();
+      const relationCacheKey = socialNetworkCacheKey(worldId, activeSocialNetworkWindow());
+      socialNetworkCache = socialNetworkByWorld.get(relationCacheKey) ?? emptySocialNetwork(worldId);
+      socialNetworkStatus = socialNetworkByWorld.has(relationCacheKey) ? 'ready' : 'loading';
+      invalidateSocialNetworkRequest();
+      renderNetworkModeMeta();
       pollExperiment();
       void pollNarrative();
       return selectedWorld;
@@ -1096,58 +1692,67 @@ function loop(): void {
   const now = performance.now();
   const dtSec = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
-  // 匀速行走：按固定速度逼近目标，避免缓出插值导致的停顿感
-  for (const d of display.values()) {
-    const prevX = d.x;
-    const prevY = d.y;
-    const dx = d.tx - d.x;
-    const dy = d.ty - d.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > 0.5) {
-      const step = Math.min(dist, WALK_SPEED * dtSec);
-      d.x += (dx / dist) * step;
-      d.y += (dy / dist) * step;
-    } else {
+  const conversing = new Set(activeConversationsAt(now).flatMap((conversation) => [conversation.aId, conversation.bId]));
+  // 路段内匀速行走；快照跨多格时按真实 A* waypoint 加速追赶。
+  for (const [id, d] of display) {
+    if (conversing.has(id)) {
+      // 后端同时锁定模拟动作；显示层清空历史路段并固定到会话前位置。
       d.x = d.tx;
       d.y = d.ty;
+      d.waypoints.length = 0;
+      continue;
     }
-    // 方向按本帧实际位移判定（主轴优先；位移过小时保持上一方向，避免拐角抖动）
-    const mdx = d.x - prevX;
-    const mdy = d.y - prevY;
-    if (Math.abs(mdx) + Math.abs(mdy) > 0.3) {
-      d.dir = Math.abs(mdx) >= Math.abs(mdy) ? (mdx > 0 ? 'right' : 'left') : (mdy > 0 ? 'down' : 'up');
+    let budget = d.speed * dtSec;
+    while (budget > 0) {
+      const target = d.waypoints[0] ?? { x: d.tx, y: d.ty };
+      const dx = target.x - d.x;
+      const dy = target.y - d.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= 0.5) {
+        d.x = target.x;
+        d.y = target.y;
+        if (d.waypoints.length) {
+          d.waypoints.shift();
+          continue;
+        }
+        d.speed = WALK_SPEED;
+        break;
+      }
+      d.dir = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+      const step = Math.min(dist, budget);
+      d.x += (dx / dist) * step;
+      d.y += (dy / dist) * step;
+      budget -= step;
+      if (step < dist) break;
     }
   }
   const dt = now - lastFx;
   lastFx = now;
   for (const a of snap!.agents) {
-    const p = poses.get(a.id) ?? { scaleY: 1 };
-    poses.set(a.id, p);
-    const target = a.state === 'acting' && a.targetName
-      ? (a.targetName === '床' ? 0.5 : /沙发|咖啡桌|椅/.test(a.targetName) ? 0.78 : 1)
-      : 1;
-    p.scaleY += (target - p.scaleY) * 0.3; // 0.3s 级缓动
-    if (Math.abs(target - p.scaleY) < 0.02) p.scaleY = target;
     const d = display.get(a.id);
     if (!d) continue;
+    if (conversing.has(a.id)) continue;
+    const actionPose = npcPoseFor(a.state, a.targetName, false, a.verb);
+    const actionPlacement = targetPlacementForAgent(a, d, actionPose);
+    const fxCx = actionPlacement?.cx ?? d.x + TILE / 2;
+    const fxCy = actionPlacement?.cy ?? d.y + TILE / 2;
     const key = `${a.targetName}:${a.verb}`;
     if (a.state === 'acting' && a.targetName && lastActionKey.get(a.id) !== key) {
       lastActionKey.set(a.id, key);
-      const cx = d.x + TILE / 2;
-      if (a.targetName === '床') { fx.spawn(zzzPuff(cx, d.y - 12)); zzzLast.set(a.id, now); }
-      else if (/沙发|咖啡桌|椅/.test(a.targetName)) fx.spawn(sitDust(cx, d.y + TILE));
-      if (/煮|咖啡|泡/.test(a.verb)) fx.spawn(steamPuff(cx, d.y - 6));
+      if (actionPose === 'sleep') { fx.spawn(zzzPuff(fxCx, fxCy - 28)); zzzLast.set(a.id, now); }
+      else if (actionPose === 'sit') fx.spawn(sitDust(fxCx, fxCy + 16));
+      if (/煮|咖啡|泡/.test(a.verb)) fx.spawn(steamPuff(fxCx, fxCy - 22));
       if (/煮|泡/.test(a.verb)) steamLast.set(a.id, now);
-      if (/写生|画|速写/.test(a.verb)) fx.spawn(sparkleBurst(cx, d.y - 8, '#ffd700'));
-      if (/信|分拣|送/.test(a.verb)) fx.spawn(paperFlutter(cx, d.y - 12));
+      if (/写生|画|速写/.test(a.verb)) fx.spawn(sparkleBurst(fxCx, fxCy - 24, '#ffd700'));
+      if (/信|分拣|送/.test(a.verb)) fx.spawn(paperFlutter(fxCx, fxCy - 28));
     }
-    if (a.state === 'acting' && a.targetName === '床' && now - (zzzLast.get(a.id) ?? 0) > 900) {
+    if (a.state === 'acting' && actionPose === 'sleep' && now - (zzzLast.get(a.id) ?? 0) > 900) {
       zzzLast.set(a.id, now);
-      fx.spawn(zzzPuff(d.x + TILE / 2, d.y - 12));
+      fx.spawn(zzzPuff(fxCx, fxCy - 28));
     }
     if (a.state === 'acting' && /煮|泡/.test(a.verb) && now - (steamLast.get(a.id) ?? 0) > 1200) {
       steamLast.set(a.id, now);
-      fx.spawn(steamPuff(d.x + TILE / 2, d.y - 8));
+      fx.spawn(steamPuff(fxCx, fxCy - 24));
     }
   }
   fx.update(dt);
@@ -1191,15 +1796,49 @@ function loop(): void {
     if (now > b.until) bubbles.delete(id);
   }
   if (banner && now > banner.until) banner = null;
-  if (now - lastMetricsAt > 2000) {
+  if (now - lastMetricsAt > 2000 && !metricsController) {
     lastMetricsAt = now;
     const requestedWorld = activeWorldId;
-    void fetchMetrics(requestedWorld).then((metrics) => {
+    const requestSeq = ++metricsRequestSeq;
+    const controller = new AbortController();
+    metricsController = controller;
+    void fetchMetrics(requestedWorld, controller.signal).then((metrics) => {
+      if (requestSeq !== metricsRequestSeq || activeWorldId !== requestedWorld) return;
       metricsByWorld.set(requestedWorld, metrics);
-      if (activeWorldId === requestedWorld) metricsCache = metrics;
-    }).catch(() => {
-      metricsByWorld.set(requestedWorld, emptyMetrics());
-      if (activeWorldId === requestedWorld) metricsCache = emptyMetrics();
+      metricsCache = metrics;
+      metricsStatus = 'ready';
+      if (networkMode === 'choice') renderNetworkModeMeta();
+      if (selectedNetworkEdge?.mode === 'choice') maybeRefreshSelectedDyadPanel();
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestSeq !== metricsRequestSeq || activeWorldId !== requestedWorld) return;
+      metricsStatus = 'stale';
+      if (networkMode === 'choice') renderNetworkModeMeta();
+    }).finally(() => {
+      if (metricsController === controller) metricsController = null;
+    });
+  }
+  if (now - lastSocialNetworkAt > 2000 && !socialNetworkController) {
+    lastSocialNetworkAt = now;
+    const requestedWorld = activeWorldId;
+    const requestedWindow = activeSocialNetworkWindow();
+    const requestSeq = ++socialNetworkRequestSeq;
+    const controller = new AbortController();
+    socialNetworkController = controller;
+    void fetchSocialNetwork(requestedWorld, requestedWindow, controller.signal).then((projection) => {
+      socialNetworkByWorld.set(socialNetworkCacheKey(requestedWorld, requestedWindow), projection);
+      if (requestSeq !== socialNetworkRequestSeq || activeWorldId !== requestedWorld || activeSocialNetworkWindow() !== requestedWindow) return;
+      socialNetworkCache = projection;
+      socialNetworkStatus = 'ready';
+      renderNetworkModeMeta();
+      if (selectedNetworkEdge?.mode === 'social') maybeRefreshSelectedDyadPanel();
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestSeq !== socialNetworkRequestSeq || activeWorldId !== requestedWorld || activeSocialNetworkWindow() !== requestedWindow) return;
+      socialNetworkStatus = 'error';
+      renderNetworkModeMeta();
+    }).finally(() => {
+      if (socialNetworkController === controller) socialNetworkController = null;
     });
   }
   draw();
@@ -1208,7 +1847,27 @@ function loop(): void {
   if (netViewport.visible) {
     const netCtx = net.getContext('2d')!;
     netCtx.setTransform(netViewport.dpr, 0, 0, netViewport.dpr, 0, 0);
-    networkNodes = drawNetwork(netCtx, snap?.agents ?? [], metricsCache.pairs, netViewport.width, netViewport.height, now, selectedId, hoveredNetworkId);
+    const networkResult = drawNetwork(
+      netCtx,
+      snap?.agents ?? [],
+      metricsCache.pairs,
+      netViewport.width,
+      netViewport.height,
+      now,
+      {
+        selectedId,
+        hoveredId: hoveredNetworkId,
+        socialEdges: socialNetworkCache.directions,
+        socialDyads: socialNetworkCache.dyads,
+        mode: networkMode,
+        lens: networkLens,
+        threshold: networkThreshold,
+        egoId: networkScope === 'ego' ? selectedId : null,
+        selectedEdgeId: selectedNetworkEdge?.worldId === activeWorldId ? selectedNetworkEdge.id : null,
+        hoveredEdgeId: hoveredNetworkEdgeId,
+      },
+    );
+    renderNetworkEdgeControls(networkResult);
   }
   const met = document.getElementById('metrics-canvas') as HTMLCanvasElement;
   const metricViewport = resizeConsole(met);
@@ -1253,9 +1912,10 @@ function draw(): void {
   applyCamera();
   drawTerrain(ctx, worldW, worldH);
   drawObjects();
-  drawAgents();
+  const conversationRender = conversationRenderAt(nowMs);
+  drawAgents(nowMs, conversationRender);
   drawWorldFx(ctx, nowMs);
-  drawBubbles(ctx, bubbles, display as Map<string, DisplayPos>, nowMs);
+  drawBubbles(ctx, bubbles, bubbleDisplayAt(conversationRender), nowMs);
   applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
   if (snap.weather === 'rain') {
     ctx.fillStyle = 'rgba(70,90,130,0.12)';
@@ -1344,47 +2004,105 @@ function drawObjects(): void {
       drawObjectDetail(ctx, o, now, snap!.clock.minutesOfDay);
     }
   }
+  // 地图名称由屏幕 tooltip 与右侧检查器呈现，选中态只在物体边缘绘制轮廓。
+  const selectedObject = selectedObjectId ? snap!.objects.find((object) => object.id === selectedObjectId) : null;
+  if (selectedObject) drawObjectSelection(ctx, selectedObject);
 }
 
-function drawAgents(): void {
-  const now = performance.now();
-  const sorted = [...snap!.agents].sort((a, b) => a.y - b.y);
+function conversationRenderAt(nowMs: number): Map<string, ConversationRenderState> {
+  const staged = new Map<string, ConversationRenderState>();
+  for (const conversation of activeConversationsAt(nowMs)) {
+    if (staged.has(conversation.aId) || staged.has(conversation.bId)) continue;
+    const a = display.get(conversation.aId);
+    const b = display.get(conversation.bId);
+    if (!a || !b) continue;
+    const placement = npcConversationPlacement(
+      conversation.aId,
+      conversation.bId,
+      a.tx + TILE / 2,
+      a.ty + TILE / 2,
+      b.tx + TILE / 2,
+      b.ty + TILE / 2
+    );
+    staged.set(conversation.aId, {
+      ...placement.a,
+      speaking: conversation.speakerId === conversation.aId,
+    });
+    staged.set(conversation.bId, {
+      ...placement.b,
+      speaking: conversation.speakerId === conversation.bId,
+    });
+  }
+  return staged;
+}
+
+function bubbleDisplayAt(staged: Map<string, ConversationRenderState>): Map<string, DisplayPos> {
+  const positions = new Map<string, DisplayPos>();
+  for (const [id, d] of display) positions.set(id, { x: d.x, y: d.y });
+  for (const [id, state] of staged) {
+    positions.set(id, { x: state.cx - TILE / 2, y: state.cy - TILE / 2 });
+  }
+  return positions;
+}
+
+function targetPlacementForAgent(a: AgentView, d: Display, pose: NpcPose) {
+  if (!snap || (pose !== 'sleep' && pose !== 'sit') || !a.targetName) return null;
+  const exactTarget = a.targetId ? snap.objects.find((object) => object.id === a.targetId) : null;
+  const candidates = exactTarget ? [exactTarget] : snap.objects.filter((object) => object.name === a.targetName);
+  const containsAgent = (object: ObjectView) => (
+    a.x >= object.x && a.x < object.x + object.w && a.y >= object.y && a.y < object.y + object.h
+  );
+  const distance = (object: ObjectView) => {
+    const dx = object.x + object.w / 2 - (a.x + .5);
+    const dy = object.y + object.h / 2 - (a.y + .5);
+    return dx * dx + dy * dy;
+  };
+  const target = [...candidates].sort((left, right) => (
+    Number(containsAgent(right)) - Number(containsAgent(left))
+      || distance(left) - distance(right)
+      || left.id.localeCompare(right.id)
+  ))[0];
+  if (!target) return null;
+  return npcTargetPlacement(pose, {
+    x: target.x * TILE,
+    y: target.y * TILE,
+    w: target.w * TILE,
+    h: target.h * TILE,
+  }, d.x + TILE / 2, d.y + TILE / 2, d.dir);
+}
+
+function drawAgents(now: number, conversationRender: Map<string, ConversationRenderState>): void {
+  const sorted = [...snap!.agents].sort((a, b) => (
+    (conversationRender.get(a.id)?.cy ?? display.get(a.id)?.y ?? a.y * TILE)
+      - (conversationRender.get(b.id)?.cy ?? display.get(b.id)?.y ?? b.y * TILE)
+  ));
   for (const a of sorted) {
     const d = display.get(a.id)!;
-    const dir: Dir = d.dir;
-    const walking = Math.abs(d.tx - d.x) > 1 || Math.abs(d.ty - d.y) > 1;
-    const frame = (walking ? WALK_CYCLE[Math.floor(now / 140) % 4] : 0) as 0 | 1 | 2;
-    const p = poses.get(a.id) ?? { scaleY: 1 };
-    const cx = d.x + TILE / 2;
-    const cy = d.y + TILE / 2;
-    ctx.save();
-    if (p.scaleY < 0.999) {
-      ctx.translate(cx, cy + 8);
-      ctx.scale(1, p.scaleY);
-      ctx.translate(-cx, -cy - 8);
-    }
-    drawNpc(ctx, cx, cy, dir, frame, a.spriteIndex, d.moving, a.id === selectedId, a.name, a.state === 'thinking');
-    ctx.restore();
-    // 动作图标：acting 且映射到图标时，头顶 y-44 处弹跳（世界层，不随坐/躺压缩）
+    const conversation = conversationRender.get(a.id);
+    const walking = !conversation && (d.waypoints.length > 0 || Math.abs(d.tx - d.x) > 1 || Math.abs(d.ty - d.y) > 1);
+    const pose = conversation
+      ? (conversation.speaking ? 'speak' : 'interact')
+      : npcPoseFor(a.state, a.targetName, walking, a.verb);
+    const targetPlacement = conversation ? null : targetPlacementForAgent(a, d, pose);
+    const dir: Dir = conversation?.dir ?? targetPlacement?.dir ?? d.dir;
+    const cx = conversation?.cx ?? targetPlacement?.cx ?? d.x + TILE / 2;
+    const cy = conversation?.cy ?? targetPlacement?.cy ?? d.y + TILE / 2;
+    drawNpc(ctx, cx, cy, dir, a.spriteIndex, {
+      pose, nowMs: now, phase: d.phase, selected: a.id === selectedId, name: a.name,
+    });
+    // 动作图标：acting 且映射到图标时，头顶弹跳。
     if (a.state === 'acting') {
       const icon = actionIconFor(a.verb, a.targetName);
       if (icon) {
-        const bounce = Math.sin(now / 250) * 2;
+        const bounce = Math.round(Math.sin(now / 250) * 2);
         ctx.font = '14px monospace';
-        ctx.fillText(icon, cx - 7, cy - 44 + bounce);
+        ctx.fillText(icon, Math.round(cx) - 7, Math.round(cy) - 44 + bounce);
       }
-    }
-    // 躺床盖被
-    if (p.scaleY < 0.6 && a.targetName === '床') {
-      ctx.fillStyle = '#e8e0f0';
-      ctx.fillRect(cx - 8, cy - 2, 16, 6);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(cx - 6, cy - 8, 7, 5);
     }
     // 正在被玩家扮演的 NPC：名字旁补 🎮 徽标
     if (playing.has(a.id)) {
       ctx.font = '10px monospace';
-      ctx.fillText('🎮', cx + ctx.measureText(a.name).width / 2 + 2, cy + 19);
+      ctx.fillText('🎮', Math.round(cx + ctx.measureText(a.name).width / 2 + 2), Math.round(cy) + 19);
     }
   }
 }

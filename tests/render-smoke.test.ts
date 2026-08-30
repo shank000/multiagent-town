@@ -1,7 +1,7 @@
 // 渲染冒烟：昼夜纯函数数值合法 + 各绘制函数在 mock ctx 下不抛异常
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dayNightState, applyDayNight, drawRiver, drawTree, drawLampGlow, drawObjectDetail, drawFurniture, drawTerrain, fitPixelSprite, TILE } from '../src/web/client/render';
+import { dayNightState, applyDayNight, drawRiver, drawTree, drawLampGlow, drawObjectDetail, drawObjectSelection, drawFurniture, drawTerrain, fitPixelSprite, TILE } from '../src/web/client/render';
 import type { ObjectView } from '../src/web/client/types';
 
 function mockCtx() {
@@ -13,6 +13,22 @@ function mockCtx() {
     createRadialGradient: () => ({ addColorStop: noop }),
     globalAlpha: 1, fillStyle: '', strokeStyle: '', font: '', lineWidth: 1,
   } as unknown as CanvasRenderingContext2D;
+}
+
+function recordingCtx() {
+  const fillRects: number[][] = [];
+  const labels: string[] = [];
+  const noop = () => {};
+  const ctx = {
+    fillRect: (...args: number[]) => { fillRects.push(args); },
+    strokeRect: noop, beginPath: noop, arc: noop, fill: noop, ellipse: noop,
+    fillText: (text: string) => { labels.push(text); }, strokeText: noop,
+    measureText: (text: string) => ({ width: text.length * 6 }), drawImage: noop,
+    save: noop, restore: noop, translate: noop, scale: noop, setTransform: noop, rotate: noop,
+    createRadialGradient: () => ({ addColorStop: noop }),
+    globalAlpha: 1, fillStyle: '', strokeStyle: '', font: '', lineWidth: 1, textAlign: 'start',
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, fillRects, labels };
 }
 
 test('dayNightState：无跳变连续过渡', () => {
@@ -57,4 +73,22 @@ test('绘制函数冒烟：mock ctx 不抛异常', () => {
   drawObjectDetail(ctx, flowerShop, 1000, 1350);
   const fence: ObjectView = { id: 'obj:fence_lake', name: '湖边栅栏', type: 'zone', x: 14, y: 26, w: 2, h: 1 };
   drawObjectDetail(ctx, fence, 1000, 1350);
+});
+
+test('程序化地表细节稳定使用整数像素并形成多层绘制', () => {
+  const { ctx, fillRects } = recordingCtx();
+  drawTerrain(ctx, TILE * 6, TILE * 4);
+  assert.ok(fillRects.length > 8, `地表层次不足：${fillRects.length}`);
+  for (const args of fillRects) {
+    for (const value of args) assert.equal(Number.isInteger(value), true, `发现非整数像素：${args.join(',')}`);
+  }
+});
+
+test('地图对象名称始终不覆盖场景，选中态仅绘制轮廓', () => {
+  const { ctx, labels } = recordingCtx();
+  const building: ObjectView = { id: 'obj:cafe', name: '林间咖啡馆', type: 'building', x: 8, y: 8, w: 4, h: 4 };
+  drawObjectDetail(ctx, building, 1000, 600);
+  assert.deepEqual(labels, []);
+  drawObjectSelection(ctx, building);
+  assert.deepEqual(labels, []);
 });
