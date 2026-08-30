@@ -102,6 +102,8 @@ export class WorldState {
   allObjects(): WorldObject[] { return [...this.objects.values()]; }
   allAgents(): Agent[] { return [...this.agents.values()]; }
 
+  hasAgent(id: string): boolean { return this.agents.has(id); }
+
   addAgent(a: Agent): void { this.agents.set(a.id, a); }
 
   getAgent(id: string): Agent {

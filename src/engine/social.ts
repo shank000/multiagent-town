@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 import type { Agent, GameEvent } from '../core/types';
 import type { EventLog } from '../store/events';
 import type { DialogueEngine } from './dialogue';
+import type { RelationshipStore } from '../store/relationships';
+import { performSocialInteraction, type SocialInteractionKind } from './social-interactions';
 
 export interface SocialConfig {
   minProximityMinutes?: number; // 相邻累计多少游戏分钟触发（默认 3）
@@ -18,7 +20,12 @@ export class SocialTicker {
   private nextAt = new Map<string, number>();
   private triggerCount = new Map<string, number>();
 
-  constructor(private log: EventLog, private cfg: SocialConfig = {}, private dialogue?: DialogueEngine) {}
+  constructor(
+    private log: EventLog,
+    private cfg: SocialConfig = {},
+    private dialogue?: DialogueEngine,
+    private rels?: RelationshipStore,
+  ) {}
 
   /** 每 tick 调用一次；dt = 本次推进的游戏分钟数 */
   tick(agents: Agent[], dt: number, now: number): void {
@@ -36,17 +43,27 @@ export class SocialTicker {
           continue;
         }
         if (this.proximity.get(key)! >= min && now >= (this.nextAt.get(key) ?? 0)) {
-          if (this.dialogue) {
+          const count = this.triggerCount.get(key) ?? 0;
+          if (this.dialogue && (count === 0 || !this.rels)) {
             // 完整对话引擎负责该社会接触的唯一记录；已有会话或参与者正忙时不生成散落 chat。
             if (!this.dialogue.isActive(a.id, b.id)) {
               this.dialogue.start(a, b, now, { requireAdjacent: true, source: 'proximity' });
             }
+          } else if (this.rels) {
+            const kinds: readonly SocialInteractionKind[] = ['observe', 'assist', 'share', 'invite', 'collaborate'];
+            performSocialInteraction({
+              kind: kinds[(count - 1 + kinds.length) % kinds.length],
+              actor: count % 2 === 0 ? a : b,
+              target: count % 2 === 0 ? b : a,
+              now,
+              log: this.log,
+              rels: this.rels,
+            });
           } else {
-            const count = this.triggerCount.get(key) ?? 0;
             const line = pickLine(a, count);
             this.log.addEvent(makeChatEvent(a, b, line, now));
-            this.triggerCount.set(key, count + 1);
           }
+          this.triggerCount.set(key, count + 1);
           this.proximity.set(key, 0);
           this.nextAt.set(key, now + cooldown);
         }

@@ -13,6 +13,7 @@ import { MindEngine } from './mind';
 import { SocialTicker } from './social';
 import { PlayerDirector } from './player';
 import { ExperimentRunner } from './experiment-runner';
+import { applyAgentProfile, normalizeAgentProfile } from './agent-profile';
 
 export type WorldKind = 'mem-on' | 'mem-off' | 'rumor';
 
@@ -83,6 +84,8 @@ export interface ManagedWorldOptions {
   gameMinutesPerTick?: number;
   gateway?: LLMGateway;
   dbPath?: string;
+  /** Stable resident-id keyed definitions, shared across paired worlds before the run begins. */
+  profileOverrides?: Readonly<Record<string, unknown>>;
 }
 
 /** 创建平行世界：每个世界拥有独立状态、记忆、对话与事件库。 */
@@ -93,12 +96,20 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
   const db = openDb(dbPath);
   const log = new EventLog(db);
   const world = buildTown(DEFAULT_SEED);
+  const agentIndex = new Map(world.allAgents().map((agent, index) => [agent.id, index]));
+  for (const [agentId, rawProfile] of Object.entries(options.profileOverrides ?? {})) {
+    if (!world.hasAgent(agentId)) throw new Error(`居民档案配置包含未知 ID：${agentId}`);
+    const agent = world.getAgent(agentId);
+    const profile = normalizeAgentProfile(rawProfile, agent, world, agentIndex.get(agentId) ?? 0);
+    applyAgentProfile(world, agentId, profile, { resetRuntime: true });
+  }
   const time = new TimeEngine(options.gameMinutesPerTick ?? 30);
   const gateway = options.gateway ?? new LLMGateway({ provider: 'mock' });
   const mind = new MindEngine({ db, llm: gateway, log, scopeId: id });
   const player = new PlayerDirector();
   const executor = new AgentExecutor(gateway, world, log, mind, player, id);
-  const social = new SocialTicker(log, {}, mind.dialogue);
+  // 主实验配对世界保持原有对话机制；探索世界承载多通道社会互动。
+  const social = new SocialTicker(log, {}, mind.dialogue, kind === 'rumor' ? mind.rels : undefined);
 
   let experiment: ExperimentRunner | null = null;
   let runnerHost: WorldLoop | null = null;

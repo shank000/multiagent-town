@@ -1,5 +1,6 @@
 import { lstatSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
 
 export interface TownWebArgs {
   speed: number;
@@ -30,8 +31,8 @@ export function parseArgs(argv: string[]): TownWebArgs {
       args.dbPathExplicit = true;
     }
   }
-  if (!Number.isFinite(args.speed) || args.speed <= 0 || args.speed > 360) {
-    throw new Error('--speed must be a finite number in (0, 360]');
+  if (!Number.isFinite(args.speed) || args.speed <= 0 || args.speed > MAX_WORLD_SPEED) {
+    throw new Error(`--speed must be a finite number in (0, ${MAX_WORLD_SPEED}]`);
   }
   if (!Number.isSafeInteger(args.port) || args.port < 1 || args.port > 65_535) {
     throw new Error('--port must be an integer between 1 and 65535');

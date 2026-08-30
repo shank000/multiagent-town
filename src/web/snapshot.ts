@@ -3,8 +3,9 @@
 import { TimeEngine, type ClockState } from '../core/time';
 import { weatherForDay } from '../core/weather';
 import { GRID_W, GRID_H, type WorldState } from '../core/world';
-import type { Agent, WorldObject } from '../core/types';
+import type { Agent, AgentInitialState, PixelAvatar, WorldObject } from '../core/types';
 import type { ActiveConversation } from '../engine/dialogue';
+import { avatarOf, initialStateOf } from '../engine/agent-profile';
 
 export interface AgentView {
   id: string;
@@ -17,7 +18,12 @@ export interface AgentView {
   skills: Record<string, number>;
   values: string[];
   motivation: string;
+  traits: string[];
+  goals: string[];
+  speechStyle: string;
   personality: { extraversion: number; empathy: number; honesty: number; curiosity: number; patience: number };
+  avatar: PixelAvatar;
+  initialState: AgentInitialState;
   state: Agent['state'];
   x: number;
   y: number;
@@ -74,7 +80,12 @@ export function buildSnapshot(
       skills: a.persona.skills,
       values: a.persona.values,
       motivation: a.persona.motivation,
+      traits: [...a.persona.traits],
+      goals: [...a.persona.goals],
+      speechStyle: a.persona.speechStyle,
       personality: a.persona.personality ?? { extraversion: 0.5, empathy: 0.5, honesty: 0.5, curiosity: 0.5, patience: 0.5 },
+      avatar: avatarOf(a.persona, i),
+      initialState: initialStateOf(a.persona, a.homeObjectId),
       state: a.state,
       x: a.x,
       y: a.y,
@@ -86,7 +97,7 @@ export function buildSnapshot(
       targetId: action?.action.target ?? null,
       targetName: action ? world.getObject(action.action.target)?.name ?? null : null,
       path: a.path.map((tile) => ({ ...tile })),
-      spriteIndex: i,
+      spriteIndex: avatarOf(a.persona, i).sprite,
       background: a.persona.background,
     };
   });

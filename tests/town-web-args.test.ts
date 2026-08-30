@@ -11,8 +11,8 @@ import {
 } from '../src/cli/town-web-config';
 
 test('town-web applies speed, port and one isolated database path per world', () => {
-  const args = parseArgs(['--speed', '120', '--port', '9000', '--db', join('data', 'town.sqlite')]);
-  assert.equal(args.speed, 120);
+  const args = parseArgs(['--speed', '60', '--port', '9000', '--db', join('data', 'town.sqlite')]);
+  assert.equal(args.speed, 60);
   assert.equal(args.port, 9000);
   assert.equal(args.dbPathExplicit, true);
   assert.equal(worldDbPath(args.dbPath, 'w2'), join('data', 'town-w2.sqlite'));
@@ -62,7 +62,7 @@ test('town-web rejects every occupied derived world database before startup', ()
 test('town-web rejects invalid runtime settings before starting worlds', () => {
   assert.throws(() => parseArgs(['--speed', '0']), /--speed/);
   assert.throws(() => parseArgs(['--speed', 'Infinity']), /--speed/);
-  assert.throws(() => parseArgs(['--speed', '361']), /--speed/);
+  assert.throws(() => parseArgs(['--speed', '61']), /--speed/);
   assert.throws(() => parseArgs(['--port', '70000']), /--port/);
   assert.throws(() => parseArgs(['--db', '']), /--db/);
 });

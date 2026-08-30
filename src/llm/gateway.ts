@@ -4,6 +4,7 @@ import type { LLMProvider, LLMRequest, LLMRequestPriority, LLMResponse } from '.
 import { DeepSeekProvider } from './deepseek';
 import { OllamaProvider } from './ollama';
 import { MockProvider } from './mock';
+import { MAX_WORLD_SPEED, WORLD_SPEED_PRESETS } from '../engine/runtime-limits';
 
 export interface GatewayConfig {
   provider?: LLMProvider | 'mock' | 'deepseek' | 'ollama';
@@ -53,7 +54,7 @@ export interface ThroughputSnapshot {
   p50LatencyMs: number | null;
   p90LatencyMs: number | null;
   recommendedMaxWorldSpeed: number | null;
-  burstMaxWorldSpeed: 360;
+  burstMaxWorldSpeed: number;
   confidence: 'unavailable' | 'warming' | 'measured';
 }
 
@@ -397,7 +398,7 @@ export class LLMGateway {
       return {
         provider: this.provider.name, sampleCount: 0, generationTokensPerSecond: null,
         effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
-        recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 360, confidence: 'unavailable',
+        recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: MAX_WORLD_SPEED, confidence: 'unavailable',
       };
     }
     const generationRates = eligible.map((sample) => sample.generationTokensPerSecond).filter((value): value is number => value !== null);
@@ -421,7 +422,7 @@ export class LLMGateway {
       p90LatencyMs: Math.round(p90),
       // 冷启动探针只覆盖高频 small 层；在首次深反思完成前保持保守上限。
       recommendedMaxWorldSpeed: hasLargeSample ? rawRecommendation : Math.min(10, rawRecommendation),
-      burstMaxWorldSpeed: 360,
+      burstMaxWorldSpeed: MAX_WORLD_SPEED,
       confidence: eligible.length >= 12 && hasLargeSample ? 'measured' : 'warming',
     };
   }
@@ -453,14 +454,12 @@ function recommendedSpeed(
   const expectedRequestsPerGameMinute = expectedActiveAgents / 30 + expectedActiveAgents / 60;
   const workloadBound = requestCapacityPerSecond * 0.65 / expectedRequestsPerGameMinute;
   let rateBound = 1;
-  if (effectiveTokensPerSecond >= 80 && p90LatencyMs <= 1_200) rateBound = 360;
-  else if (effectiveTokensPerSecond >= 45 && p90LatencyMs <= 2_500) rateBound = 120;
+  if (effectiveTokensPerSecond >= 45 && p90LatencyMs <= 2_500) rateBound = MAX_WORLD_SPEED;
   else if (effectiveTokensPerSecond >= 25 && p90LatencyMs <= 5_000) rateBound = 60;
   else if (effectiveTokensPerSecond >= 15 && p90LatencyMs <= 8_000) rateBound = 30;
   else if (effectiveTokensPerSecond >= 8 && p90LatencyMs <= 15_000) rateBound = 10;
   else if (effectiveTokensPerSecond >= 4 && p90LatencyMs <= 30_000) rateBound = 5;
-  const presets = [1, 5, 10, 30, 60, 120, 360];
-  return [...presets].reverse().find((speed) => speed <= workloadBound && speed <= rateBound) ?? 1;
+  return [...WORLD_SPEED_PRESETS].reverse().find((speed) => speed <= workloadBound && speed <= rateBound) ?? 1;
 }
 
 function percentile(values: readonly number[], fraction: number): number {

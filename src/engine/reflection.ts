@@ -13,6 +13,7 @@ import type {
   ReflectionMindState,
 } from '../store/memory';
 import type { LLMGateway } from '../llm/gateway';
+import { initialMindStateOf } from './agent-profile';
 import {
   REFLECTION_INSIGHTS_TEMPLATE,
   REFLECTION_JOURNAL_TEMPLATE,
@@ -134,7 +135,7 @@ export class ReflectionEngine {
     const diary = boundedEvidence.length
       ? (textOf(journalResponse.diary, 1200) || fallbackDiary(agent, day, boundedEvidence))
       : fallbackDiary(agent, day, boundedEvidence);
-    const mindState = normalizeMindState(journalResponse.mind_state, prior?.mindState ?? null, boundedEvidence);
+    const mindState = normalizeMindState(journalResponse.mind_state, prior?.mindState ?? initialMindStateOf(agent.persona), boundedEvidence);
     const revisions = normalizeRevisions(journalResponse.revisions, priorInsights, allowedEvidence);
     const beliefs = normalizeBeliefs(journalResponse.beliefs, finalInsights, revisions, allowedEvidence);
     const guidance = uniqueStrings(journalResponse.behavior_guidance, 5, 180);

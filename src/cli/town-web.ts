@@ -5,12 +5,15 @@ import { providerNameFromEnv, gatewayConfigFromEnv } from '../llm/provider-confi
 import { createTownServer } from '../web/server';
 import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../engine/world-factory';
 import { assertFreshWorldDbPaths, parseArgs } from './town-web-config';
+import { loadAgentProfileConfig } from '../store/agent-profile-config';
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPaths = assertFreshWorldDbPaths(args);
   const provider = providerNameFromEnv();
   const gateway = new LLMGateway({ ...gatewayConfigFromEnv(), expectedActiveAgents: 18 });
+  const profileStorePath = process.env.TOWN_PROFILE_PATH?.trim() || undefined;
+  const profileOverrides = loadAgentProfileConfig(profileStorePath);
   // 平行世界：三种社会实验各一世界（极简像素块示意见客户端小地图）
   const worlds = [
     createManagedWorld('w1', 'mem-on', {
@@ -18,22 +21,25 @@ async function main(): Promise<void> {
       gameMinutesPerTick: args.speed * 0.5,
       gateway,
       dbPath: dbPaths.w1,
+      profileOverrides,
     }),
     createManagedWorld('w2', 'mem-off', {
       seed: 1,
       gameMinutesPerTick: args.speed * 0.5,
       gateway,
       dbPath: dbPaths.w2,
+      profileOverrides,
     }),
     createManagedWorld('w3', 'rumor', {
       seed: 1,
       gameMinutesPerTick: args.speed * 0.5,
       gateway,
       dbPath: dbPaths.w3,
+      profileOverrides,
     }),
   ];
   const main = worlds[0];
-  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port, llm: gateway });
+  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port, llm: gateway, profileStorePath });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   startAllWorlds(worlds);

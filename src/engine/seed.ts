@@ -3,6 +3,7 @@
 import type { Agent, Persona, WorldObject } from '../core/types';
 import { WorldState, GRID_W, GRID_H } from '../core/world';
 import type { DbHandle } from '../store/db';
+import { profileSetHash } from './agent-profile';
 
 /** 世界水合：把内存中的居民/对象同步写入 SQLite 的 agents/objects 表（幂等 upsert）。
  * 这两张表是统计/回放的“名册”，与实际运行的内存世界保持一致。由 WorldLoop 构造时
@@ -29,6 +30,10 @@ export function hydrateWorld(db: DbHandle, world: WorldState): void {
   for (const o of world.allObjects()) {
     upsertObject.run(o.id, o.parentId, o.name, o.type, o.x, o.y, o.w, o.h, '{}');
   }
+  db.raw.prepare(
+    `INSERT INTO world_meta(key, value) VALUES ('profile_set_hash', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(profileSetHash(world));
 }
 
 export const TOWN_OBJECTS: WorldObject[] = [
@@ -263,6 +268,8 @@ export function buildTown(seed: TownSeed = DEFAULT_SEED): WorldState {
     routine: persona.routine.map((slot) => ({ ...slot })),
     greetingPool: persona.greetingPool ? [...persona.greetingPool] : undefined,
     personality: persona.personality ? { ...persona.personality } : undefined,
+    avatar: persona.avatar ? { ...persona.avatar } : undefined,
+    initialState: persona.initialState ? { ...persona.initialState } : undefined,
   }));
   const agents: Agent[] = personas.map((p) => {
     const homeId = HOME_BY_NAME[p.name];

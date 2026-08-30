@@ -67,9 +67,9 @@ test('控制接口：调速与暂停', async () => {
     await fetch(`${base}/api/world/control`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'speed', value: 120 }),
+      body: JSON.stringify({ action: 'speed', value: 60 }),
     });
-    assert.equal(time.gameMinutesPerTick, 60);
+    assert.equal(time.gameMinutesPerTick, 30);
     const adaptive = await fetch(`${base}/api/world/control`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -110,7 +110,7 @@ test('推理状态接口公开有界队列与背压指标', async () => {
       performance: {
         provider: 'mock', sampleCount: 0, generationTokensPerSecond: null,
         effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
-        recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 360, confidence: 'unavailable',
+        recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 60, confidence: 'unavailable',
       },
     });
   } finally {

@@ -194,6 +194,9 @@ function evidenceChannel(item: RelationshipEvidence): string {
   if (item.sourceKind === 'dialogue') return 'communication';
   if (item.sourceKind === 'gift_sent' || item.sourceKind === 'gift_received') return 'resource_exchange';
   if (item.sourceKind === 'shared_activity') return 'shared_activity';
+  if (item.sourceKind === 'assistance' || item.sourceKind === 'collaboration') return 'shared_activity';
+  if (item.sourceKind === 'information_share' || item.sourceKind === 'invitation') return 'communication';
+  if (item.sourceKind === 'observation') return 'attention';
   return 'other';
 }
 

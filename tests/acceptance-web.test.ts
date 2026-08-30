@@ -71,9 +71,9 @@ test('像素小镇 e2e：一天内快照推进 + NPC 闲聊 + 调速 + SSE', asy
     await fetch(`${base}/api/world/control`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'speed', value: 360 }),
+      body: JSON.stringify({ action: 'speed', value: 60 }),
     });
-    assert.equal(time.gameMinutesPerTick, 180);
+    assert.equal(time.gameMinutesPerTick, 30);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     await server.close();

@@ -28,6 +28,16 @@ import { PerceptionEngine } from '../engine/perception';
 import { metricsOf, type Choice } from '../engine/metrics';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 import { startLoopGroup, stopLoopGroup } from '../engine/loop';
+import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
+import {
+  applyAgentProfile,
+  normalizeAgentProfile,
+  profileDefinitionOf,
+  profileSetHash,
+  type AgentProfileDefinition,
+} from '../engine/agent-profile';
+import { saveAgentProfileConfig } from '../store/agent-profile-config';
+import { performSocialInteraction, socialInteractionDefinition } from '../engine/social-interactions';
 
 export interface TownWebOptions {
   world: WorldState;
@@ -46,6 +56,8 @@ export interface TownWebOptions {
   worlds?: unknown[]; // ManagedWorld[]；结构由 hubWorlds 适配器按需取字段
   port?: number;        // 默认 0 = 系统随机端口
   llm?: LLMGateway;     // 共享推理调度状态与背压观测
+  /** 桌面版持久档案文件；CLI 缺省为仅本次运行生效。 */
+  profileStorePath?: string;
 }
 
 export interface TownWebServer {
@@ -276,7 +288,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           performance: {
             provider: 'none', sampleCount: 0, generationTokensPerSecond: null,
             effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
-            recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 360, confidence: 'unavailable',
+            recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: MAX_WORLD_SPEED, confidence: 'unavailable',
           },
         }));
         return;
@@ -739,10 +751,110 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             mode: typeof p.mode === 'string' ? p.mode : null,
             chosen: typeof p.chosen === 'string' ? p.chosen : null,
             candidates: Array.isArray(p.candidates) ? p.candidates : null,
+            interactionType: typeof p.interactionType === 'string' ? p.interactionType : null,
+            interactionLabel: typeof p.interactionLabel === 'string' ? p.interactionLabel : null,
+            icon: typeof p.icon === 'string' ? p.icon : null,
+            source: typeof p.source === 'string' ? p.source : null,
           };
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true, worldId: selected.meta.id, items }));
+        return;
+      }
+      if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/profile') && req.method === 'PUT') {
+        let agentId: string;
+        try {
+          agentId = decodeURIComponent(url.pathname.slice('/api/agents/'.length, -'/profile'.length));
+        } catch {
+          res.writeHead(400); res.end('居民 ID 无效'); return;
+        }
+        const selected = hubById(url.searchParams.get('worldId'));
+        if (!selected) { res.writeHead(404); res.end('未知世界'); return; }
+        const controlledWorlds = hubWorlds ?? [selected];
+        if (controlledWorlds.some((world) => !world.world.hasAgent(agentId))) {
+          res.writeHead(404); res.end('居民不存在'); return;
+        }
+        if (controlledWorlds.some((world) => world.mind?.dialogue.isParticipantActive(agentId))) {
+          res.writeHead(409); res.end('居民正在对话，请在本轮对话结束后保存档案'); return;
+        }
+        const body = (await readBody(req)) as { profile?: unknown };
+        const rawProfile = body?.profile;
+        let profiles: AgentProfileDefinition[];
+        try {
+          profiles = controlledWorlds.map((world) => {
+            const agent = world.world.getAgent(agentId);
+            const index = world.world.allAgents().findIndex((item) => item.id === agentId);
+            return normalizeAgentProfile(rawProfile, agent, world.world, index);
+          });
+        } catch (error) {
+          res.writeHead(400);
+          res.end(error instanceof Error ? error.message : '居民档案无效');
+          return;
+        }
+        const before = profileDefinitionOf(selected.world.getAgent(agentId), selected.world.allAgents().findIndex((item) => item.id === agentId));
+        const changedFields = Object.keys(before).filter((key) => (
+          JSON.stringify(before[key as keyof typeof before]) !== JSON.stringify(profiles[0][key as keyof typeof profiles[0]])
+        ));
+        controlledWorlds.forEach((world, index) => {
+          applyAgentProfile(world.world, agentId, profiles[index]);
+          if (world.db) hydrateWorld(world.db, world.world);
+          const hash = profileSetHash(world.world);
+          world.log.addEvent({
+            id: randomUUID(), type: 'system', actorId: agentId, targetIds: [agentId],
+            description: `${profiles[index].name}的研究档案已更新。`, location: world.world.getAgent(agentId).locationId,
+            gameTime: world.time.state.totalMinutes,
+            payload: {
+              kind: 'agent_profile_updated', fromId: agentId, toId: agentId,
+              changedFields, profileHash: hash, scope: 'all_worlds', memoryAgentIds: [],
+            },
+          });
+        });
+        if (opts.profileStorePath) {
+          const sourceWorld = controlledWorlds[0].world;
+          const persisted = Object.fromEntries(sourceWorld.allAgents()
+            .filter((agent) => controlledWorlds.every((world) => world.world.hasAgent(agent.id)))
+            .map((agent, index) => [agent.id, profileDefinitionOf(agent, index)]));
+          saveAgentProfileConfig(opts.profileStorePath, persisted);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: true,
+          scope: 'all_worlds',
+          worldIds: controlledWorlds.map((world) => world.meta.id),
+          profile: profiles[0],
+          profileHash: profileSetHash(selected.world),
+          changedFields,
+        }));
+        return;
+      }
+      if (url.pathname === '/api/social/interact' && req.method === 'POST') {
+        const selected = hubById(url.searchParams.get('worldId'));
+        if (!selected) { res.writeHead(404); res.end('未知世界'); return; }
+        const body = (await readBody(req)) as { actorId?: unknown; targetId?: unknown; interactionType?: unknown };
+        const actorId = typeof body.actorId === 'string' ? body.actorId : '';
+        const targetId = typeof body.targetId === 'string' ? body.targetId : '';
+        const interactionType = typeof body.interactionType === 'string' ? body.interactionType : '';
+        const definition = socialInteractionDefinition(interactionType);
+        if (!actorId || !targetId || actorId === targetId || !definition) {
+          res.writeHead(400); res.end('互动双方或互动类型无效'); return;
+        }
+        if (!selected.world.hasAgent(actorId) || !selected.world.hasAgent(targetId)) {
+          res.writeHead(404); res.end('互动居民不存在'); return;
+        }
+        if (selected.mind.dialogue.isParticipantActive(actorId) || selected.mind.dialogue.isParticipantActive(targetId)) {
+          res.writeHead(409); res.end('居民正在对话，请在本轮对话结束后发起互动'); return;
+        }
+        const event = performSocialInteraction({
+          kind: definition.kind,
+          actor: selected.world.getAgent(actorId),
+          target: selected.world.getAgent(targetId),
+          now: selected.time.state.totalMinutes,
+          log: selected.log,
+          rels: selected.mind.rels,
+          source: 'researcher',
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, worldId: selected.meta.id, event, intervention: true }));
         return;
       }
       if (url.pathname.startsWith('/api/experiment/')) {
@@ -941,7 +1053,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           return;
         } else if (
           body.action === 'speed' && typeof body.value === 'number'
-          && Number.isFinite(body.value) && body.value > 0 && body.value <= 360
+          && Number.isFinite(body.value) && body.value > 0 && body.value <= MAX_WORLD_SPEED
         ) {
           for (const world of controlledWorlds) world.time.gameMinutesPerTick = body.value * 0.5;
         } else {

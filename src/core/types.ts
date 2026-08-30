@@ -39,6 +39,27 @@ export interface Appearance {
   outfit: string;
 }
 
+export type PixelAvatarAccessory = 'none' | 'glasses' | 'beret' | 'cap' | 'ribbon' | 'beard';
+
+export interface PixelAvatar {
+  /** 32×32 角色图集槽位，0..7。 */
+  sprite: number;
+  hair: string;
+  skin: string;
+  outfit: string;
+  accent: string;
+  accessory: PixelAvatarAccessory;
+}
+
+export interface AgentInitialState {
+  valence: number;       // -1..1
+  energy: number;        // 0..1
+  stress: number;        // 0..1
+  socialNeed: number;    // 0..1
+  occupationalFocus: number; // 0..1
+  startingLocationId: string;
+}
+
 export interface Persona {
   name: string;
   age: number;
@@ -59,6 +80,10 @@ export interface Persona {
   greetingPool?: string[];
   /** 性格五维（M3；缺省 0.5） */
   personality?: Personality;
+  /** 可编辑像素头像；地图角色与人物面板共用同一身份槽位。 */
+  avatar?: PixelAvatar;
+  /** 首次反思前的心态基线，以及新实验的起始位置。 */
+  initialState?: AgentInitialState;
 }
 
 export interface Agent {

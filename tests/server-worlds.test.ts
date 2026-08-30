@@ -25,10 +25,10 @@ test('平行世界暂停、恢复与调速保持同步', async () => {
     startAllWorlds(worlds);
     const speed = await fetch(`${base}/api/world/control`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'speed', value: 120 }),
+      body: JSON.stringify({ action: 'speed', value: 60 }),
     });
     assert.equal(speed.status, 200);
-    assert.deepEqual(worlds.map((world) => world.time.gameMinutesPerTick), [60, 60, 60]);
+    assert.deepEqual(worlds.map((world) => world.time.gameMinutesPerTick), [30, 30, 30]);
 
     await fetch(`${base}/api/world/control`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -62,7 +62,7 @@ test('世界控制拒绝非有限或超范围速度', async () => {
     port: 0,
   });
   try {
-    for (const value of [361, Number.POSITIVE_INFINITY]) {
+    for (const value of [61, 360, Number.POSITIVE_INFINITY]) {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/world/control`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'speed', value }),

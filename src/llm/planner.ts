@@ -4,6 +4,7 @@ import type { Agent } from '../core/types';
 import type { LLMGateway } from './gateway';
 import { DAILY_PLAN_TEMPLATE, HOUR_PLAN_TEMPLATE, dailyPlanMessages, hourPlanMessages } from './prompts';
 import type { AgendaItem, MemoryStore } from '../store/memory';
+import { initialMindStateOf } from '../engine/agent-profile';
 
 interface ScheduledPlan {
   agent: Agent;
@@ -60,7 +61,7 @@ export class Planner {
     const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((m) => ({ content: m.content, importance: m.importance }));
     const insights = this.store.recentInsights(agent.id, 5);
     const guidance = this.store.recentGuidance(agent.id, 4);
-    const mindState = this.store.latestMindState(agent.id);
+    const mindState = this.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
     const priorDiary = this.store.dailyReflectionFor(agent.id, day - 1)?.diary ?? '';
     const res = await this.llm.complete({
       tier: 'small',
@@ -188,7 +189,7 @@ export class Planner {
     const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((m) => ({ content: m.content, importance: m.importance }));
     const insights = this.store.recentInsights(agent.id, 5);
     const guidance = this.store.recentGuidance(agent.id, 4);
-    const mindState = this.store.latestMindState(agent.id);
+    const mindState = this.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
     const priorDiary = this.store.dailyReflectionFor(agent.id, day - 1)?.diary ?? '';
     const res = await this.llm.complete({
       tier: 'small', template: DAILY_PLAN_TEMPLATE, jsonMode: true, jsonSchema: DAILY_PLAN_JSON_SCHEMA,

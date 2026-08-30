@@ -41,12 +41,19 @@ export class MemoryWriter {
     const minute = e.gameTime % MINUTES_PER_DAY;
     const clock = { day, minutesOfDay: minute, totalMinutes: e.gameTime };
     const stamp = `${TimeEngine.format(clock).split(' ')[1]}，`;
+    const payload = e.payload as { fromId?: string; toId?: string; memoryAgentIds?: unknown } | null;
+    const explicitMemoryIds = Array.isArray(payload?.memoryAgentIds)
+      ? payload.memoryAgentIds.filter((id): id is string => typeof id === 'string')
+      : null;
     const ids = new Set<string>();
-    if (e.actorId) ids.add(e.actorId);
-    for (const t of e.targetIds) ids.add(t);
-    const payload = e.payload as { fromId?: string; toId?: string } | null;
-    if (payload?.fromId) ids.add(payload.fromId);
-    if (payload?.toId) ids.add(payload.toId);
+    if (explicitMemoryIds) {
+      for (const id of explicitMemoryIds) ids.add(id);
+    } else {
+      if (e.actorId) ids.add(e.actorId);
+      for (const t of e.targetIds) ids.add(t);
+      if (payload?.fromId) ids.add(payload.fromId);
+      if (payload?.toId) ids.add(payload.toId);
+    }
     const agentIds = [...ids].filter((id) => id.startsWith('agent:'));
     if (!agentIds.length) return; // 无 agent 参与的事件不打分不写库
     const content = `第${day}天 ${stamp}${e.description}`.slice(0, 200);

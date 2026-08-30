@@ -9,7 +9,9 @@ import { LLMGateway } from '../llm/gateway';
 import { gatewayConfigFromEnv } from '../llm/provider-config';
 import { resolveOllamaProfile } from '../llm/model-profiles';
 import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../engine/world-factory';
+import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
 import { createTownServer, type TownWebServer } from '../web/server';
+import { loadAgentProfileConfig } from '../store/agent-profile-config';
 import { assertFreshWorldDbPaths, type TownWebArgs } from '../cli/town-web-config';
 
 const APP_NAME = 'MultiagentTown';
@@ -56,8 +58,8 @@ function parseDesktopArgs(argv: string[]): DesktopArgs {
   if (!Number.isSafeInteger(args.port) || args.port < 1 || args.port > 65_535) {
     throw new Error('--port 必须是 1..65535 的整数');
   }
-  if (!Number.isFinite(args.speed) || args.speed <= 0 || args.speed > 360) {
-    throw new Error('--speed 必须是 (0, 360] 的有限数字');
+  if (!Number.isFinite(args.speed) || args.speed <= 0 || args.speed > MAX_WORLD_SPEED) {
+    throw new Error(`--speed 必须是 (0, ${MAX_WORLD_SPEED}] 的有限数字`);
   }
   return args;
 }
@@ -268,6 +270,8 @@ async function main(): Promise<void> {
   mkdirSync(appRoot, { recursive: true });
   const publicDir = runtimePublicDir(appRoot);
   const dbPath = uniqueDatabasePath(appRoot);
+  const profileStorePath = join(appRoot, 'agent-profiles.json');
+  const profileOverrides = loadAgentProfileConfig(profileStorePath);
   const port = await availablePort(args.port);
   const webArgs: TownWebArgs = {
     speed: args.speed,
@@ -279,9 +283,9 @@ async function main(): Promise<void> {
   const gateway = new LLMGateway({ ...gatewayConfigFromEnv(), expectedActiveAgents: 18 });
   if (args.smoke) await verifyRealModel(gateway);
   const worlds = [
-    createManagedWorld('w1', 'mem-on', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w1 }),
-    createManagedWorld('w2', 'mem-off', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w2 }),
-    createManagedWorld('w3', 'rumor', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w3 }),
+    createManagedWorld('w1', 'mem-on', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w1, profileOverrides }),
+    createManagedWorld('w2', 'mem-off', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w2, profileOverrides }),
+    createManagedWorld('w3', 'rumor', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w3, profileOverrides }),
   ];
   const primary = worlds[0];
   let webServer: TownWebServer | null = null;
@@ -314,6 +318,7 @@ async function main(): Promise<void> {
       port,
       llm: gateway,
       publicDir,
+      profileStorePath,
     });
     startAllWorlds(worlds);
     const url = `http://127.0.0.1:${webServer.port}/`;

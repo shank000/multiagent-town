@@ -17,6 +17,11 @@ export type RelationshipSourceKind =
   | 'gift_sent'
   | 'gift_received'
   | 'shared_activity'
+  | 'observation'
+  | 'assistance'
+  | 'information_share'
+  | 'invitation'
+  | 'collaboration'
   | 'manual'
   | 'other';
 

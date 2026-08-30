@@ -14,6 +14,7 @@ import type { WorldState } from './world';
 import type { EventLog } from '../store/events';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
+import { initialMindStateOf } from '../engine/agent-profile';
 
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
@@ -148,7 +149,7 @@ export class AgentExecutor {
       memories = this.mind.store.retrieve(agent.id, query, now, 20).map((m) => ({ content: m.content, importance: m.importance }));
       insights = this.mind.store.recentInsights(agent.id, 3);
       behaviorGuidance = this.mind.store.recentGuidance(agent.id, 3);
-      mindState = this.mind.store.latestMindState(agent.id);
+      mindState = this.mind.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
       agenda = this.mind.planner.currentAgendaLine(agent, day, minuteOfDay);
     }
     const { messages } = buildActionDecisionMessages({
