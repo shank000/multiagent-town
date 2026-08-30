@@ -20,6 +20,7 @@ import {
 import { drawTooltip, drawBanner, drawBubbles, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 import { pixelAvatarMarkup, type PixelAvatarView } from './avatar';
+import { normalizeAgentViews } from './agent-compat';
 
 interface ClockState { day: number; minutesOfDay: number; totalMinutes: number }
 interface ActiveConversationView {
@@ -35,6 +36,13 @@ interface WorldSnapshot {
   gridW: number; gridH: number; objects: ObjectView[]; agents: AgentView[]; seq: number;
   weather: 'clear' | 'rain';
   activeConversations?: ActiveConversationView[];
+}
+
+function normalizeWorldSnapshot<T extends WorldSnapshot>(snapshot: T): T {
+  return {
+    ...snapshot,
+    agents: normalizeAgentViews(Array.isArray(snapshot.agents) ? snapshot.agents : []),
+  };
 }
 interface TownEvent { id: string;
   type: string; actorId: string | null; description: string;
@@ -209,7 +217,9 @@ function maybeRefreshSelectedDyadPanel(now = Date.now()): void {
 }
 
 async function main(): Promise<void> {
-  const initial = (await (await fetch('/api/state')).json()) as WorldSnapshot & { worldId?: string };
+  const initial = normalizeWorldSnapshot(
+    (await (await fetch('/api/state')).json()) as WorldSnapshot & { worldId?: string },
+  );
   if (initial.worldId) activeWorldId = initial.worldId;
   snap = initial;
   selectedId = snap.agents[0]?.id ?? null;
@@ -250,7 +260,9 @@ async function main(): Promise<void> {
   es.addEventListener('open', () => setConnectionState(true));
   es.addEventListener('error', () => setConnectionState(false));
   es.addEventListener('snapshot', (ev) => {
-    const incoming = JSON.parse((ev as MessageEvent<string>).data) as WorldSnapshot & { worldId?: string };
+    const incoming = normalizeWorldSnapshot(
+      JSON.parse((ev as MessageEvent<string>).data) as WorldSnapshot & { worldId?: string },
+    );
     if (incoming.worldId && incoming.worldId !== activeWorldId) return;
     snap = incoming;
     applySnapshot();
@@ -934,7 +946,7 @@ async function fetchWorldSnapshot(worldId: string): Promise<WorldSnapshot & { wo
   if (!response.ok) throw new Error(`world snapshot unavailable (${response.status})`);
   const next = (await response.json()) as WorldSnapshot & { worldId?: string };
   if (next.worldId !== worldId) throw new Error('world snapshot mismatch');
-  return next as WorldSnapshot & { worldId: string };
+  return normalizeWorldSnapshot(next) as WorldSnapshot & { worldId: string };
 }
 
 /** 以一个已验证的世界快照原子替换所有视图级临时状态。 */
