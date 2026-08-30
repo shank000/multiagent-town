@@ -30,6 +30,20 @@ export interface GatewayConfig {
   expectedActiveAgents?: number; // 持续倍速估算所覆盖的居民数；三世界 Web 为 18
 }
 
+export type LLMRuntimeMode = 'mock' | 'ollama' | 'api' | 'custom';
+
+export interface LLMRuntimeSnapshot {
+  mode: LLMRuntimeMode;
+  provider: string;
+  model: string | null;
+  smallModel: string | null;
+  baseUrl: string | null;
+  numCtx: number | null;
+  timeoutMs: number;
+  hasCredential: boolean;
+  revision: number;
+}
+
 export interface TemplateMetric {
   template: string;
   calls: number;
@@ -105,6 +119,10 @@ export class LLMQueueWaitExceededError extends LLMDeadlineExceededError {
   override readonly name: string = 'LLMQueueWaitExceededError';
 }
 
+export class LLMGatewayBusyError extends Error {
+  override readonly name = 'LLMGatewayBusyError';
+}
+
 export class LLMGateway {
   private provider: LLMProvider;
   private retries: number;
@@ -127,6 +145,8 @@ export class LLMGateway {
   private expectedActiveAgents: number;
   private performanceSamples: PerformanceSample[] = [];
   private calibrationTask: Promise<ThroughputSnapshot> | null = null;
+  private runtime: Omit<LLMRuntimeSnapshot, 'revision'>;
+  private runtimeRevision = 1;
 
   constructor(cfg: GatewayConfig) {
     this.retries = cfg.retries ?? 2;
@@ -154,30 +174,54 @@ export class LLMGateway {
     );
     this.priorityAgingMs = boundedInteger(cfg.priorityAgingMs ?? 30_000, 'priorityAgingMs', 1, 2_147_483_647);
     this.expectedActiveAgents = boundedInteger(cfg.expectedActiveAgents ?? 6, 'expectedActiveAgents', 1, 10_000);
-    const p = cfg.provider;
-    if (p && typeof p !== 'string') {
-      this.provider = p;
-    } else if (p === 'deepseek') {
-      if (!cfg.deepseek?.apiKey) throw new Error('provider=deepseek 需要 DEEPSEEK_API_KEY');
-      this.provider = new DeepSeekProvider({
-        apiKey: cfg.deepseek.apiKey,
-        baseUrl: cfg.deepseek.baseUrl ?? 'https://api.deepseek.com',
-        model: cfg.deepseek.model ?? 'deepseek-chat',
-        timeoutMs: cfg.deepseek.timeoutMs ?? 30_000,
-      });
-    } else if (p === 'ollama') {
-      this.provider = new OllamaProvider({
-        baseUrl: cfg.ollama?.baseUrl ?? 'http://127.0.0.1:11434',
-        model: cfg.ollama?.model ?? 'qwen3:4b',
-        ...(cfg.ollama?.smallModel ? { smallModel: cfg.ollama.smallModel } : {}),
-        ...(cfg.ollama?.keepAlive ? { keepAlive: cfg.ollama.keepAlive } : {}),
-        ...(cfg.ollama?.numCtx !== undefined ? { numCtx: cfg.ollama.numCtx } : {}),
-        ...(cfg.ollama?.agentModels ? { agentModels: cfg.ollama.agentModels } : {}),
-        timeoutMs: cfg.ollama?.timeoutMs ?? 120_000,
-      });
-    } else {
-      this.provider = new MockProvider();
+    const resolved = resolveProvider(cfg);
+    this.provider = resolved.provider;
+    this.runtime = resolved.runtime;
+  }
+
+  runtimeSnapshot(): LLMRuntimeSnapshot {
+    return { ...this.runtime, revision: this.runtimeRevision };
+  }
+
+  /**
+   * 在世界暂停且等待队列清空后原子切换共享 provider。
+   * 所有心智模块始终持有同一个网关，因此无需重建居民或世界状态。
+   */
+  reconfigure(cfg: GatewayConfig): LLMRuntimeSnapshot {
+    if (this.activeCount !== 0 || this.queue.length !== 0 || this.calibrationTask) {
+      throw new LLMGatewayBusyError('LLM 网关仍有生成或排队任务，请暂停世界并等待队列清空');
     }
+    const maxConcurrent = boundedInteger(cfg.maxConcurrent ?? 8, 'maxConcurrent', 1, 64);
+    const maxQueued = boundedInteger(cfg.maxQueued ?? 256, 'maxQueued', 1, 10_000);
+    const highWaterMark = boundedInteger(
+      cfg.highWaterMark ?? Math.max(1, Math.ceil(maxQueued * 0.75)),
+      'highWaterMark', 1, maxQueued,
+    );
+    const lowWaterMark = boundedInteger(
+      cfg.lowWaterMark ?? Math.max(1, Math.floor(highWaterMark * 0.5)),
+      'lowWaterMark', 0, highWaterMark,
+    );
+    const resolved = resolveProvider(cfg);
+    this.provider = resolved.provider;
+    this.runtime = resolved.runtime;
+    this.runtimeRevision += 1;
+    this.maxConcurrent = maxConcurrent;
+    this.maxQueued = maxQueued;
+    this.highWaterMark = highWaterMark;
+    this.lowWaterMark = lowWaterMark;
+    this.backpressureWaitMs = boundedInteger(cfg.backpressureWaitMs ?? 10_000, 'backpressureWaitMs', 1, 2_147_483_647);
+    this.backpressureResumeWaitMs = boundedInteger(
+      cfg.backpressureResumeWaitMs ?? Math.min(2_500, this.backpressureWaitMs),
+      'backpressureResumeWaitMs', 0, this.backpressureWaitMs,
+    );
+    this.priorityAgingMs = boundedInteger(cfg.priorityAgingMs ?? 30_000, 'priorityAgingMs', 1, 2_147_483_647);
+    this.expectedActiveAgents = boundedInteger(cfg.expectedActiveAgents ?? this.expectedActiveAgents, 'expectedActiveAgents', 1, 10_000);
+    this.metrics.clear();
+    this.performanceSamples = [];
+    this.lastScopeByRank.clear();
+    this.pressureLatched = false;
+    this.pressureReason = null;
+    return this.runtimeSnapshot();
   }
 
   complete(req: LLMRequest): Promise<LLMResponse> {
@@ -492,6 +536,64 @@ export class LLMGateway {
     });
     if (this.performanceSamples.length > 120) this.performanceSamples.splice(0, this.performanceSamples.length - 120);
   }
+}
+
+function resolveProvider(cfg: GatewayConfig): {
+  provider: LLMProvider;
+  runtime: Omit<LLMRuntimeSnapshot, 'revision'>;
+} {
+  const selected = cfg.provider;
+  if (selected && typeof selected !== 'string') {
+    return {
+      provider: selected,
+      runtime: {
+        mode: 'custom', provider: selected.name, model: null, smallModel: null,
+        baseUrl: null, numCtx: null, timeoutMs: 0, hasCredential: false,
+      },
+    };
+  }
+  if (selected === 'deepseek') {
+    if (!cfg.deepseek?.apiKey) throw new Error('provider=deepseek 需要 DEEPSEEK_API_KEY');
+    const baseUrl = (cfg.deepseek.baseUrl ?? 'https://api.deepseek.com').trim().replace(/\/+$/, '');
+    const model = (cfg.deepseek.model ?? 'deepseek-chat').trim();
+    const timeoutMs = cfg.deepseek.timeoutMs ?? 30_000;
+    return {
+      provider: new DeepSeekProvider({ apiKey: cfg.deepseek.apiKey, baseUrl, model, timeoutMs }),
+      runtime: {
+        mode: 'api', provider: 'deepseek', model, smallModel: null,
+        baseUrl, numCtx: null, timeoutMs, hasCredential: true,
+      },
+    };
+  }
+  if (selected === 'ollama') {
+    const baseUrl = (cfg.ollama?.baseUrl ?? 'http://127.0.0.1:11434').trim().replace(/\/+$/, '');
+    const model = (cfg.ollama?.model ?? 'qwen3:4b').trim();
+    const smallModel = (cfg.ollama?.smallModel ?? model).trim();
+    const numCtx = cfg.ollama?.numCtx ?? 8192;
+    const timeoutMs = cfg.ollama?.timeoutMs ?? 120_000;
+    return {
+      provider: new OllamaProvider({
+        baseUrl,
+        model,
+        smallModel,
+        ...(cfg.ollama?.keepAlive ? { keepAlive: cfg.ollama.keepAlive } : {}),
+        numCtx,
+        ...(cfg.ollama?.agentModels ? { agentModels: cfg.ollama.agentModels } : {}),
+        timeoutMs,
+      }),
+      runtime: {
+        mode: 'ollama', provider: 'ollama', model, smallModel,
+        baseUrl, numCtx, timeoutMs, hasCredential: false,
+      },
+    };
+  }
+  return {
+    provider: new MockProvider(),
+    runtime: {
+      mode: 'mock', provider: 'mock', model: 'deterministic-simulation', smallModel: null,
+      baseUrl: null, numCtx: null, timeoutMs: 0, hasCredential: false,
+    },
+  };
 }
 
 function recommendedSpeed(

@@ -127,6 +127,16 @@ export class WorldLoop {
     if (this.activeRealtimeStep) await Promise.allSettled([this.activeRealtimeStep]);
     await this.executor.drain();
   }
+
+  /** 暂停期间只结算已经生成完毕的居民决策，不为其他空闲居民创建新请求。 */
+  async settlePendingDecisions(): Promise<void> {
+    const now = this.time.state.totalMinutes;
+    for (const agent of this.world.allAgents()) {
+      if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    this.hooks.onTick?.(this.time.state);
+  }
 }
 
 interface LoopGroupState {

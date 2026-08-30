@@ -16,6 +16,7 @@ import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import type { LLMGateway } from '../llm/gateway';
+import { gatewayConfigFromRuntimeInput, probeGatewayConfig } from '../llm/runtime-config';
 import { computeStanding } from '../engine/status';
 import { analyzeTown } from '../engine/analyze';
 import {
@@ -172,6 +173,45 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   let seq = 0;
   let paused = false;
 
+  const llmConfigurationSafety = (requireSettledWorld = true) => {
+    const scheduler = opts.llm?.schedulerSnapshot();
+    const controlledWorlds = hubWorlds ?? [hub()];
+    const experimentsRunning = controlledWorlds.some((world) => {
+      const state = world.experiment?.state() as { running?: unknown } | undefined;
+      return state?.running === true;
+    });
+    const activeConversations = controlledWorlds.reduce((count, world) => (
+      count + (world.mind?.dialogue.activeSessions().length ?? 0)
+    ), 0);
+    const thinkingAgents = controlledWorlds.reduce((count, world) => (
+      count + world.world.allAgents().filter((agent) => agent.state === 'thinking').length
+    ), 0);
+    const reasons: string[] = [];
+    if (!paused) reasons.push('先暂停世界时钟');
+    if (experimentsRunning) reasons.push('先停止正在运行的正式实验');
+    if ((scheduler?.active ?? 0) > 0 || (scheduler?.queued ?? 0) > 0) reasons.push('等待模型生成与排队任务清空');
+    if (requireSettledWorld && activeConversations > 0) reasons.push('等待当前人物对话完整结束后再暂停');
+    if (requireSettledWorld && thinkingAgents > 0) reasons.push('等待已生成的居民决策完成结算');
+    return {
+      ready: reasons.length === 0,
+      paused,
+      experimentsRunning,
+      active: scheduler?.active ?? 0,
+      queued: scheduler?.queued ?? 0,
+      activeConversations,
+      thinkingAgents,
+      reasons,
+    };
+  };
+  const settlePausedCognition = async () => {
+    if (!paused || !opts.llm) return;
+    const scheduler = opts.llm.schedulerSnapshot();
+    if (scheduler.active !== 0 || scheduler.queued !== 0) return;
+    const controlledWorlds = hubWorlds ?? [hub()];
+    if (controlledWorlds.some((world) => (world.mind?.dialogue.activeSessions().length ?? 0) > 0)) return;
+    await Promise.all(controlledWorlds.map((world) => world.loop.settlePendingDecisions()));
+  };
+
   function snapshotOf(selected: HubAccess): WorldSnapshot & { worldId: string } {
     return {
       ...buildSnapshot(selected.world, selected.time, paused, ++seq),
@@ -291,6 +331,77 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: MAX_WORLD_SPEED, confidence: 'unavailable',
           },
         }));
+        return;
+      }
+      if (url.pathname === '/api/llm/config' && req.method === 'GET') {
+        if (!opts.llm) { res.writeHead(404); res.end('LLM 网关未启用'); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: true,
+          config: opts.llm.runtimeSnapshot(),
+          safety: llmConfigurationSafety(),
+          supportedModes: ['mock', 'ollama', 'api'],
+          credentialPolicy: 'memory_only',
+        }));
+        return;
+      }
+      if (url.pathname === '/api/llm/test' && req.method === 'POST') {
+        if (!opts.llm) { res.writeHead(404); res.end('LLM 网关未启用'); return; }
+        const safety = llmConfigurationSafety(false);
+        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
+        let config;
+        try {
+          config = gatewayConfigFromRuntimeInput(await readBody(req));
+        } catch (error) {
+          res.writeHead(400);
+          res.end(error instanceof Error ? error.message : '模型配置无效');
+          return;
+        }
+        try {
+          const probe = await probeGatewayConfig(config);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, probe }));
+        } catch (error) {
+          res.writeHead(502);
+          res.end(error instanceof Error ? error.message : '模型连接检测失败');
+        }
+        return;
+      }
+      if (url.pathname === '/api/llm/config' && req.method === 'POST') {
+        if (!opts.llm) { res.writeHead(404); res.end('LLM 网关未启用'); return; }
+        await settlePausedCognition();
+        const safety = llmConfigurationSafety();
+        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
+        let config;
+        try {
+          config = gatewayConfigFromRuntimeInput(await readBody(req));
+        } catch (error) {
+          res.writeHead(400);
+          res.end(error instanceof Error ? error.message : '模型配置无效');
+          return;
+        }
+        try {
+          const probe = await probeGatewayConfig(config);
+          const runtime = opts.llm.reconfigure(config);
+          const controlledWorlds = hubWorlds ?? [hub()];
+          for (const world of controlledWorlds) {
+            world.log.addEvent({
+              id: randomUUID(), type: 'system', actorId: null, targetIds: [],
+              description: `Agent 模型运行方式设为${runtime.mode === 'mock' ? ' Mock 模拟' : runtime.mode === 'ollama' ? '本地开源模型' : 'API 推理'}。`,
+              location: null, gameTime: world.time.state.totalMinutes,
+              payload: {
+                kind: 'llm_runtime_config_changed', mode: runtime.mode, provider: runtime.provider,
+                model: runtime.model, smallModel: runtime.smallModel, numCtx: runtime.numCtx,
+                configRevision: runtime.revision,
+              },
+            });
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, config: runtime, probe, safety: llmConfigurationSafety() }));
+        } catch (error) {
+          res.writeHead(502);
+          res.end(error instanceof Error ? error.message : '模型配置应用失败');
+        }
         return;
       }
       if (url.pathname === '/api/llm/calibrate' && req.method === 'POST') {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LLMDeadlineExceededError, LLMGateway, LLMQueueFullError, LLMQueueWaitExceededError } from '../src/llm/gateway';
+import { LLMDeadlineExceededError, LLMGateway, LLMGatewayBusyError, LLMQueueFullError, LLMQueueWaitExceededError } from '../src/llm/gateway';
 import { StubProvider } from './helpers';
 import type { ChatMessage, LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 
@@ -109,6 +109,50 @@ test('drain 等待关闭前已发出的模型调用完成', async () => {
   release();
   await Promise.all([completion, draining]);
   assert.equal(drained, true);
+});
+
+test('共享网关空闲时原子切换运行方式并重置调度参数', () => {
+  const gateway = new LLMGateway({ provider: 'mock', maxConcurrent: 8, maxQueued: 256 });
+  assert.deepEqual(gateway.runtimeSnapshot(), {
+    mode: 'mock', provider: 'mock', model: 'deterministic-simulation', smallModel: null,
+    baseUrl: null, numCtx: null, timeoutMs: 0, hasCredential: false, revision: 1,
+  });
+  const runtime = gateway.reconfigure({
+    provider: 'ollama',
+    ollama: {
+      baseUrl: 'http://127.0.0.1:11434', model: 'qwen3:4b', smallModel: 'qwen3:4b-instruct',
+      numCtx: 8192, timeoutMs: 120000,
+    },
+    maxConcurrent: 1,
+    maxQueued: 96,
+  });
+  assert.deepEqual(runtime, {
+    mode: 'ollama', provider: 'ollama', model: 'qwen3:4b', smallModel: 'qwen3:4b-instruct',
+    baseUrl: 'http://127.0.0.1:11434', numCtx: 8192, timeoutMs: 120000,
+    hasCredential: false, revision: 2,
+  });
+  assert.equal(gateway.schedulerSnapshot().maxConcurrent, 1);
+  assert.equal(gateway.schedulerSnapshot().maxQueued, 96);
+  assert.equal(gateway.throughputSnapshot().sampleCount, 0);
+});
+
+test('共享网关有生成任务时拒绝切换 provider', async () => {
+  let release!: () => void;
+  const provider: LLMProvider = {
+    name: 'busy-provider',
+    async complete(): Promise<LLMResponse> {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { content: '{}', parsed: {}, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1 });
+  const completion = gateway.complete(req([]));
+  await waitFor(() => gateway.schedulerSnapshot().active === 1);
+  assert.throws(() => gateway.reconfigure({ provider: 'mock' }), LLMGatewayBusyError);
+  release();
+  await completion;
+  await gateway.drain();
+  assert.equal(gateway.reconfigure({ provider: 'mock' }).mode, 'mock');
 });
 
 test('共享调度器限制并发并按对话、动作、规划优先级出队', async () => {

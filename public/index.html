@@ -162,6 +162,49 @@
           </div>
         </section>
 
+        <section id="llm-config-card" class="model-config-card glass-card" aria-labelledby="llm-config-title">
+          <div class="model-config-head">
+            <div><span class="section-kicker">AGENT MODEL RUNTIME</span><h3 id="llm-config-title">Agent 模型运行方式</h3></div>
+            <span id="llm-config-status" class="model-runtime-badge" role="status" aria-live="polite">读取配置</span>
+          </div>
+          <p id="llm-config-summary" class="model-config-summary">统一控制居民的行动决策、日程规划、对话、摘要与反思。</p>
+          <div class="model-mode-grid" role="radiogroup" aria-label="选择 Agent 模型运行方式">
+            <label class="model-mode-option" data-llm-mode-option="mock">
+              <input id="llm-mode-mock" type="radio" name="llm-mode" value="mock" />
+              <span><b>Mock</b><small>确定性模拟 · 零模型调用</small></span>
+            </label>
+            <label class="model-mode-option" data-llm-mode-option="ollama">
+              <input id="llm-mode-ollama" type="radio" name="llm-mode" value="ollama" checked />
+              <span><b>本地开源模型</b><small>Ollama · 离线推理</small></span>
+            </label>
+            <label class="model-mode-option" data-llm-mode-option="api">
+              <input id="llm-mode-api" type="radio" name="llm-mode" value="api" />
+              <span><b>API</b><small>远程兼容接口 · 凭据仅驻内存</small></span>
+            </label>
+          </div>
+          <div class="model-mode-detail" data-llm-fields="mock" hidden>
+            <p>使用规则驱动的确定性输出，适合 UI、协议和指标流程测试；不作为真实 LLM 社会行为证据。</p>
+          </div>
+          <div class="model-mode-detail model-fields" data-llm-fields="ollama">
+            <label class="wide">Ollama 地址<input id="llm-ollama-base-url" type="url" value="http://127.0.0.1:11434" spellcheck="false" /></label>
+            <label>高频模型<input id="llm-ollama-small-model" value="qwen3:4b-instruct" spellcheck="false" /></label>
+            <label>深度反思模型<input id="llm-ollama-model" value="qwen3:4b" spellcheck="false" /></label>
+            <label>上下文窗口<input id="llm-ollama-num-ctx" type="number" min="2048" max="262144" step="1024" value="8192" /></label>
+            <label>超时（毫秒）<input id="llm-ollama-timeout" type="number" min="1000" value="120000" /></label>
+          </div>
+          <div class="model-mode-detail model-fields" data-llm-fields="api" hidden>
+            <label class="wide">API 基础地址<input id="llm-api-base-url" type="url" value="https://api.deepseek.com" spellcheck="false" /></label>
+            <label>模型名称<input id="llm-api-model" value="deepseek-chat" spellcheck="false" /></label>
+            <label>超时（毫秒）<input id="llm-api-timeout" type="number" min="1000" value="60000" /></label>
+            <label class="wide">API Key<input id="llm-api-key" type="password" autocomplete="new-password" placeholder="仅保存在当前服务内存，不回显、不写日志" /></label>
+          </div>
+          <div id="llm-config-safety" class="model-config-safety">切换前请让当前对话完整结束，再暂停世界、停止正式实验并等待推理队列清空。</div>
+          <div class="model-config-actions">
+            <button id="llm-config-test" class="icon-btn" type="button">测试连接</button>
+            <button id="llm-config-apply" class="icon-btn primary" type="button">应用到全部 Agent</button>
+          </div>
+        </section>
+
         <section id="character-card" class="character-summary glass-card">
           点击小镇居民，查看人物属性与当前状态
         </section>

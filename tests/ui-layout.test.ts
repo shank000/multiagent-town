@@ -118,6 +118,22 @@ test('resident editor, pixel identity and multi-channel social interactions are 
   assert.match(server, /\/api\/social\/interact/);
 });
 
+test('Agent 模型运行方式在 UI 明确提供 Mock、本地模型与 API 三种可执行配置', () => {
+  for (const id of [
+    'llm-config-card', 'llm-config-status', 'llm-config-safety', 'llm-config-test', 'llm-config-apply',
+    'llm-mode-mock', 'llm-mode-ollama', 'llm-mode-api', 'llm-ollama-num-ctx', 'llm-api-key',
+  ]) assert.match(html, new RegExp(`id=["']${id}["']`));
+  for (const mode of ['mock', 'ollama', 'api']) assert.match(html, new RegExp(`value=["']${mode}["']`));
+  assert.match(html, /行动决策、日程规划、对话、摘要与反思/);
+  assert.match(html, /凭据仅驻内存/);
+  assert.match(client, /\/api\/llm\/config/);
+  assert.match(client, /\/api\/llm\/test/);
+  assert.match(client, /应用到三个世界的全部 Agent/);
+  assert.match(server, /llm_runtime_config_changed/);
+  assert.match(server, /credentialPolicy: 'memory_only'/);
+  assert.match(css, /\.model-mode-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
+});
+
 test('narrative stream distinguishes planned, travelling, verified, cancelled and fulfilled world facts', () => {
   for (const kind of ['town_event_announcement', 'town_event_departure', 'town_event', 'town_event_cancelled']) {
     assert.match(client, new RegExp(`it\\.kind === ['"]${kind}['"]`));

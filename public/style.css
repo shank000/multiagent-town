@@ -419,6 +419,40 @@ canvas { display: block; }
 .inspector-scroll { overflow-y: auto; padding: 12px; scrollbar-gutter: stable; }
 .inspector-scroll > * + * { margin-top: 11px; }
 .world-card, .character-summary, .timeline-card { padding: 13px; border-radius: 12px; }
+.model-config-card { padding: 13px; border-radius: 12px; }
+.model-config-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.model-config-head h3 { margin-top: 2px; color: var(--ink); font-size: 17px; }
+.model-runtime-badge {
+  flex: 0 0 auto; min-height: 28px; display: inline-flex; align-items: center; padding: 4px 9px;
+  border: 1px solid rgba(98,218,203,.42); border-radius: 999px; background: rgba(98,218,203,.08);
+  color: var(--teal); font: 700 11px var(--font-mono);
+}
+.model-runtime-badge.warn { border-color: rgba(242,198,109,.5); background: rgba(242,198,109,.08); color: var(--accent); }
+.model-config-summary { margin: 7px 0 11px; color: var(--ink-muted); font-size: 12px; line-height: 1.55; }
+.model-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.model-mode-option {
+  min-width: 0; min-height: 64px; display: flex; align-items: flex-start; gap: 7px; padding: 9px;
+  border: 1px solid var(--edge-soft); border-radius: 10px; background: rgba(255,255,255,.022); cursor: pointer;
+}
+.model-mode-option:hover { border-color: rgba(98,218,203,.45); background: rgba(98,218,203,.045); }
+.model-mode-option.active { border-color: var(--teal); background: rgba(98,218,203,.09); box-shadow: inset 0 0 0 1px rgba(98,218,203,.12); }
+.model-mode-option input { flex: 0 0 auto; width: 16px; min-height: 16px; margin-top: 2px; accent-color: var(--teal); }
+.model-mode-option span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.model-mode-option b { color: var(--ink); font-size: 12px; }
+.model-mode-option small { color: var(--ink-muted); font-size: 10px; line-height: 1.35; }
+.model-mode-detail { margin-top: 9px; padding: 10px; border: 1px solid var(--edge-soft); border-radius: 10px; background: rgba(0,0,0,.14); }
+.model-mode-detail > p { color: var(--ink-muted); font-size: 12px; line-height: 1.55; }
+.model-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.model-fields label { display: grid; gap: 5px; color: var(--ink-muted); font-size: 11px; }
+.model-fields label.wide { grid-column: 1 / -1; }
+.model-fields input {
+  width: 100%; min-width: 0; min-height: 40px; padding: 7px 9px; border: 1px solid var(--edge);
+  border-radius: 8px; background: var(--bg-raised); color: var(--ink); font: 600 12px var(--font-mono);
+}
+.model-fields input:focus { border-color: var(--teal); outline: 2px solid rgba(98,218,203,.14); }
+.model-config-safety { margin-top: 9px; padding: 8px 9px; border-left: 3px solid var(--accent); border-radius: 0 7px 7px 0; background: rgba(242,198,109,.06); color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.model-config-safety.ready { border-left-color: var(--teal); background: rgba(98,218,203,.06); color: #b9ddd7; }
+.model-config-actions { display: grid; grid-template-columns: .85fr 1.3fr; gap: 8px; margin-top: 9px; }
 .world-card-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
 #world-desc { color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
 .card { border: 1px solid var(--edge-soft); background: rgba(255, 255, 255, .025); }
@@ -857,7 +891,7 @@ canvas { display: block; }
   .inspector-viewport { grid-column: 1 / -1; min-height: 760px; }
   .inspector-scroll { display: grid; grid-template-columns: minmax(330px, .82fr) minmax(460px, 1.18fr); gap: 12px; align-content: start; }
   .inspector-scroll > * + * { margin-top: 0; }
-  .world-card, .character-summary { grid-column: 1; }
+  .world-card, .model-config-card, .character-summary { grid-column: 1; }
   #side, .timeline-card { grid-column: 2; }
   .timeline-card { grid-row: 2 / span 2; }
   #research-workspace[data-focus] { position: fixed; }
@@ -903,6 +937,9 @@ canvas { display: block; }
   .experiment-grid { grid-template-columns: 1fr; }
   .days-field { grid-column: auto; }
   .rail-actions { grid-template-columns: 1fr; }
+  .model-mode-grid, .model-fields { grid-template-columns: 1fr; }
+  .model-fields label.wide { grid-column: auto; }
+  .model-config-actions { grid-template-columns: 1fr; }
   #panel-tabs { grid-template-columns: repeat(3, 1fr); }
   #play-bar { right: 12px; left: 12px; flex-wrap: wrap; }
   #play-bar input { width: 100%; }

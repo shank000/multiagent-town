@@ -119,6 +119,61 @@ test('推理状态接口公开有界队列与背压指标', async () => {
   }
 });
 
+test('模型运行方式接口公开三种模式并在安全边界内应用到共享网关', async () => {
+  const { server, base, gateway, log } = await setup();
+  try {
+    const initial = await (await fetch(`${base}/api/llm/config`)).json() as {
+      config: { mode: string; revision: number; hasCredential: boolean };
+      safety: { ready: boolean; reasons: string[] };
+      supportedModes: string[];
+      credentialPolicy: string;
+    };
+    assert.equal(initial.config.mode, 'mock');
+    assert.equal(initial.config.revision, 1);
+    assert.equal(initial.config.hasCredential, false);
+    assert.deepEqual(initial.supportedModes, ['mock', 'ollama', 'api']);
+    assert.equal(initial.credentialPolicy, 'memory_only');
+    assert.equal(initial.safety.ready, false);
+    assert.ok(initial.safety.reasons.some((reason) => reason.includes('暂停')));
+
+    const runningApply = await fetch(`${base}/api/llm/config`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'mock' }),
+    });
+    assert.equal(runningApply.status, 409);
+
+    await fetch(`${base}/api/world/control`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'pause' }),
+    });
+    const probeResponse = await fetch(`${base}/api/llm/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'mock' }),
+    });
+    assert.equal(probeResponse.status, 200);
+    const probe = await probeResponse.json() as { probe: { mode: string; provider: string } };
+    assert.equal(probe.probe.mode, 'mock');
+    assert.equal(probe.probe.provider, 'mock');
+
+    const appliedResponse = await fetch(`${base}/api/llm/config`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'mock' }),
+    });
+    assert.equal(appliedResponse.status, 200);
+    const applied = await appliedResponse.json() as { config: { mode: string; revision: number } };
+    assert.equal(applied.config.mode, 'mock');
+    assert.equal(applied.config.revision, 2);
+    assert.equal(gateway.runtimeSnapshot().revision, 2);
+    const audit = log.eventsOfKind('llm_runtime_config_changed');
+    assert.equal(audit.length, 1);
+    assert.equal((audit[0].payload as { mode?: string }).mode, 'mock');
+
+    const invalidApi = await fetch(`${base}/api/llm/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'api', apiKey: '' }),
+    });
+    assert.equal(invalidApi.status, 400);
+    assert.match(await invalidApi.text(), /API Key/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('动作质量记录保留在事件库且不进入叙事接口', async () => {
   const { server, base, log } = await setup();
   try {

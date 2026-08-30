@@ -63,6 +63,29 @@ interface WorldListItem {
   badges?: { label: string; value: string; tone: 'on' | 'off' | 'neutral' }[];
 }
 
+type ConfigurableLLMMode = 'mock' | 'ollama' | 'api';
+interface LLMRuntimeView {
+  mode: ConfigurableLLMMode | 'custom';
+  provider: string;
+  model: string | null;
+  smallModel: string | null;
+  baseUrl: string | null;
+  numCtx: number | null;
+  timeoutMs: number;
+  hasCredential: boolean;
+  revision: number;
+}
+interface LLMConfigSafetyView {
+  ready: boolean;
+  paused: boolean;
+  experimentsRunning: boolean;
+  active: number;
+  queued: number;
+  activeConversations: number;
+  thinkingAgents: number;
+  reasons: string[];
+}
+
 const LIFE_CATEGORY_NAME: Record<string, string> = {
   nature: '自然环境',
   commerce: '日常交换',
@@ -169,6 +192,9 @@ let selectedNetworkEdge: {
 let networkEdgeControlSignature = '';
 let lastSelectedDyadPanelRefreshAt = 0;
 let toastTimer = 0;
+let llmRuntime: LLMRuntimeView | null = null;
+let llmConfigEndpointAvailable = true;
+let llmConfigOperationActive = false;
 // 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
 let lastGridW = 0;
 let lastGridH = 0;
@@ -244,6 +270,8 @@ async function main(): Promise<void> {
   bindNarrativeFollow();
   bindPlayBar();
   bindResearchDialogs();
+  bindLLMConfiguration();
+  void loadLLMConfiguration(true);
   updatePanelDeps({
     playing,
     togglePlay,
@@ -1025,7 +1053,7 @@ function pollLLMStatus(): void {
   void fetch('/api/llm/status').then((response) => response.json()).then((status: {
     active?: number; queued?: number; maxQueued?: number; oldestWaitMs?: number; backpressured?: boolean;
     pressureReason?: 'queue_capacity' | 'queue_wait' | null;
-    performance?: { generationTokensPerSecond?: number | null; recommendedMaxWorldSpeed?: number | null; confidence?: string };
+    performance?: { provider?: string; generationTokensPerSecond?: number | null; recommendedMaxWorldSpeed?: number | null; confidence?: string };
   }) => {
     const element = document.getElementById('llm-status');
     if (!element) return;
@@ -1037,20 +1065,176 @@ function pollLLMStatus(): void {
     const calibration = Number.isFinite(tokensPerSecond) && tokensPerSecond > 0
       ? ` · ${tokensPerSecond.toFixed(1)} tok/s · 建议≤${recommended || 1}×`
       : ' · 待校准';
+    const inferredMode = llmRuntime?.mode
+      ?? (status.performance?.provider === 'mock' ? 'mock' : status.performance?.provider === 'ollama' ? 'ollama' : 'api');
+    const runtimeLabel = inferredMode === 'mock' ? 'Mock 模拟' : inferredMode === 'ollama' ? '本地推理' : 'API 推理';
     element.classList.toggle('busy', !status.backpressured && (active > 0 || queued > 0));
     element.classList.toggle('pressure', !!status.backpressured);
     const pressureLabel = status.pressureReason === 'queue_wait' ? '等待过长' : '队列拥塞';
     element.innerHTML = status.backpressured
-      ? `<span class="llm-dot"></span>认知背压 · ${pressureLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
+      ? `<span class="llm-dot"></span>${runtimeLabel}背压 · ${pressureLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
       : queued > 0
-        ? `<span class="llm-dot"></span>本地推理 · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
-        : `<span class="llm-dot"></span>本地推理 · ${active ? '生成中' : '就绪'}${calibration}`;
+        ? `<span class="llm-dot"></span>${runtimeLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
+        : `<span class="llm-dot"></span>${runtimeLabel} · ${active ? '生成中' : '就绪'}${calibration}`;
   }).catch(() => {
     const element = document.getElementById('llm-status');
-    if (element) element.innerHTML = '<span class="llm-dot"></span>本地推理 · 状态未知';
+    if (element) element.innerHTML = '<span class="llm-dot"></span>模型运行状态未知';
   });
 }
 setInterval(pollLLMStatus, 2000);
+
+function llmModeLabel(mode: LLMRuntimeView['mode']): string {
+  if (mode === 'mock') return 'Mock 模拟';
+  if (mode === 'ollama') return '本地 Ollama';
+  if (mode === 'api') return 'API 推理';
+  return '自定义 Provider';
+}
+
+function selectedLLMMode(): ConfigurableLLMMode {
+  return (document.querySelector<HTMLInputElement>('input[name="llm-mode"]:checked')?.value ?? 'ollama') as ConfigurableLLMMode;
+}
+
+function updateLLMModeFields(): void {
+  const mode = selectedLLMMode();
+  document.querySelectorAll<HTMLElement>('[data-llm-mode-option]').forEach((element) => {
+    element.classList.toggle('active', element.dataset.llmModeOption === mode);
+  });
+  document.querySelectorAll<HTMLElement>('[data-llm-fields]').forEach((element) => {
+    element.hidden = element.dataset.llmFields !== mode;
+  });
+}
+
+function llmInput(id: string): HTMLInputElement {
+  return document.getElementById(id) as HTMLInputElement;
+}
+
+function llmConfigurationBody(): Record<string, unknown> {
+  const mode = selectedLLMMode();
+  if (mode === 'mock') return { mode };
+  if (mode === 'ollama') {
+    return {
+      mode,
+      baseUrl: llmInput('llm-ollama-base-url').value,
+      smallModel: llmInput('llm-ollama-small-model').value,
+      model: llmInput('llm-ollama-model').value,
+      numCtx: Number(llmInput('llm-ollama-num-ctx').value),
+      timeoutMs: Number(llmInput('llm-ollama-timeout').value),
+    };
+  }
+  return {
+    mode,
+    baseUrl: llmInput('llm-api-base-url').value,
+    model: llmInput('llm-api-model').value,
+    timeoutMs: Number(llmInput('llm-api-timeout').value),
+    apiKey: llmInput('llm-api-key').value,
+  };
+}
+
+function renderLLMConfiguration(config: LLMRuntimeView, safety: LLMConfigSafetyView, populate: boolean): void {
+  llmRuntime = config;
+  llmConfigEndpointAvailable = true;
+  const status = document.getElementById('llm-config-status')!;
+  status.textContent = `${llmModeLabel(config.mode)} · r${config.revision}`;
+  status.classList.toggle('warn', config.mode === 'mock' || config.mode === 'custom');
+  const model = config.smallModel && config.smallModel !== config.model
+    ? `${config.smallModel} / ${config.model}`
+    : config.model;
+  document.getElementById('llm-config-summary')!.textContent = config.mode === 'mock'
+    ? '当前所有居民使用确定性 Mock 完成行动、规划、对话与反思；适合流程测试，不计入真实模型发现。'
+    : `当前所有居民统一使用 ${model ?? config.provider} 完成行动、规划、对话、摘要与反思。`;
+  const safetyElement = document.getElementById('llm-config-safety')!;
+  safetyElement.classList.toggle('ready', safety.ready);
+  safetyElement.textContent = safety.ready
+    ? '当前满足安全切换条件：可先测试连接，再应用到三个世界的全部 Agent。'
+    : `配置保护：${safety.reasons.join('；') || '当前暂不可切换'}。`;
+  for (const id of ['llm-config-test', 'llm-config-apply']) {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) button.disabled = llmConfigOperationActive;
+  }
+  if (!populate || config.mode === 'custom') return;
+  const radio = document.querySelector<HTMLInputElement>(`input[name="llm-mode"][value="${config.mode}"]`);
+  if (radio) radio.checked = true;
+  if (config.mode === 'ollama') {
+    llmInput('llm-ollama-base-url').value = config.baseUrl ?? 'http://127.0.0.1:11434';
+    llmInput('llm-ollama-small-model').value = config.smallModel ?? config.model ?? 'qwen3:4b-instruct';
+    llmInput('llm-ollama-model').value = config.model ?? 'qwen3:4b';
+    llmInput('llm-ollama-num-ctx').value = String(config.numCtx ?? 8192);
+    llmInput('llm-ollama-timeout').value = String(config.timeoutMs || 120000);
+  } else if (config.mode === 'api') {
+    llmInput('llm-api-base-url').value = config.baseUrl ?? 'https://api.deepseek.com';
+    llmInput('llm-api-model').value = config.model ?? 'deepseek-chat';
+    llmInput('llm-api-timeout').value = String(config.timeoutMs || 60000);
+    llmInput('llm-api-key').value = '';
+    llmInput('llm-api-key').placeholder = config.hasCredential
+      ? '当前凭据已加载；重新应用时请输入新的 API Key'
+      : '仅保存在当前服务内存，不回显、不写日志';
+  }
+  updateLLMModeFields();
+}
+
+async function loadLLMConfiguration(populate: boolean): Promise<void> {
+  try {
+    const response = await fetch('/api/llm/config');
+    if (!response.ok) throw new Error(String(response.status));
+    const result = await response.json() as { config: LLMRuntimeView; safety: LLMConfigSafetyView };
+    renderLLMConfiguration(result.config, result.safety, populate);
+  } catch {
+    llmConfigEndpointAvailable = false;
+    const status = document.getElementById('llm-config-status');
+    const summary = document.getElementById('llm-config-summary');
+    if (status) { status.textContent = '等待服务更新'; status.classList.add('warn'); }
+    if (summary) summary.textContent = '三种运行方式已经显示；当前后台进程需要安全重启后才能测试或应用新配置。';
+    const safety = document.getElementById('llm-config-safety');
+    if (safety) { safety.classList.remove('ready'); safety.textContent = '当前内存世界保持运行，模型配置后端将在安全重启后启用。'; }
+    for (const id of ['llm-config-test', 'llm-config-apply']) {
+      const button = document.getElementById(id) as HTMLButtonElement | null;
+      if (button) button.disabled = true;
+    }
+  }
+}
+
+function bindLLMConfiguration(): void {
+  document.querySelectorAll<HTMLInputElement>('input[name="llm-mode"]').forEach((input) => {
+    input.addEventListener('change', updateLLMModeFields);
+  });
+  updateLLMModeFields();
+  const run = async (action: 'test' | 'apply') => {
+    if (!llmConfigEndpointAvailable || llmConfigOperationActive) return;
+    const button = document.getElementById(action === 'test' ? 'llm-config-test' : 'llm-config-apply') as HTMLButtonElement;
+    llmConfigOperationActive = true;
+    button.disabled = true;
+    try {
+      if (action === 'apply' && !window.confirm('将该模型运行方式应用到三个世界的全部 Agent？配置变更会写入研究日志。')) return;
+      const response = await fetch(action === 'test' ? '/api/llm/test' : '/api/llm/config', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(llmConfigurationBody()),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const result = await response.json() as {
+        config?: LLMRuntimeView;
+        probe?: { model?: string | null; latencyMs?: number; inputTokens?: number; outputTokens?: number };
+      };
+      if (action === 'apply' && result.config) {
+        showToast(`${llmModeLabel(result.config.mode)}已应用到全部 Agent，并写入三个世界研究日志`, 'success');
+        await loadLLMConfiguration(true);
+      } else {
+        const latency = Number(result.probe?.latencyMs) || 0;
+        showToast(`连接检测通过：${result.probe?.model ?? selectedLLMMode()} · ${latency}ms`, 'success');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '模型配置操作失败', 'error');
+      await loadLLMConfiguration(false);
+    } finally {
+      llmConfigOperationActive = false;
+      for (const id of ['llm-config-test', 'llm-config-apply']) {
+        const candidate = document.getElementById(id) as HTMLButtonElement | null;
+        if (candidate) candidate.disabled = !llmConfigEndpointAvailable;
+      }
+    }
+  };
+  document.getElementById('llm-config-test')?.addEventListener('click', () => void run('test'));
+  document.getElementById('llm-config-apply')?.addEventListener('click', () => void run('apply'));
+}
+setInterval(() => void loadLLMConfiguration(false), 3000);
 
 function showToast(message: string, tone: 'info' | 'success' | 'error' = 'info'): void {
   const toast = document.getElementById('ui-toast');
