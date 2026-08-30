@@ -1,7 +1,7 @@
 // 渲染冒烟：昼夜纯函数数值合法 + 各绘制函数在 mock ctx 下不抛异常
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dayNightState, applyDayNight, drawRiver, drawTree, drawLampGlow, drawObjectDetail, drawObjectSelection, drawFurniture, drawTerrain, fitPixelSprite, TILE } from '../src/web/client/render';
+import { dayNightState, applyDayNight, drawRiver, drawTree, drawLampGlow, drawObjectDetail, drawObjectSelection, drawFurniture, drawTerrain, fitPixelSprite, roadAxis, terrainDetailAt, TILE } from '../src/web/client/render';
 import type { ObjectView } from '../src/web/client/types';
 
 function mockCtx() {
@@ -82,6 +82,14 @@ test('程序化地表细节稳定使用整数像素并形成多层绘制', () =>
   for (const args of fillRects) {
     for (const value of args) assert.equal(Number.isInteger(value), true, `发现非整数像素：${args.join(',')}`);
   }
+});
+
+test('草地细节可复现，道路车辙沿长轴铺设', () => {
+  assert.deepEqual(terrainDetailAt(3, 7), terrainDetailAt(3, 7));
+  assert.ok(terrainDetailAt(3, 7).clusters >= 1 && terrainDetailAt(3, 7).clusters <= 3);
+  assert.equal(roadAxis(320, 64, false), 'horizontal');
+  assert.equal(roadAxis(64, 320, false), 'vertical');
+  assert.equal(roadAxis(320, 320, true), 'plaza');
 });
 
 test('地图对象名称始终不覆盖场景，选中态仅绘制轮廓', () => {

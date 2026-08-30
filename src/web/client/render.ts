@@ -109,61 +109,102 @@ export function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, no
 
 /** 路灯夜间暖光晕 */
 export function drawLampGlow(ctx: CanvasRenderingContext2D, px: number, py: number, nowMs: number, night: boolean): void {
-  ctx.fillStyle = '#3a3f4a';
-  ctx.fillRect(px + 10, py + 6, 12, 26);
-  ctx.fillStyle = '#f5e9c8';
-  ctx.fillRect(px + 12, py + 8, 8, 6);
-  if (!night) return;
   const pulse = 0.85 + 0.15 * Math.sin(nowMs / 800);
-  const g = ctx.createRadialGradient(px + 16, py + 12, 4, px + 16, py + 12, 34);
-  g.addColorStop(0, `rgba(255,214,130,${0.45 * pulse})`);
-  g.addColorStop(1, 'rgba(255,214,130,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(px - 18, py - 22, 68, 68);
+  if (night) {
+    const pool = ctx.createRadialGradient(px + 16, py + 30, 2, px + 16, py + 30, 38);
+    pool.addColorStop(0, `rgba(255,196,104,${0.28 * pulse})`);
+    pool.addColorStop(1, 'rgba(255,196,104,0)');
+    ctx.fillStyle = pool;
+    ctx.fillRect(px - 24, py + 4, 80, 44);
+    const aura = ctx.createRadialGradient(px + 16, py + 10, 3, px + 16, py + 10, 30);
+    aura.addColorStop(0, `rgba(255,224,154,${0.48 * pulse})`);
+    aura.addColorStop(1, 'rgba(255,224,154,0)');
+    ctx.fillStyle = aura;
+    ctx.fillRect(px - 16, py - 22, 64, 64);
+  }
+  // 铸铁底座、细灯杆、挑檐和玻璃灯室按像素层级绘制。
+  ctx.fillStyle = 'rgba(35,38,42,.28)';
+  ctx.fillRect(px + 7, py + 29, 20, 3);
+  ctx.fillStyle = '#303842';
+  ctx.fillRect(px + 10, py + 27, 12, 5);
+  ctx.fillRect(px + 14, py + 11, 4, 18);
+  ctx.fillRect(px + 9, py + 8, 14, 3);
+  ctx.fillRect(px + 12, py + 2, 8, 2);
+  ctx.fillRect(px + 10, py + 4, 12, 4);
+  ctx.fillStyle = night ? '#ffd98d' : '#d5c697';
+  ctx.fillRect(px + 12, py + 8, 8, 7);
+  ctx.fillStyle = night ? '#fff0bd' : '#eee1b7';
+  ctx.fillRect(px + 13 + (Math.floor(nowMs / 480) % 2), py + 9, 2, 4);
+  ctx.fillStyle = '#56606a';
+  ctx.fillRect(px + 10, py + 15, 12, 3);
 }
 
 const ROOFS = ['#b35d45', '#8a5a3a', '#5a7a8a', '#6b4f6b', '#8a7a3a', '#4a6a4a'];
 
 export function drawTerrain(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  // Serene Village 画风：草地为小镇基底，深浅变体只用于打破重复感。
+  // 草地以同一基础砖连续铺设，细小苔斑与草叶负责变化，保持远景连续性。
   if (sheetReady(TERRAIN_SHEETS.dirt) && sheetReady(TERRAIN_SHEETS.grass)) {
     const [gx, gy] = TILE_MAP.terrain.grass;
-    const [gax, gay] = TILE_MAP.terrain.grassAlt;
     for (let y = 0; y < h; y += TILE) {
       for (let x = 0; x < w; x += TILE) {
-        const v = hash(`${x},${y}`) % 10;
-        if (v < 8) drawTile(ctx, TERRAIN_SHEETS.grass, gx, gy, x, y, TILE);
-        else drawTile(ctx, TERRAIN_SHEETS.grass, gax, gay, x, y, TILE);
+        drawTile(ctx, TERRAIN_SHEETS.grass, gx, gy, x, y, TILE);
       }
     }
   } else {
-    // 程序化 fallback：底色与分块暗纹保持整数像素。
+    // 程序化 fallback 使用连续底色，小尺度纹理由细节层统一生成。
     ctx.fillStyle = '#7ca968';
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#759f61';
-    for (let y = 0; y < h; y += TILE * 2) {
-      for (let x = (y / TILE) % 4 === 0 ? 0 : TILE; x < w; x += TILE * 2) {
-        ctx.fillRect(x, y, TILE, TILE);
-      }
-    }
   }
   drawGrassDetails(ctx, w, h);
 }
 
-/** 稀疏草叶与野花：位置完全由格坐标决定，不闪烁、不依赖随机数。 */
+export interface TerrainDetail {
+  clusters: number;
+  flower: boolean;
+  pebble: boolean;
+  shade: 0 | 1 | 2;
+}
+
+/** 单格草地细节由格坐标稳定派生，截图、回放与不同帧保持一致。 */
+export function terrainDetailAt(tileX: number, tileY: number): TerrainDetail {
+  const seed = hash(`grass:${tileX}:${tileY}`);
+  return {
+    clusters: 1 + seed % 3,
+    flower: seed % 17 === 0,
+    pebble: seed % 23 === 0,
+    shade: (seed % 3) as 0 | 1 | 2,
+  };
+}
+
+/** 草叶、低矮苔斑、野花与石粒：位置完全由格坐标决定。 */
 function drawGrassDetails(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   for (let y = 0; y < h; y += TILE) {
     for (let x = 0; x < w; x += TILE) {
       const seed = hash(`grass:${x}:${y}`);
-      if (seed % 3 !== 0) continue;
-      const dx = x + 5 + seed % 20;
-      const dy = y + 7 + Math.floor(seed / 23) % 17;
-      ctx.fillStyle = seed % 2 ? 'rgba(47,105,54,.58)' : 'rgba(187,218,124,.52)';
-      ctx.fillRect(dx, dy, 1, 3);
-      ctx.fillRect(dx + 2, dy + 1, 1, 2);
-      if (seed % 17 === 0) {
+      const detail = terrainDetailAt(x / TILE, y / TILE);
+      ctx.fillStyle = detail.shade === 0 ? 'rgba(49,105,55,.16)' : 'rgba(196,219,132,.12)';
+      ctx.fillRect(x + 3 + seed % 19, y + 4 + Math.floor(seed / 31) % 20, 5, 2);
+      for (let cluster = 0; cluster < detail.clusters; cluster++) {
+        const dx = x + 4 + (seed + cluster * 11) % 23;
+        const dy = y + 7 + (Math.floor(seed / 23) + cluster * 7) % 18;
+        ctx.fillStyle = (seed + cluster) % 2 ? 'rgba(47,105,54,.62)' : 'rgba(187,218,124,.56)';
+        ctx.fillRect(dx, dy, 1, 3 + cluster % 2);
+        ctx.fillRect(dx + 2, dy + 1, 1, 2);
+        if (cluster === 2) ctx.fillRect(dx - 2, dy + 2, 1, 2);
+      }
+      if (detail.flower) {
+        const dx = x + 7 + seed % 17;
+        const dy = y + 9 + Math.floor(seed / 19) % 13;
         ctx.fillStyle = seed % 34 === 0 ? '#f1d77b' : '#eaa2aa';
         ctx.fillRect(dx - 1, dy - 2, 2, 2);
+        ctx.fillStyle = '#4f8a48';
+        ctx.fillRect(dx, dy, 1, 3);
+      }
+      if (detail.pebble) {
+        ctx.fillStyle = 'rgba(104,113,91,.55)';
+        ctx.fillRect(x + 22, y + 23, 3, 2);
+        ctx.fillStyle = 'rgba(205,211,177,.45)';
+        ctx.fillRect(x + 22, y + 23, 2, 1);
       }
     }
   }
@@ -195,6 +236,11 @@ export function drawFence(ctx: CanvasRenderingContext2D, px: number, py: number,
   ctx.fillRect(px, py + ph - 8, pw, 3);
 }
 
+export function roadAxis(pw: number, ph: number, plaza: boolean): 'plaza' | 'horizontal' | 'vertical' {
+  if (plaza) return 'plaza';
+  return pw >= ph ? 'horizontal' : 'vertical';
+}
+
 function drawRoadFinish(
   ctx: CanvasRenderingContext2D,
   px: number, py: number, pw: number, ph: number,
@@ -205,6 +251,19 @@ function drawRoadFinish(
   ctx.fillRect(px, py + ph - 2, pw, 2);
   ctx.fillRect(px, py, 2, ph);
   ctx.fillRect(px + pw - 2, py, 2, ph);
+  // 草土交界用断续边缘与小草簇过渡，避免道路像贴在地面上的纯色矩形。
+  for (let x = px + 5; x < px + pw - 4; x += 19) {
+    const topInset = hash(`road-edge-top:${x}:${py}`) % 3;
+    const bottomInset = hash(`road-edge-bottom:${x}:${py}`) % 3;
+    ctx.fillStyle = 'rgba(90,112,60,.44)';
+    ctx.fillRect(x, py + topInset, 3, 2);
+    ctx.fillRect(x + 7, py + ph - 2 - bottomInset, 2, 2);
+  }
+  for (let y = py + 7; y < py + ph - 4; y += 21) {
+    ctx.fillStyle = 'rgba(90,112,60,.38)';
+    ctx.fillRect(px, y, 2, 3);
+    ctx.fillRect(px + pw - 2, y + 6, 2, 3);
+  }
   if (plaza) {
     // 广场用错列石缝与少量亮面砖形成铺装层次。
     for (let y = py + 8; y < py + ph - 4; y += 16) {
@@ -220,14 +279,21 @@ function drawRoadFinish(
       }
     }
   } else {
-    // 主街两道浅车辙与散落小石让长条道路不再是一块平面。
+    // 主街车辙始终沿道路长轴，横纵道路都保持自然通行方向。
+    const axis = roadAxis(pw, ph, false);
     ctx.fillStyle = 'rgba(130,91,50,.18)';
-    ctx.fillRect(px + 4, py + Math.floor(ph * .32), pw - 8, 2);
-    ctx.fillRect(px + 4, py + Math.floor(ph * .68), pw - 8, 2);
-    for (let x = px + 10; x < px + pw - 6; x += 29) {
-      const y = py + 6 + hash(`road:${x}`) % Math.max(1, ph - 12);
+    if (axis === 'horizontal') {
+      ctx.fillRect(px + 4, py + Math.floor(ph * .32), Math.max(1, pw - 8), 2);
+      ctx.fillRect(px + 4, py + Math.floor(ph * .68), Math.max(1, pw - 8), 2);
+    } else {
+      ctx.fillRect(px + Math.floor(pw * .32), py + 4, 2, Math.max(1, ph - 8));
+      ctx.fillRect(px + Math.floor(pw * .68), py + 4, 2, Math.max(1, ph - 8));
+    }
+    const length = axis === 'horizontal' ? pw : ph;
+    for (let along = 10; along < length - 6; along += 29) {
+      const across = 6 + hash(`road:${px}:${py}:${along}`) % Math.max(1, (axis === 'horizontal' ? ph : pw) - 12);
       ctx.fillStyle = 'rgba(92,66,43,.35)';
-      ctx.fillRect(x, y, 3, 2);
+      ctx.fillRect(axis === 'horizontal' ? px + along : px + across, axis === 'horizontal' ? py + across : py + along, 3, 2);
     }
   }
 }
