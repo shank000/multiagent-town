@@ -15,8 +15,23 @@ test('town-web applies speed, port and one isolated database path per world', ()
   assert.equal(args.speed, 60);
   assert.equal(args.port, 9000);
   assert.equal(args.dbPathExplicit, true);
+  assert.deepEqual(args.worldKinds, ['mem-on']);
+  assert.equal(args.workspaceName, 'AI 小镇实验');
+  assert.equal(args.seed, 1);
   assert.equal(worldDbPath(args.dbPath, 'w2'), join('data', 'town-w2.sqlite'));
   assert.equal(worldDbPath(':memory:', 'w2'), ':memory:');
+});
+
+test('town-web accepts any unique selection of one to three world templates', () => {
+  const args = parseArgs([
+    '--worlds', 'mem-off,rumor', '--workspace-name', '双世界稳健性', '--seed', '42',
+  ]);
+  assert.deepEqual(args.worldKinds, ['mem-off', 'rumor']);
+  assert.equal(args.workspaceName, '双世界稳健性');
+  assert.equal(args.seed, 42);
+  assert.throws(() => parseArgs(['--worlds', '']), /--worlds/);
+  assert.throws(() => parseArgs(['--worlds', 'mem-on,mem-on']), /--worlds/);
+  assert.throws(() => parseArgs(['--worlds', 'unknown']), /--worlds/);
 });
 
 test('town-web keeps a unique default database prefix and allows in-memory experiments', () => {
@@ -65,4 +80,6 @@ test('town-web rejects invalid runtime settings before starting worlds', () => {
   assert.throws(() => parseArgs(['--speed', '61']), /--speed/);
   assert.throws(() => parseArgs(['--port', '70000']), /--port/);
   assert.throws(() => parseArgs(['--db', '']), /--db/);
+  assert.throws(() => parseArgs(['--workspace-name', '']), /--workspace-name/);
+  assert.throws(() => parseArgs(['--seed', '0']), /--seed/);
 });

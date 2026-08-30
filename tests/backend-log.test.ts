@@ -36,3 +36,24 @@ test('运行日志路径与研究数据库同批次保存且脱敏器覆盖常�
   );
   assert.equal(redactSecrets('Authorization=abc sk-1234567890 API_KEY: xyz'), 'Authorization=[REDACTED] sk-[REDACTED] API_KEY: [REDACTED]');
 });
+
+test('新工作空间切换到独立日志文件并重置当前会话视图', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'backend-log-switch-'));
+  const first = join(directory, 'first.runtime.jsonl');
+  const second = join(directory, 'second.runtime.jsonl');
+  const log = new BackendRuntimeLog(first, { captureConsole: false });
+  try {
+    log.info('world', '旧工作空间条目');
+    const previousSession = log.sessionId;
+    log.switchFile(second, 'ws-next');
+    log.info('world', '新工作空间条目');
+    assert.equal(log.filePath, second);
+    assert.notEqual(log.sessionId, previousSession);
+    assert.doesNotMatch(readFileSync(second, 'utf8'), /旧工作空间条目/);
+    assert.match(readFileSync(second, 'utf8'), /新工作空间条目/);
+    assert.match(readFileSync(first, 'utf8'), /工作空间日志封存/);
+  } finally {
+    log.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

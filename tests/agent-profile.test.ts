@@ -45,7 +45,7 @@ test('档案配置按稳定居民 ID 保存并载入', () => {
   }
 });
 
-test('档案 API 同步三个世界并记录持久化配置', async () => {
+test('档案 API 同步当前工作空间已加载的世界并记录持久化配置', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'town-profile-api-'));
   const profileStorePath = join(dir, 'agent-profiles.json');
   const worlds = [
@@ -68,7 +68,7 @@ test('档案 API 同步三个世界并记录持久化配置', async () => {
     });
     assert.equal(response.status, 200);
     const result = await response.json() as { scope: string; worldIds: string[]; profileHash: string };
-    assert.equal(result.scope, 'all_worlds');
+    assert.equal(result.scope, 'loaded_worlds');
     assert.deepEqual(result.worldIds, ['w1', 'w2', 'w3']);
     assert.ok(result.profileHash.length === 64);
     assert.ok(worlds.every((world) => world.world.getAgent(agent.id).name === '林晚晴·研究版'));

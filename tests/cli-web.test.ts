@@ -32,6 +32,8 @@ test('town-web 启动后可访问快照接口', async () => {
   try {
     const snap = (await waitForState(port, 15_000)) as { agents: unknown[] };
     assert.equal(snap.agents.length, 6);
+    const registry = await (await fetch(`http://127.0.0.1:${port}/api/worlds`)).json() as { worlds: unknown[] };
+    assert.equal(registry.worlds.length, 1);
     assert.ok(out.includes('浏览器打开'));
   } finally {
     child.kill('SIGTERM');

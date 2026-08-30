@@ -1,6 +1,6 @@
 # 项目交接手册（multiagent-town → 涌现观测台）
 
-> 本文档供接手 agent 完整理解项目现状与后续任务。状态日期：2026-08-30；当前提交以 `git rev-parse HEAD` 为准，验收基线为 `pnpm typecheck`、262 项 `node:test`、前端构建与 AgentSociety² SDK 冒烟。
+> 本文档供接手 agent 完整理解项目现状与后续任务。状态日期：2026-08-31；当前提交以 `git rev-parse HEAD` 为准，验收基线为 `pnpm typecheck`、339 项 `node:test`、前端构建与 AgentSociety² SDK 冒烟。
 
 ## 一、项目是什么
 
@@ -29,7 +29,7 @@ src/engine/    seed(6居民persona+对象树) · mind(记忆/日记反思/规划
                social(邻近闲聊) · town-model(公开活动) · rumors(选择性披露) · loop(主循环)
                economy(金币/物品/赠礼) · experiment(伙伴选择实验·候选快照) · experiment-runner(实时挂载)
                metrics(重复率/互惠/聚类/多样性/HHI/矩阵持续性/枢纽集中度) · perception(Alicization式感知缓冲)
-               world-factory(平行世界装配：mem-on/mem-off/rumor) · player(玩家指令) · dialogue/reflection/social-relations/memory-writer
+               world-factory(世界模板装配：mem-on/mem-off/rumor) · workspace(初始配置/选择性加载/安全替换) · player(玩家指令) · dialogue/reflection/social-relations/memory-writer
 src/llm/       gateway(路由/重试/计量) · prompts(模板) · mock(确定性决策) · deepseek · ollama/model-profiles
 src/store/     db(sqlite schema: world_meta/agents/objects/events/memories/reflections/plans/conversations/messages/relationships/relationship_evidence/rumors)
 src/web/       server(node http: /api/* 路由+SSE) · snapshot(快照序列化)
@@ -37,20 +37,22 @@ src/web/client camera(相机) · console(社会关系/选择网络/指标曲线/
                effects(粒子) · hud/panel(气泡/结构化心智与会话卡) · main(三视窗编排)
                render/tiles/sprites(程序化场景、四向步态、坐卧/睡眠/对话姿态)
 src/cli/       town-web · experiment(2×2 CLI) · town-agent(协议) · run/replay/interview
-tests/         node:test 262 项（验收、单元、server、UI、会话、关系、反思、实验合同与 runtime）
+tests/         node:test 339 项（验收、单元、server、UI、会话、关系、反思、实验合同与 runtime）
 public/        index.html(小镇/结构/检查器三视窗) · style.css(深色仪器风) · assets/(许可素材)
 skills/town-agent/SKILL.md   外部 AI 接入文档
 docs/          交接/研究文档（见下）
 ```
 
-## 四、平行世界（当前主形态）
+## 四、实验工作空间与平行世界（当前主形态）
 
-`world-factory.ts` 创建三个独立世界（各自数据库/引擎/日志/循环）；默认使用带时间戳与 PID 的新 run 路径，测试可用 `:memory:`。显式 `--db` 及其 w1/w2/w3 派生文件必须全部不存在，启动门禁会保护旧 run：
+`workspace.ts` 从名称、种子、速度、默认实验天数、居民档案和世界模板创建一个独立工作空间。默认只加载 `w1`；研究者可在右栏“新建小镇”或 `--worlds` 参数中任意选择 1–3 个模板。只有已选世界才创建数据库、引擎、日志订阅和模型任务；多世界共享调度器并同步时钟。新建前要求世界暂停、正式实验停止、会话/决策/推理队列结算；旧数据库与运行日志封存，新工作空间使用全新路径。测试可用 `:memory:`。
+
+`world-factory.ts` 提供三个彼此独立的世界模板：
 - `w1` mem-on：伙伴选择可访问历史（亲密度+近因打分）+ 馈礼交换；**关闭邻近闲聊**，隔离实验变量
 - `w2` mem-off：随机选择、无馈礼（零模型对照）
 - `w3` rumor：注入秘密（`seedRumor`），观察传播链（保留社交邻近闲聊）
 
-服务端：`/api/worlds`（列表+active）、`/api/world/switch`；所有 `/api/state|narrative|experiment/*|guest/*|world/control` 作用于**当前活跃世界**；SSE 事件带 `worldId`（客户端 `activeWorldId` 过滤）。
+服务端：`GET/POST /api/workspace`（读取/创建工作空间）、`/api/worlds`（已加载列表+active）、`/api/world/switch`；所有 `/api/state|narrative|experiment/*|guest/*|world/control` 作用于**当前活跃世界**；SSE 事件带 `worldId`（客户端 `activeWorldId` 过滤）。
 客户端：三视窗同时呈现小镇、关系结构与人物/世界检查器；世界切换重拉叙事、关系与指标，视窗均可独立聚焦。
 
 ## 五、实验机制（核心）

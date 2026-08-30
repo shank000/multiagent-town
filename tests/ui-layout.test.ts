@@ -110,7 +110,7 @@ test('resident editor, pixel identity and multi-channel social interactions are 
     assert.match(html, new RegExp(`value=["']${interaction}["']`));
   }
   assert.doesNotMatch(html, /data-value="360"/);
-  assert.match(client, /scope[^\n]+all_worlds|同步到三个世界/);
+  assert.match(client, /loadedWorldCount/);
   assert.match(html, /researcher intervention/);
   assert.match(panelClient, /avatarFor\(message\.fromAgent/);
   assert.match(avatarClient, /pixelAvatarMarkup/);
@@ -130,10 +130,24 @@ test('Agent 模型运行方式在 UI 明确提供 Mock、本地模型与 API 三
   assert.match(html, /凭据仅驻内存/);
   assert.match(client, /\/api\/llm\/config/);
   assert.match(client, /\/api\/llm\/test/);
-  assert.match(client, /应用到三个世界的全部 Agent/);
+  assert.match(client, /应用到当前工作空间已加载的/);
   assert.match(server, /llm_runtime_config_changed/);
   assert.match(server, /credentialPolicy: 'memory_only'/);
   assert.match(css, /\.model-mode-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
+});
+
+test('experiment workspace UI creates a town from initial config and selects one to three world templates', () => {
+  for (const id of [
+    'workspace-summary', 'workspace-create-open', 'workspace-create-dialog', 'workspace-create-form',
+    'workspace-world-options', 'workspace-create-safety', 'workspace-create-submit',
+  ]) assert.match(html, new RegExp(`id=["']${id}["']`));
+  for (const kind of ['mem-on', 'mem-off', 'rumor']) assert.match(html, new RegExp(`value=["']${kind}["']`));
+  assert.match(client, /fetch\('\/api\/workspace'/);
+  assert.match(client, /data\.getAll\('worldKinds'\)/);
+  assert.match(client, /window\.location\.reload\(\)/);
+  assert.match(server, /WORLD_TEMPLATE_CATALOG/);
+  assert.match(server, /opts\.workspace\.replace\(body\)/);
+  assert.match(css, /\.workspace-world-options\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
 });
 
 test('narrative stream distinguishes planned, travelling, verified, cancelled and fulfilled world facts', () => {

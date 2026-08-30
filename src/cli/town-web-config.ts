@@ -7,6 +7,9 @@ export interface TownWebArgs {
   port: number;
   dbPath: string;
   dbPathExplicit: boolean;
+  worldKinds: Array<'mem-on' | 'mem-off' | 'rumor'>;
+  workspaceName: string;
+  seed: number;
 }
 
 export const TOWN_WORLD_IDS = ['w1', 'w2', 'w3'] as const;
@@ -22,6 +25,9 @@ export function parseArgs(argv: string[]): TownWebArgs {
       `data/runs/town-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.sqlite`
     ),
     dbPathExplicit: false,
+    worldKinds: ['mem-on'],
+    workspaceName: 'AI 小镇实验',
+    seed: 1,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--speed') args.speed = Number(argv[++i]);
@@ -30,6 +36,12 @@ export function parseArgs(argv: string[]): TownWebArgs {
       args.dbPath = argv[++i];
       args.dbPathExplicit = true;
     }
+    else if (argv[i] === '--worlds') {
+      args.worldKinds = String(argv[++i] ?? '').split(',').map((value) => value.trim())
+        .filter((value): value is 'mem-on' | 'mem-off' | 'rumor' => Boolean(value)) as TownWebArgs['worldKinds'];
+    }
+    else if (argv[i] === '--workspace-name') args.workspaceName = String(argv[++i] ?? '').trim();
+    else if (argv[i] === '--seed') args.seed = Number(argv[++i]);
   }
   if (!Number.isFinite(args.speed) || args.speed <= 0 || args.speed > MAX_WORLD_SPEED) {
     throw new Error(`--speed must be a finite number in (0, ${MAX_WORLD_SPEED}]`);
@@ -38,6 +50,15 @@ export function parseArgs(argv: string[]): TownWebArgs {
     throw new Error('--port must be an integer between 1 and 65535');
   }
   if (!args.dbPath) throw new Error('--db must be a non-empty path');
+  const allowedKinds = new Set(['mem-on', 'mem-off', 'rumor']);
+  if (args.worldKinds.length < 1 || args.worldKinds.length > 3 || new Set(args.worldKinds).size !== args.worldKinds.length
+      || args.worldKinds.some((kind) => !allowedKinds.has(kind))) {
+    throw new Error('--worlds must contain 1..3 unique values from mem-on,mem-off,rumor');
+  }
+  if (!args.workspaceName || args.workspaceName.length > 60) throw new Error('--workspace-name must contain 1..60 characters');
+  if (!Number.isSafeInteger(args.seed) || args.seed < 1 || args.seed > 2_147_483_647) {
+    throw new Error('--seed must be an integer between 1 and 2147483647');
+  }
   return args;
 }
 
@@ -64,6 +85,21 @@ export function assertFreshWorldDbPaths(args: TownWebArgs): TownWorldDbPaths {
     throw new Error(
       `新实验要求全新数据库路径，以下路径已存在：${occupied.join('；')}。请指定新的 --db 路径或使用 :memory:。`
     );
+  }
+  return paths;
+}
+
+export function assertFreshSelectedWorldDbPaths(
+  basePath: string,
+  worldIds: readonly TownWorldId[],
+  checkBasePath = false,
+): Partial<TownWorldDbPaths> {
+  const paths = Object.fromEntries(worldIds.map((worldId) => [worldId, worldDbPath(basePath, worldId)])) as Partial<TownWorldDbPaths>;
+  if (basePath === ':memory:') return paths;
+  const candidates = [...(checkBasePath ? [basePath] : []), ...Object.values(paths)] as string[];
+  const occupied = [...new Set(candidates)].filter(pathEntryExists);
+  if (occupied.length > 0) {
+    throw new Error(`新工作空间要求全新数据库路径，以下路径已存在：${occupied.join('；')}`);
   }
   return paths;
 }

@@ -27,7 +27,7 @@ export interface GatewayConfig {
   backpressureWaitMs?: number; // 最老请求达到该排队时长后暂缓世界时钟
   backpressureResumeWaitMs?: number; // 排队时长降至该值后允许解除背压
   priorityAgingMs?: number; // 非对话任务每经过该时长提升一级，但不会进入对话等级
-  expectedActiveAgents?: number; // 持续倍速估算所覆盖的居民数；三世界 Web 为 18
+  expectedActiveAgents?: number; // 持续倍速估算所覆盖的当前已加载居民数
   /** 不包含提示词与模型正文的请求级诊断，用于本地后端日志。 */
   onDiagnostic?: (event: LLMGatewayDiagnostic) => void;
 }
@@ -200,6 +200,10 @@ export class LLMGateway {
 
   runtimeSnapshot(): LLMRuntimeSnapshot {
     return { ...this.runtime, revision: this.runtimeRevision };
+  }
+
+  setExpectedActiveAgents(count: number): void {
+    this.expectedActiveAgents = boundedInteger(count, 'expectedActiveAgents', 1, 10_000);
   }
 
   /**

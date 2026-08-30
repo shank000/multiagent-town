@@ -44,17 +44,19 @@ interface ConsoleMethods {
  */
 export class BackendRuntimeLog {
   private readonly entries: BackendLogEntry[] = [];
-  private readonly startedAtValue = new Date().toISOString();
-  private readonly sessionIdValue: string;
+  private startedAtValue = new Date().toISOString();
+  private sessionIdValue: string;
+  private filePathValue: string;
   private readonly originalConsole: ConsoleMethods;
   private sequence = 0;
   private consoleInstalled = false;
   private fileWritable = true;
 
   constructor(
-    readonly filePath: string,
+    filePath: string,
     private readonly options: { captureConsole?: boolean; maxEntries?: number } = {},
   ) {
+    this.filePathValue = filePath;
     this.sessionIdValue = `${process.pid}-${Date.now().toString(36)}`;
     this.originalConsole = {
       debug: console.debug.bind(console),
@@ -70,6 +72,7 @@ export class BackendRuntimeLog {
 
   get sessionId(): string { return this.sessionIdValue; }
   get startedAt(): string { return this.startedAtValue; }
+  get filePath(): string { return this.filePathValue; }
   get fileName(): string { return basename(this.filePath); }
 
   debug(source: string, message: string): BackendLogEntry { return this.record('debug', source, message); }
@@ -102,6 +105,19 @@ export class BackendRuntimeLog {
   close(): void {
     this.record('info', 'lifecycle', `后端日志会话结束 session=${this.sessionIdValue}`);
     this.restoreConsole();
+  }
+
+  /** 新工作空间启用独立日志文件，同时保持现有 console 捕获器和调用方引用有效。 */
+  switchFile(filePath: string, workspaceId: string): void {
+    this.record('info', 'lifecycle', `工作空间日志封存 session=${this.sessionIdValue}`);
+    this.filePathValue = filePath;
+    this.startedAtValue = new Date().toISOString();
+    this.sessionIdValue = `${process.pid}-${Date.now().toString(36)}`;
+    this.sequence = 0;
+    this.entries.splice(0);
+    this.fileWritable = true;
+    mkdirSync(dirname(filePath), { recursive: true });
+    this.record('info', 'lifecycle', `后端日志会话开始 workspace=${workspaceId} session=${this.sessionIdValue}`);
   }
 
   private record(level: BackendLogLevel, source: string, rawMessage: string): BackendLogEntry {

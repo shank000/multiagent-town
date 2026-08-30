@@ -40,6 +40,7 @@ import {
 } from '../engine/agent-profile';
 import { saveAgentProfileConfig } from '../store/agent-profile-config';
 import { performSocialInteraction, socialInteractionDefinition } from '../engine/social-interactions';
+import { WORLD_TEMPLATE_CATALOG, type ExperimentWorkspaceRuntime } from '../engine/workspace';
 
 export interface TownWebOptions {
   world: WorldState;
@@ -62,6 +63,8 @@ export interface TownWebOptions {
   profileStorePath?: string;
   /** 当前后端进程的结构化运行日志；只读接口不会访问该路径之外的文件。 */
   runtimeLog?: BackendRuntimeLog;
+  /** 可替换的独立实验工作空间；缺省时保持兼容的固定世界模式。 */
+  workspace?: ExperimentWorkspaceRuntime;
 }
 
 export interface TownWebServer {
@@ -125,9 +128,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   const snapshotMs = opts.snapshotMs ?? 200;
   // 多世界模式：worlds 提供时以切换式 hub 服务；否则单世界包装
   let activeId = (opts.worlds?.[0] as { meta?: { id?: string } } | undefined)?.meta?.id ?? '';
-  let hubWorlds: HubAccess[] | null = null;
-  if (opts.worlds && opts.worlds.length) {
-    hubWorlds = (opts.worlds as HubAccess[]).map((w) => ({
+  const adaptWorlds = (worlds: unknown[]): HubAccess[] => (worlds as HubAccess[]).map((w) => ({
       get meta() { return w.meta; },
       get world() { return w.world; },
       get time() { return w.time; },
@@ -139,7 +140,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       get player() { return w.player; },
       get experiment() { return w.experiment; },
     }));
-  }
+  let hubWorlds: HubAccess[] | null = opts.worlds?.length ? adaptWorlds(opts.worlds) : null;
   const hub = (): HubAccess => {
     if (hubWorlds) {
       const found = hubWorlds.find((x) => x.meta.id === activeId) ?? hubWorlds[0];
@@ -174,7 +175,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   };
   const clients = new Set<ServerResponse>();
   let seq = 0;
-  let paused = false;
+  let paused = opts.workspace?.current.meta.startPaused ?? false;
 
   const llmConfigurationSafety = (requireSettledWorld = true) => {
     const scheduler = opts.llm?.schedulerSnapshot();
@@ -236,16 +237,23 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     for (const c of clients) send(c, event, data);
   }
   const perceptionByWorld = new Map<string, PerceptionEngine>();
-  const perceptionWorlds = hubWorlds ?? [hub()];
-  for (const selected of perceptionWorlds) {
-    perceptionByWorld.set(selected.meta.id, new PerceptionEngine(selected.world, selected.log));
-  }
   const unsubLogs: (() => void)[] = [];
-  if (hubWorlds) {
-    for (const w of hubWorlds) unsubLogs.push(w.log.subscribe((e: GameEvent) => broadcast('event', { ...e, worldId: w.meta.id })));
-  } else {
-    unsubLogs.push(opts.log.subscribe((e: GameEvent) => broadcast('event', e)));
-  }
+  const clearHubResources = () => {
+    for (const unsubscribe of unsubLogs.splice(0)) unsubscribe();
+    for (const perception of perceptionByWorld.values()) perception.dispose();
+    perceptionByWorld.clear();
+  };
+  const bindHubResources = () => {
+    clearHubResources();
+    const selectedWorlds = hubWorlds ?? [hub()];
+    for (const selected of selectedWorlds) {
+      perceptionByWorld.set(selected.meta.id, new PerceptionEngine(selected.world, selected.log));
+      unsubLogs.push(selected.log.subscribe((event: GameEvent) => (
+        broadcast('event', hubWorlds ? { ...event, worldId: selected.meta.id } : event)
+      )));
+    }
+  };
+  bindHubResources();
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -426,6 +434,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         }
         try {
           const probe = await probeGatewayConfig(config);
+          config.expectedActiveAgents = (hubWorlds ?? [hub()])
+            .reduce((count, world) => count + world.world.allAgents().length, 0);
           const runtime = opts.llm.reconfigure(config);
           const controlledWorlds = hubWorlds ?? [hub()];
           for (const world of controlledWorlds) {
@@ -864,12 +874,66 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.end('action 需为 walk/interact（含 target）或 say（含 text）');
         return;
       }
+      if (url.pathname === '/api/workspace' && req.method === 'GET') {
+        if (!opts.workspace) { res.writeHead(404); res.end('工作空间管理未启用'); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+          ok: true,
+          workspace: opts.workspace.current.meta,
+          templates: WORLD_TEMPLATE_CATALOG,
+          safety: llmConfigurationSafety(),
+        }));
+        return;
+      }
+      if (url.pathname === '/api/workspace' && req.method === 'POST') {
+        if (!opts.workspace) { res.writeHead(404); res.end('工作空间管理未启用'); return; }
+        await settlePausedCognition();
+        const safety = llmConfigurationSafety();
+        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
+        const body = await readBody(req);
+        clearHubResources();
+        try {
+          const built = await opts.workspace.replace(body);
+          hubWorlds = adaptWorlds(built.worlds);
+          activeId = hubWorlds[0].meta.id;
+          seq = 0;
+          opts.llm?.setExpectedActiveAgents(
+            hubWorlds.reduce((count, world) => count + world.world.allAgents().length, 0),
+          );
+          bindHubResources();
+          paused = built.meta.startPaused;
+          if (!paused) startLoopGroup(hubWorlds.map((world) => world.loop));
+          opts.runtimeLog?.info(
+            'workspace',
+            `工作空间已加载 id=${built.meta.id} worlds=${built.meta.worldIds.join(',')} paused=${paused}`,
+          );
+          res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            ok: true,
+            workspace: built.meta,
+            active: activeId,
+            worlds: hubWorlds.map((world) => world.meta),
+          }));
+        } catch (error) {
+          const current = opts.workspace.current;
+          hubWorlds = adaptWorlds(current.worlds);
+          activeId = hubWorlds[0].meta.id;
+          bindHubResources();
+          res.writeHead(400);
+          res.end(error instanceof Error ? error.message : '工作空间配置无效');
+        }
+        return;
+      }
       if (url.pathname === '/api/worlds' && req.method === 'GET') {
         const list = hubWorlds
           ? hubWorlds.map((x) => ({ ...x.meta, clock: `${x.time.state.day}天 ${x.time.state.minutesOfDay}分` }))
           : [{ ...hub().meta, clock: `${hub().time.state.day}天 ${hub().time.state.minutesOfDay}分` }];
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true, active: activeId, worlds: list }));
+        res.end(JSON.stringify({
+          ok: true, active: activeId, worlds: list,
+          workspaceId: opts.workspace?.current.meta.id ?? null,
+          workspaceName: opts.workspace?.current.meta.name ?? null,
+        }));
         return;
       }
       if (url.pathname === '/api/world/switch' && req.method === 'POST') {
@@ -977,7 +1041,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             gameTime: world.time.state.totalMinutes,
             payload: {
               kind: 'agent_profile_updated', fromId: agentId, toId: agentId,
-              changedFields, profileHash: hash, scope: 'all_worlds', memoryAgentIds: [],
+              changedFields, profileHash: hash, scope: 'loaded_worlds', memoryAgentIds: [],
             },
           });
         });
@@ -991,7 +1055,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
           ok: true,
-          scope: 'all_worlds',
+          scope: 'loaded_worlds',
           worldIds: controlledWorlds.map((world) => world.meta.id),
           profile: profiles[0],
           profileHash: profileSetHash(selected.world),
@@ -1297,12 +1361,10 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       new Promise<void>((r) => {
         if (hubWorlds) {
           for (const w of hubWorlds) w.loop.stop();
-          for (const u of unsubLogs) u();
         } else {
           hub().loop.stop();
-          for (const u of unsubLogs) u();
         }
-        for (const perception of perceptionByWorld.values()) perception.dispose();
+        clearHubResources();
         clearInterval(interval);
         clearInterval(heartbeat);
         for (const c of clients) c.end();

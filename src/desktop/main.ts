@@ -8,12 +8,12 @@ import { spawn, spawnSync } from 'node:child_process';
 import { LLMGateway } from '../llm/gateway';
 import { gatewayConfigFromEnv } from '../llm/provider-config';
 import { resolveOllamaProfile } from '../llm/model-profiles';
-import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../engine/world-factory';
+import { startAllWorlds } from '../engine/world-factory';
 import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
 import { createTownServer, type TownWebServer } from '../web/server';
 import { loadAgentProfileConfig } from '../store/agent-profile-config';
-import { assertFreshWorldDbPaths, type TownWebArgs } from '../cli/town-web-config';
 import { BackendRuntimeLog, runtimeLogPathForDatabase } from '../runtime/backend-log';
+import { ExperimentWorkspaceRuntime } from '../engine/workspace';
 
 const APP_NAME = 'MultiagentTown';
 const DEFAULT_PORT = 8898;
@@ -274,18 +274,10 @@ async function main(): Promise<void> {
 
   const models = await ensureLocalOllama();
   const profileStorePath = join(appRoot, 'agent-profiles.json');
-  const profileOverrides = loadAgentProfileConfig(profileStorePath);
   const port = await availablePort(args.port);
-  const webArgs: TownWebArgs = {
-    speed: args.speed,
-    port,
-    dbPath,
-    dbPathExplicit: false,
-  };
-  const dbPaths = assertFreshWorldDbPaths(webArgs);
   const gateway = new LLMGateway({
     ...gatewayConfigFromEnv(),
-    expectedActiveAgents: 18,
+    expectedActiveAgents: 6,
     onDiagnostic: (event) => {
       const message = JSON.stringify(event);
       if (event.status === 'failed') runtimeLog?.error('llm-request', message);
@@ -293,23 +285,24 @@ async function main(): Promise<void> {
     },
   });
   if (args.smoke) await verifyRealModel(gateway);
-  const worlds = [
-    createManagedWorld('w1', 'mem-on', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w1, profileOverrides }),
-    createManagedWorld('w2', 'mem-off', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w2, profileOverrides }),
-    createManagedWorld('w3', 'rumor', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w3, profileOverrides }),
-  ];
-  const primary = worlds[0];
+  const workspace = await ExperimentWorkspaceRuntime.create({
+    name: 'AI 小镇实验', seed: 1, worldSpeed: args.speed, defaultExperimentDays: 30,
+    worldKinds: ['mem-on'], startPaused: false,
+  }, {
+    gateway,
+    runtimeLog,
+    profileOverrides: () => loadAgentProfileConfig(profileStorePath),
+    nextDatabasePath: () => uniqueDatabasePath(appRoot),
+  }, dbPath);
+  const primary = workspace.current.worlds[0];
   let webServer: TownWebServer | null = null;
   let closing = false;
   const close = async (): Promise<void> => {
     if (closing) return;
     closing = true;
-    stopAllWorlds(worlds);
     if (webServer) await webServer.close();
-    await Promise.all(worlds.map((world) => world.loop.drain()));
-    await Promise.all(worlds.map((world) => world.mind.dispose()));
+    await workspace.dispose();
     await gateway.drain();
-    for (const world of worlds) world.db.raw.close();
   };
   const closeProcess = () => void close().finally(() => {
     runtimeLog?.close();
@@ -329,14 +322,15 @@ async function main(): Promise<void> {
       rels: primary.mind.rels,
       rumors: primary.mind.rumors,
       experiment: primary.experiment ?? undefined,
-      worlds,
+      worlds: workspace.current.worlds,
+      workspace,
       port,
       llm: gateway,
       publicDir,
       profileStorePath,
       runtimeLog,
     });
-    startAllWorlds(worlds);
+    startAllWorlds(workspace.current.worlds);
     const url = `http://127.0.0.1:${webServer.port}/`;
     console.log(`本地模型：${models.join(' + ')}`);
     console.log(`实验数据库：${dirname(dbPath)}`);
@@ -349,9 +343,11 @@ async function main(): Promise<void> {
       if (!state.ok) throw new Error(`可执行文件 HTTP 冒烟失败（${state.status}）`);
       const snapshot = await state.json() as { agents?: unknown[]; worldId?: string };
       if (!Array.isArray(snapshot.agents) || snapshot.agents.length !== 6 || snapshot.worldId !== 'w1') {
-        throw new Error('可执行文件世界快照不符合三世界基线');
+        throw new Error('可执行文件世界快照不符合单世界基线');
       }
-      console.log('SMOKE_OK real_model=true worlds=3 agents_per_world=6');
+      const registry = await fetch(`${url}api/worlds`, { signal: AbortSignal.timeout(10_000) }).then((response) => response.json()) as { worlds?: unknown[] };
+      if (!Array.isArray(registry.worlds) || registry.worlds.length !== 1) throw new Error('默认工作空间没有按单世界加载');
+      console.log('SMOKE_OK real_model=true worlds=1 agents_per_world=6 selective_loading=true');
       await close();
       runtimeLog.close();
     }

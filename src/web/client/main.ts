@@ -63,6 +63,31 @@ interface WorldListItem {
   badges?: { label: string; value: string; tone: 'on' | 'off' | 'neutral' }[];
 }
 
+type WorkspaceWorldKind = 'mem-on' | 'mem-off' | 'rumor';
+interface WorkspaceTemplateView {
+  kind: WorkspaceWorldKind;
+  id: string;
+  name: string;
+  description: string;
+}
+interface WorkspaceMetaView {
+  id: string;
+  name: string;
+  seed: number;
+  worldSpeed: number;
+  defaultExperimentDays: number;
+  worldKinds: WorkspaceWorldKind[];
+  worldIds: string[];
+  worldCount: number;
+  startPaused: boolean;
+  createdAt: string;
+}
+interface WorkspaceView {
+  workspace: WorkspaceMetaView;
+  templates: WorkspaceTemplateView[];
+  safety: LLMConfigSafetyView;
+}
+
 type ConfigurableLLMMode = 'mock' | 'ollama' | 'api';
 interface LLMRuntimeView {
   mode: ConfigurableLLMMode | 'custom';
@@ -195,6 +220,10 @@ let toastTimer = 0;
 let llmRuntime: LLMRuntimeView | null = null;
 let llmConfigEndpointAvailable = true;
 let llmConfigOperationActive = false;
+let loadedWorldCount = 1;
+let workspaceEndpointAvailable = true;
+let workspaceCreateOperationActive = false;
+let workspaceSafetyReady = false;
 // 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
 let lastGridW = 0;
 let lastGridH = 0;
@@ -270,6 +299,8 @@ async function main(): Promise<void> {
   bindNarrativeFollow();
   bindPlayBar();
   bindResearchDialogs();
+  bindWorkspaceConfiguration();
+  void loadWorkspaceConfiguration(true);
   bindLLMConfiguration();
   void loadLLMConfiguration(true);
   updatePanelDeps({
@@ -857,11 +888,13 @@ function bindResearchDialogs(): void {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profile }),
       });
       if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const saveResult = await response.json() as { worldIds?: string[] };
+      const syncedWorldCount = Array.isArray(saveResult.worldIds) ? saveResult.worldIds.length : loadedWorldCount;
       const refreshed = await fetchWorldSnapshot(activeWorldId);
       snap = refreshed;
       applySnapshot();
       (document.getElementById('agent-editor') as HTMLDialogElement).close();
-      showToast('居民档案已同步到三个世界，并写入档案指纹', 'success');
+      showToast(`居民档案已同步到当前工作空间的 ${syncedWorldCount} 个世界，并写入档案指纹`, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '居民档案保存失败', 'error');
     } finally {
@@ -1145,7 +1178,7 @@ function renderLLMConfiguration(config: LLMRuntimeView, safety: LLMConfigSafetyV
   const safetyElement = document.getElementById('llm-config-safety')!;
   safetyElement.classList.toggle('ready', safety.ready);
   safetyElement.textContent = safety.ready
-    ? '当前满足安全切换条件：可先测试连接，再应用到三个世界的全部 Agent。'
+    ? `当前满足安全切换条件：可先测试连接，再应用到已加载的 ${loadedWorldCount} 个世界。`
     : `配置保护：${safety.reasons.join('；') || '当前暂不可切换'}。`;
   for (const id of ['llm-config-test', 'llm-config-apply']) {
     const button = document.getElementById(id) as HTMLButtonElement | null;
@@ -1204,7 +1237,7 @@ function bindLLMConfiguration(): void {
     llmConfigOperationActive = true;
     button.disabled = true;
     try {
-      if (action === 'apply' && !window.confirm('将该模型运行方式应用到三个世界的全部 Agent？配置变更会写入研究日志。')) return;
+      if (action === 'apply' && !window.confirm(`将该模型运行方式应用到当前工作空间已加载的 ${loadedWorldCount} 个世界？配置变更会写入研究日志。`)) return;
       const response = await fetch(action === 'test' ? '/api/llm/test' : '/api/llm/config', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(llmConfigurationBody()),
       });
@@ -1214,7 +1247,7 @@ function bindLLMConfiguration(): void {
         probe?: { model?: string | null; latencyMs?: number; inputTokens?: number; outputTokens?: number };
       };
       if (action === 'apply' && result.config) {
-        showToast(`${llmModeLabel(result.config.mode)}已应用到全部 Agent，并写入三个世界研究日志`, 'success');
+        showToast(`${llmModeLabel(result.config.mode)}已应用到全部 Agent，并写入 ${loadedWorldCount} 个世界的研究日志`, 'success');
         await loadLLMConfiguration(true);
       } else {
         const latency = Number(result.probe?.latencyMs) || 0;
@@ -1235,6 +1268,125 @@ function bindLLMConfiguration(): void {
   document.getElementById('llm-config-apply')?.addEventListener('click', () => void run('apply'));
 }
 setInterval(() => void loadLLMConfiguration(false), 3000);
+
+function workspaceKindLabel(kind: WorkspaceWorldKind): string {
+  if (kind === 'mem-on') return '关系记忆开';
+  if (kind === 'mem-off') return '关系记忆关';
+  return '谣言传播';
+}
+
+function renderWorkspaceSafety(safety: LLMConfigSafetyView): void {
+  workspaceSafetyReady = safety.ready;
+  const element = document.getElementById('workspace-create-safety');
+  if (!element) return;
+  element.classList.toggle('ready', safety.ready);
+  element.textContent = safety.ready
+    ? '当前状态可安全创建。旧工作空间的数据库与日志会完整保留。'
+    : `创建保护：${safety.reasons.join('；') || '当前暂不可创建'}。`;
+  const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
+  if (submit) submit.disabled = workspaceCreateOperationActive || !workspaceEndpointAvailable || !safety.ready;
+}
+
+function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): void {
+  workspaceEndpointAvailable = true;
+  loadedWorldCount = Math.max(1, view.workspace.worldCount);
+  const summary = document.getElementById('workspace-summary');
+  if (summary) {
+    const worlds = view.workspace.worldKinds.map(workspaceKindLabel).join(' / ');
+    summary.textContent = `${view.workspace.name} · ${loadedWorldCount}/3 世界 · ${worlds}`;
+    summary.title = `工作空间 ${view.workspace.id} · 种子 ${view.workspace.seed}`;
+  }
+  renderWorkspaceSafety(view.safety);
+  const open = document.getElementById('workspace-create-open') as HTMLButtonElement | null;
+  if (open) open.disabled = false;
+  if (!populate) return;
+  const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
+  if (!form) return;
+  formControl<HTMLInputElement>(form, 'defaultExperimentDays').value = String(view.workspace.defaultExperimentDays);
+  const experimentDays = document.getElementById('exp-days') as HTMLInputElement | null;
+  if (experimentDays) experimentDays.value = String(view.workspace.defaultExperimentDays);
+}
+
+async function loadWorkspaceConfiguration(populate: boolean): Promise<void> {
+  try {
+    const response = await fetch('/api/workspace');
+    if (!response.ok) throw new Error(String(response.status));
+    renderWorkspaceConfiguration(await response.json() as WorkspaceView, populate);
+  } catch {
+    workspaceEndpointAvailable = false;
+    workspaceSafetyReady = false;
+    const summary = document.getElementById('workspace-summary');
+    if (summary) summary.textContent = '当前后台需安全重启后启用工作空间管理';
+    const safety = document.getElementById('workspace-create-safety');
+    if (safety) { safety.classList.remove('ready'); safety.textContent = '当前内存世界保持运行；安全重启后可创建独立小镇实验。'; }
+    const open = document.getElementById('workspace-create-open') as HTMLButtonElement | null;
+    const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
+    if (open) open.disabled = true;
+    if (submit) submit.disabled = true;
+  }
+}
+
+function bindWorkspaceConfiguration(): void {
+  const dialog = document.getElementById('workspace-create-dialog') as HTMLDialogElement | null;
+  const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
+  if (!dialog || !form) return;
+  const refreshWorldOptions = () => {
+    form.querySelectorAll<HTMLElement>('.workspace-world-option').forEach((option) => {
+      const checkbox = option.querySelector<HTMLInputElement>('input[name="worldKinds"]');
+      option.classList.toggle('active', checkbox?.checked === true);
+    });
+  };
+  form.querySelectorAll<HTMLInputElement>('input[name="worldKinds"]').forEach((input) => {
+    input.addEventListener('change', refreshWorldOptions);
+  });
+  refreshWorldOptions();
+  document.getElementById('workspace-create-open')?.addEventListener('click', () => {
+    if (!workspaceEndpointAvailable) return;
+    void loadWorkspaceConfiguration(false);
+    if (!dialog.open) dialog.showModal();
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!workspaceEndpointAvailable || workspaceCreateOperationActive) return;
+    const data = new FormData(form);
+    const worldKinds = data.getAll('worldKinds').map(String) as WorkspaceWorldKind[];
+    if (worldKinds.length < 1) {
+      showToast('请至少选择一个世界模板', 'error');
+      return;
+    }
+    const name = String(data.get('name') ?? '').trim();
+    if (!window.confirm(`创建“${name}”并加载 ${worldKinds.length} 个世界？当前工作空间将关闭，数据库与日志会保留。`)) return;
+    workspaceCreateOperationActive = true;
+    const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement;
+    submit.disabled = true;
+    try {
+      const response = await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          seed: Number(data.get('seed')),
+          defaultExperimentDays: Number(data.get('defaultExperimentDays')),
+          worldSpeed: Number(data.get('worldSpeed')),
+          worldKinds,
+          startPaused: data.has('startPaused'),
+        }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const result = await response.json() as { workspace?: WorkspaceMetaView };
+      showToast(`小镇实验“${result.workspace?.name ?? name}”已创建，正在载入`, 'success');
+      dialog.close();
+      window.setTimeout(() => window.location.reload(), 250);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '小镇实验创建失败', 'error');
+      await loadWorkspaceConfiguration(false);
+    } finally {
+      workspaceCreateOperationActive = false;
+      submit.disabled = !workspaceEndpointAvailable || !workspaceSafetyReady;
+    }
+  });
+}
+setInterval(() => void loadWorkspaceConfiguration(false), 3000);
 
 function showToast(message: string, tone: 'info' | 'success' | 'error' = 'info'): void {
   const toast = document.getElementById('ui-toast');
@@ -1805,6 +1957,7 @@ function bindControls(): void {
   setInterval(() => void pollNarrative(), 2000);
   // 平行世界：列出世界并切换（服务端切换活跃世界，事件带 worldId 过滤）
   void fetch('/api/worlds').then((r) => r.json()).then((w: { active?: string; worlds: WorldListItem[] }) => {
+    loadedWorldCount = Math.max(1, w.worlds.length);
     const sel = document.getElementById('world-select') as HTMLSelectElement;
     sel.replaceChildren(...w.worlds.map((x) => {
       const option = document.createElement('option');

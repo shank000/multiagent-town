@@ -18,7 +18,7 @@
 - 居民会自主移动、工作、使用公共生活物件、感知日常环境、闲聊、经营关系、传播消息、参加公开活动、睡觉；
 - 浏览器可实时观察 48×44 小镇（Canvas 2D 像素渲染），也可“扮演”任意 NPC 下达指令；
 - 外部 AI（Claude Code / OpenClaw / 任意智能体）可通过 `town-agent` 协议以“访客”身份住进小镇。
-- 三个平行世界提供关系记忆开/关与谣言传播处理，支持伙伴选择因果实验和结构化社会网络测量。
+- 工作空间按需加载关系记忆开/关与谣言传播三个世界模板中的 1–3 个，支持单世界观察、双组对照、三组并行和结构化社会网络测量。
 
 **核心设计取舍**：
 - **零运行时依赖**：不使用 React/Phaser/Fastify 等框架；后端只用 Node 22+ 内置 `node:http`、`node:sqlite`，前端用原生 Canvas + SSE。
@@ -105,9 +105,9 @@ WorldLoop.step()
 3. 通知 `MemoryWriter`（把事件变成记忆流）；
 4. 通知 `PerceptionEngine`（访客的注意力缓冲）。
 
-### 3.3 多世界单服务模型
+### 3.3 选择性多世界单服务模型
 
-- 一个 Web 服务同时承载 `w1`、`w2`、`w3` 三个独立世界循环；每个世界使用独立 SQLite、事件日志、心智、感知与实验实例；
+- 一个 Web 服务承载当前工作空间选中的 1–3 个独立世界循环；每个已加载世界使用独立 SQLite、事件日志、心智、感知与实验实例；
 - REST 读写通过 `worldId` 定址，SSE 快照与事件携带 `worldId`，客户端仅消费当前观察世界；
 - LLM 调用全部**异步非阻塞**，agent 处于 `thinking` 状态等待结果，tick 不等待；
 - 关闭顺序为停止定时器、等待实时 tick、心智写入与 LLM 请求结算，再关闭数据库；
@@ -314,10 +314,11 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 - 静态文件：`/`、`/stats.html`、`/logs.html`、`/client.js`、`/stats.js`、`/logs.js`、`/style.css`、`/assets/*`；
 - SSE：`GET /events`，200ms 推 `snapshot`，实时推 `event`；
 - 世界控制：`POST /api/world/control`（pause/resume/speed）；
+- 实验工作空间：`GET /api/workspace` 返回当前初始配置、模板与安全状态；`POST /api/workspace` 在暂停、无正式实验、无在途认知时创建全新数据库/日志并替换当前 1–3 个世界；
 - 数据统计：`GET /api/stats?worldId=w1[&day=N]`（按世界定址，日级口径一致）；
 - 后端日志：`GET /api/runtime-logs` 只读筛选当前进程的有界内存日志，`GET /api/runtime-logs/download` 下载本次运行的完整脱敏 JSONL；服务端持有唯一文件路径，不接受浏览器路径参数；
 - 声望/关系：`GET /api/status`、`GET /api/relationships/:id`；
-- 居民档案：`PUT /api/agents/:id/profile`，按稳定 ID 同步全部平行世界并记录 `profile_set_hash`；
+- 居民档案：`PUT /api/agents/:id/profile`，按稳定 ID 同步当前工作空间已加载世界并记录 `profile_set_hash`；
 - 社会互动：`POST /api/social/interact`，作为当前世界的显式研究者干预写入事件、记忆范围与关系证据；
 - 心智面板：`GET /api/agents/:id/mind`（记忆/反思/计划/对话）；
 - 扮演：`POST/DELETE /api/player/:id/act`；
@@ -339,7 +340,7 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 | 命令 | 等价脚本 | 用途 |
 |---|---|---|
 | `pnpm town [--until-minutes N] [--speed S] [--db PATH]` | `src/cli/run.ts` | 无界面观察台/虚拟时钟快跑 |
-| `pnpm town-web [--port P] [--speed S] [--db PATH]` | `src/cli/town-web.ts` | 启动浏览器版小镇 |
+| `pnpm town-web [--port P] [--speed S] [--db PATH] [--worlds KINDS] [--workspace-name NAME] [--seed N]` | `src/cli/town-web.ts` | 启动选择性世界浏览器小镇 |
 | `pnpm replay --day N [--db PATH]` | `src/cli/replay.ts` | 回放某天事件时间线 |
 | `pnpm interview -- --agent 名字 --question "问题"` | `src/cli/interview.ts` | 上帝视角访谈 |
 | `pnpm experiment [--days N] [--seeds N]` | `src/cli/experiment.ts` | 伙伴选择预实验（研究） |
@@ -406,9 +407,9 @@ LLM_PROVIDER=ollama OLLAMA_PROFILE=qwen3-single pnpm town-web --port 8787
 - `LLM_MAX_QUEUE`（Ollama 默认 `96`，有界等待容量）；
 - `TOWN_URL`（仅 `town-agent` 使用，默认 `http://127.0.0.1:8787`）
 
-Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为指定居民选模型；否则 small 层处理动作、对话、规划和后台评分，large 层处理深度日记反思。居民共享模型服务与权重，persona、记忆、关系、日记和心智状态在应用层独立。网关按“对话—动作—规划—反思—后台”调度，同级请求按世界轮询；等待队列默认在容量的 75% 进入背压、降到 50% 后恢复。三个世界按同一批次推进或等待，避免条件组时钟偏移。动作、规划、对话、摘要与日记使用请求级 JSON Schema；反思以有界结构化输出配合证据投影，在保留心态和信念更新的同时避免长思考阻塞与新增事实。本地推理的 `costYuan` 恒为 0。
+Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为指定居民选模型；否则 small 层处理动作、对话、规划和后台评分，large 层处理深度日记反思。居民共享模型服务与权重，persona、记忆、关系、日记和心智状态在应用层独立。网关按“对话—动作—规划—反思—后台”调度，同级请求按世界轮询；等待队列默认在容量的 75% 进入背压、降到 50% 后恢复。当前加载的 1–3 个世界按同一批次推进或等待，避免条件组时钟偏移。动作、规划、对话、摘要与日记使用请求级 JSON Schema；反思以有界结构化输出配合证据投影，在保留心态和信念更新的同时避免长思考阻塞与新增事实。本地推理的 `costYuan` 恒为 0。
 
-Web 研究台通过同一个 `LLMGateway` 运行时切换 `MockProvider`、`OllamaProvider` 与 API provider。切换是共享网关上的原子操作，不重建居民、记忆库、关系库或平行世界。服务端仅在人物对话完整结束、世界暂停、正式实验停止、居民思考已结算且活动请求与等待队列均为空时接受变更，并同步重设 provider 对应的并发、队列与吞吐样本。候选配置先执行独立 structured-output 探针；探针不进入世界状态。每次生效配置以 `llm_runtime_config_changed` 事件写入三个世界，payload 记录模式、模型、上下文窗口和配置修订号，不记录 API Key。API Key 仅保存在当前服务进程内存，GET 状态只返回 `hasCredential`。
+Web 研究台通过同一个 `LLMGateway` 运行时切换 `MockProvider`、`OllamaProvider` 与 API provider。切换是共享网关上的原子操作，不重建居民、记忆库、关系库或已加载世界。服务端仅在人物对话完整结束、世界暂停、正式实验停止、居民思考已结算且活动请求与等待队列均为空时接受变更，并同步重设 provider 对应的并发、队列与吞吐样本。候选配置先执行独立 structured-output 探针；探针不进入世界状态。每次生效配置以 `llm_runtime_config_changed` 事件写入当前工作空间的全部世界，payload 记录模式、模型、上下文窗口和配置修订号，不记录 API Key。API Key 仅保存在当前服务进程内存，GET 状态只返回 `hasCredential`。
 
 动作 Schema 将 `idle + target:null` 与 `move_to/interact + 已知对象 id` 建模为互斥分支。应用层仍执行第二道校验：安全清理 `idle` 的冗余目标；其他错误把校验原因加入低温修正请求；两次无效时生成不含技术文本的短时休息动作。异常状态以 `action_decision_quality` 结构化事件留存，并从人物记忆、叙事接口和现场气泡中隔离；人物 `thought` 的 `decisionQuality` 字段提供 `valid/normalized/repaired/safe_fallback`、尝试次数、校验器版本和模型信息，支持按世界与居民计算动作修复率。
 
@@ -495,12 +496,14 @@ pnpm build:web     # 重新打包研究台、统计页与日志页脚本
 | POST | `/api/world/control` | `{action:"pause"|"resume"|"speed", value?}` |
 | GET | `/api/worlds` | 平行世界元数据与当前活跃世界 |
 | POST | `/api/world/switch` | 切换主控制台观察世界 |
+| GET | `/api/workspace` | 当前工作空间初始配置、世界模板与安全状态 |
+| POST | `/api/workspace` | 从初始配置创建并加载新的 1–3 世界小镇 |
 | GET | `/api/stats?worldId=w1[&day=N]` | 指定世界的数据统计报告 |
 | GET | `/api/runtime-logs?level=all&q=&limit=500` | 当前进程的脱敏后端日志 |
 | GET | `/api/runtime-logs/download` | 保存本次运行的完整 JSONL 日志 |
 | GET | `/api/status` | 声望榜（Weighted PageRank） |
 | GET | `/api/relationships/:id` | 某 agent 的关系 + 声望 |
-| PUT | `/api/agents/:id/profile` | 同步更新三世界居民档案、初始状态、头像与档案指纹 |
+| PUT | `/api/agents/:id/profile` | 同步更新已加载世界的居民档案、初始状态、头像与档案指纹 |
 | POST | `/api/social/interact` | 在指定世界记录观察/帮助/分享/邀请/协作干预 |
 | GET | `/api/agents/:id/mind` | 记忆/反思/计划/对话 |
 | POST | `/api/player/:id/act` | 扮演指令（`{instruction}`） |

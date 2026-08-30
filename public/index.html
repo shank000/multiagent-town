@@ -141,6 +141,10 @@
       </header>
       <div class="inspector-scroll viewport-body">
         <section class="world-card glass-card" aria-label="当前世界状态">
+          <div class="workspace-strip">
+            <div><span class="section-kicker">EXPERIMENT WORKSPACE</span><strong id="workspace-summary">载入实验工作空间……</strong></div>
+            <button class="mini-action" id="workspace-create-open" type="button">＋ 新建小镇</button>
+          </div>
           <div class="world-card-top">
             <div><span class="section-kicker">当前世界</span><div id="world-desc">载入世界状态……</div></div>
             <div class="card" id="run-status" role="status" aria-live="polite"><div class="dot"></div><span>实验</span><b>未运行</b></div>
@@ -237,9 +241,33 @@
     <button id="play-send">执行</button>
     <button id="play-exit">退出扮演</button>
   </div>
+  <dialog id="workspace-create-dialog" class="workspace-dialog workspace-create-dialog" aria-labelledby="workspace-create-title">
+    <form id="workspace-create-form">
+      <header class="dialog-head"><div><span class="section-kicker">NEW EXPERIMENT WORKSPACE</span><h2 id="workspace-create-title">创建小镇实验</h2><p>每次创建使用全新的数据库、日志和世界状态；请选择实际需要运行的处理世界。</p></div><button class="dialog-close" type="button" data-close-dialog="workspace-create-dialog" aria-label="关闭">×</button></header>
+      <div class="dialog-body">
+        <section class="editor-section"><h3>小镇初始配置</h3><div class="editor-grid">
+          <label class="wide">工作空间名称<input name="name" maxlength="60" value="关系记忆实验" required /></label>
+          <label>随机种子<input name="seed" type="number" min="1" max="2147483647" value="1" required /></label>
+          <label>默认实验天数<input name="defaultExperimentDays" type="number" min="1" max="365" value="30" required /></label>
+          <label>世界运行速度<select name="worldSpeed"><option value="1">1× · 真实模型推荐</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option><option value="60">60× · 高速观察</option></select></label>
+          <label class="workspace-pause-option"><input name="startPaused" type="checkbox" checked /> 创建后保持暂停，确认配置再运行</label>
+        </div></section>
+        <section class="editor-section"><h3>选择加载的世界 <small>至少 1 个，最多 3 个</small></h3>
+          <div id="workspace-world-options" class="workspace-world-options">
+            <label class="workspace-world-option active"><input type="checkbox" name="worldKinds" value="mem-on" checked /><span><b>关系记忆 · 开</b><small>历史可见 · 馈礼开启 · 联合处理展示</small></span></label>
+            <label class="workspace-world-option"><input type="checkbox" name="worldKinds" value="mem-off" /><span><b>关系记忆 · 关</b><small>历史隐藏 · 馈礼关闭 · 零处理参考</small></span></label>
+            <label class="workspace-world-option"><input type="checkbox" name="worldKinds" value="rumor" /><span><b>谣言传播</b><small>秘密注入 · 选择性披露 · 传播链观察</small></span></label>
+          </div>
+          <p class="workspace-create-note">加载多个世界时共享同一模型调度器并保持时钟同步；未选择的世界不会创建引擎、数据库或模型任务。</p>
+          <div id="workspace-create-safety" class="model-config-safety">创建前需要暂停当前小镇、停止正式实验并等待对话和推理队列清空。</div>
+        </section>
+      </div>
+      <footer class="dialog-actions"><button type="button" class="icon-btn" data-close-dialog="workspace-create-dialog">取消</button><button id="workspace-create-submit" type="submit" class="icon-btn primary">创建独立工作空间</button></footer>
+    </form>
+  </dialog>
   <dialog id="agent-editor" class="workspace-dialog" aria-labelledby="agent-editor-title">
     <form id="agent-editor-form">
-      <header class="dialog-head"><div id="agent-editor-avatar"></div><div><span class="section-kicker">SYNCED RESEARCH PROFILE</span><h2 id="agent-editor-title">编辑居民档案</h2><p>身份与初始条件按稳定居民 ID 同步到三个平行世界。</p></div><button class="dialog-close" type="button" data-close-dialog="agent-editor" aria-label="关闭">×</button></header>
+      <header class="dialog-head"><div id="agent-editor-avatar"></div><div><span class="section-kicker">SYNCED RESEARCH PROFILE</span><h2 id="agent-editor-title">编辑居民档案</h2><p>身份与初始条件按稳定居民 ID 同步到当前工作空间已加载的世界。</p></div><button class="dialog-close" type="button" data-close-dialog="agent-editor" aria-label="关闭">×</button></header>
       <div class="dialog-body">
         <section class="editor-section"><h3>身份背景</h3><div class="editor-grid">
           <label>姓名<input name="name" maxlength="16" required /></label><label>年龄<input name="age" type="number" min="16" max="100" required /></label>
