@@ -169,6 +169,8 @@ test('deep statistics escapes dynamic markup and keeps readable targets', () => 
   assert.match(statsClient, /r\.map\(\(c\) => `<td>\$\{esc\(c\)\}<\/td>`\)/);
   assert.match(statsClient, /option\.textContent = world\.kind/);
   assert.match(css, /#stats-page\s*\{[^}]*font-size:\s*14px/s);
+  assert.match(css, /#stats-page\s*\{[^}]*height:\s*100%;[^}]*overflow-y:\s*auto/s);
+  assert.match(css, /#stats-page\s*\{[^}]*scrollbar-gutter:\s*stable/s);
   assert.match(css, /\.stats-toolbar select,[\s\S]*?min-height:\s*40px/);
   assert.match(css, /\.hud-link\s*\{[^}]*min-height:\s*40px/s);
 });

@@ -954,9 +954,12 @@ canvas { display: block; }
 /* 数据统计与分析页 */
 #stats-page {
   width: 100%;
-  min-height: 100vh;
-  height: auto;
-  overflow: auto;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
   display: block;
   background:
     radial-gradient(circle at 10% 0%, rgba(98, 218, 203, .10), transparent 32%),
