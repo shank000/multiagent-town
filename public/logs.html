@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#090d15" />
+  <title>后端运行日志 · multiagent-town</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body id="logs-page">
+  <header id="logs-header">
+    <a class="hud-link" href="/">返回研究台</a>
+    <div class="logs-heading">
+      <span class="eyebrow">SYSTEM OBSERVABILITY</span>
+      <h1>后端运行日志</h1>
+      <p>查看当前服务进程的启动、模型、规划、对话、警告与异常记录。</p>
+    </div>
+    <div class="logs-toolbar" aria-label="后端日志查询条件">
+      <label class="logs-field">日志级别
+        <select id="logs-level">
+          <option value="all">全部级别</option>
+          <option value="error">仅错误</option>
+          <option value="warn">仅警告</option>
+          <option value="info">仅信息</option>
+          <option value="debug">仅调试</option>
+        </select>
+      </label>
+      <label class="logs-field logs-search">全文搜索
+        <input id="logs-search" type="search" maxlength="200" placeholder="来源、错误信息、agent ID…" autocomplete="off" />
+      </label>
+      <button id="logs-refresh" type="button">刷新</button>
+      <label class="logs-toggle"><input id="logs-auto" type="checkbox" checked /> 每 2 秒刷新</label>
+      <label class="logs-toggle"><input id="logs-follow" type="checkbox" checked /> 跟随最新</label>
+      <a id="logs-download" class="logs-download" href="/api/runtime-logs/download" download>保存完整 JSONL</a>
+      <span id="logs-status" role="status" aria-live="polite"></span>
+    </div>
+  </header>
+
+  <main id="logs-workspace">
+    <section id="logs-meta" class="logs-meta" aria-label="日志文件信息">
+      <div><span>当前会话</span><strong id="logs-session">读取中</strong></div>
+      <div><span>记录数量</span><strong id="logs-count">—</strong></div>
+      <div><span>文件大小</span><strong id="logs-size">—</strong></div>
+      <div class="logs-path"><span>日志文件</span><code id="logs-path">读取中</code><button id="logs-copy-path" type="button">复制路径</button></div>
+    </section>
+    <section class="logs-console" aria-labelledby="logs-console-title">
+      <div class="logs-console-head">
+        <div><span class="eyebrow">LIVE PROCESS STREAM</span><h2 id="logs-console-title">当前进程</h2></div>
+        <span id="logs-visible-count">0 条可见</span>
+      </div>
+      <ol id="logs-root" aria-busy="true" aria-live="polite"></ol>
+    </section>
+  </main>
+  <footer id="logs-footer">后端日志与三个世界的社会研究事件库相互独立；敏感凭据在写入前统一脱敏。</footer>
+  <script src="/logs.js"></script>
+</body>
+</html>

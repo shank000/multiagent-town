@@ -14,6 +14,7 @@ MultiAgent Town · Windows x64 使用说明
 数据位置
 每次运行创建独立的三世界 SQLite 实验数据库，保存在：
 %LOCALAPPDATA%\MultiagentTown\runs
+同目录的 town-….runtime.jsonl 保存本次后端运行日志。研究控制台顶栏“后端日志”支持筛选、查看、复制路径和保存完整文件。
 
 界面端口
 默认从 8898 开始自动选择空闲端口。启动窗口会显示实际地址。

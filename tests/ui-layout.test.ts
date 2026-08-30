@@ -14,6 +14,8 @@ const avatarClient = readFileSync(`${root}/src/web/client/avatar.ts`, 'utf8');
 const server = readFileSync(`${root}/src/web/server.ts`, 'utf8');
 const statsHtml = readFileSync(`${root}/public/stats.html`, 'utf8');
 const statsClient = readFileSync(`${root}/src/web/client/stats.ts`, 'utf8');
+const logsHtml = readFileSync(`${root}/public/logs.html`, 'utf8');
+const logsClient = readFileSync(`${root}/src/web/client/logs.ts`, 'utf8');
 const packageJson = readFileSync(`${root}/package.json`, 'utf8');
 
 test('research console exposes town, relationship and inspector viewports simultaneously', () => {
@@ -181,6 +183,23 @@ test('deep statistics stays world-scoped, read-only and race-safe', () => {
   assert.doesNotMatch(statsClient, /\/api\/world\/switch/);
 });
 
+test('后端日志入口提供筛选、跟随、路径复制和完整文件保存', () => {
+  assert.match(html, /href="\/logs\.html"[^>]*>后端日志<\/a>/);
+  for (const id of [
+    'logs-level', 'logs-search', 'logs-refresh', 'logs-auto', 'logs-follow',
+    'logs-download', 'logs-copy-path', 'logs-path', 'logs-root',
+  ]) assert.match(logsHtml, new RegExp(`id=["']${id}["']`));
+  assert.match(logsHtml, /href="\/api\/runtime-logs\/download"/);
+  assert.match(logsHtml, /敏感凭据在写入前统一脱敏/);
+  assert.match(logsClient, /new URLSearchParams\(\{ level, q: search, limit: '1000' \}\)/);
+  assert.match(logsClient, /activeController\?\.abort\(\)/);
+  assert.match(logsClient, /navigator\.clipboard\.writeText\(lastPath\)/);
+  assert.match(server, /\/api\/runtime-logs\/download/);
+  assert.doesNotMatch(server, /searchParams\.get\(['"]path['"]\)/);
+  assert.match(css, /#logs-page\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(css, /#logs-root\s*\{[^}]*overflow:\s*auto/s);
+});
+
 test('deep statistics escapes dynamic markup and keeps readable targets', () => {
   assert.match(statsClient, /r\.map\(\(c\) => `<td>\$\{esc\(c\)\}<\/td>`\)/);
   assert.match(statsClient, /option\.textContent = world\.kind/);
@@ -194,4 +213,5 @@ test('deep statistics escapes dynamic markup and keeps readable targets', () => 
 test('web build emits both research console and statistics clients', () => {
   assert.match(packageJson, /src\/web\/client\/main\.ts[^\n]+public\/client\.js/);
   assert.match(packageJson, /src\/web\/client\/stats\.ts[^\n]+public\/stats\.js/);
+  assert.match(packageJson, /src\/web\/client\/logs\.ts[^\n]+public\/logs\.js/);
 });

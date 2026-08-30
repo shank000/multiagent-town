@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LLMDeadlineExceededError, LLMGateway, LLMGatewayBusyError, LLMQueueFullError, LLMQueueWaitExceededError } from '../src/llm/gateway';
+import { LLMDeadlineExceededError, LLMGateway, LLMGatewayBusyError, LLMQueueFullError, LLMQueueWaitExceededError, type LLMGatewayDiagnostic } from '../src/llm/gateway';
 import { StubProvider } from './helpers';
 import type { ChatMessage, LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 
@@ -81,6 +81,41 @@ test('重试耗尽后抛出最后一次错误', async () => {
   const g = new LLMGateway({ provider: stub, retries: 2, backoffMs: 1 });
   await assert.rejects(() => g.complete(req([ctxUser(mockCtx)])), /x3/);
   assert.equal(stub.calls, 3);
+});
+
+test('请求级诊断只记录模型元数据、耗时与成功失败状态', async () => {
+  const diagnostics: LLMGatewayDiagnostic[] = [];
+  const success = new LLMGateway({ provider: 'mock', onDiagnostic: (event) => diagnostics.push(event) });
+  await success.complete({
+    ...req([ctxUser(mockCtx)]), agentId: 'agent:1', scopeId: 'w2', priority: 'action',
+  });
+  assert.equal(diagnostics.length, 1);
+  assert.deepEqual(
+    {
+      status: diagnostics[0].status,
+      provider: diagnostics[0].provider,
+      template: diagnostics[0].template,
+      agentId: diagnostics[0].agentId,
+      scopeId: diagnostics[0].scopeId,
+      priority: diagnostics[0].priority,
+      error: diagnostics[0].error,
+    },
+    {
+      status: 'completed', provider: 'mock', template: 'action_decision', agentId: 'agent:1',
+      scopeId: 'w2', priority: 'action', error: null,
+    },
+  );
+  assert.ok(diagnostics[0].wallMs >= 1);
+  assert.ok(diagnostics[0].inputTokens !== null);
+
+  const failed = new LLMGateway({
+    provider: new StubProvider([new Error('provider unavailable')]), retries: 0,
+    onDiagnostic: (event) => diagnostics.push(event),
+  });
+  await assert.rejects(() => failed.complete(req([ctxUser(mockCtx)])), /provider unavailable/);
+  assert.equal(diagnostics[1].status, 'failed');
+  assert.equal(diagnostics[1].error, 'provider unavailable');
+  assert.equal(diagnostics[1].inputTokens, null);
 });
 
 test('deepseek 模式缺 API key 直接报错', () => {

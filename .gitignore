@@ -3,6 +3,7 @@ data/
 .superpowers/
 public/client.js
 public/stats.js
+public/logs.js
 __pycache__/
 *.py[cod]
 .venv/

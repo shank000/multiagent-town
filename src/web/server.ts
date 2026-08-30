@@ -16,6 +16,7 @@ import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import type { LLMGateway } from '../llm/gateway';
+import type { BackendLogLevel, BackendRuntimeLog } from '../runtime/backend-log';
 import { gatewayConfigFromRuntimeInput, probeGatewayConfig } from '../llm/runtime-config';
 import { computeStanding } from '../engine/status';
 import { analyzeTown } from '../engine/analyze';
@@ -59,6 +60,8 @@ export interface TownWebOptions {
   llm?: LLMGateway;     // 共享推理调度状态与背压观测
   /** 桌面版持久档案文件；CLI 缺省为仅本次运行生效。 */
   profileStorePath?: string;
+  /** 当前后端进程的结构化运行日志；只读接口不会访问该路径之外的文件。 */
+  runtimeLog?: BackendRuntimeLog;
 }
 
 export interface TownWebServer {
@@ -306,6 +309,47 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.end(JSON.stringify({ ...report, worldId: selected.meta.id }));
         return;
       }
+      if (url.pathname === '/api/runtime-logs' && req.method === 'GET') {
+        if (!opts.runtimeLog) { res.writeHead(404); res.end('后端运行日志未启用'); return; }
+        const rawLevel = url.searchParams.get('level') ?? 'all';
+        if (!['all', 'debug', 'info', 'warn', 'error'].includes(rawLevel)) {
+          res.writeHead(400); res.end('level 必须是 all、debug、info、warn 或 error'); return;
+        }
+        const rawAfter = url.searchParams.get('after') ?? '0';
+        const rawLimit = url.searchParams.get('limit') ?? '500';
+        if (!/^\d+$/.test(rawAfter) || !/^\d+$/.test(rawLimit)) {
+          res.writeHead(400); res.end('after 与 limit 必须是非负整数'); return;
+        }
+        const after = Number(rawAfter);
+        const limit = Number(rawLimit);
+        if (!Number.isSafeInteger(after) || !Number.isSafeInteger(limit) || limit < 1 || limit > 2_000) {
+          res.writeHead(400); res.end('after 必须是安全整数，limit 必须在 1..2000'); return;
+        }
+        const search = (url.searchParams.get('q') ?? '').trim();
+        if (search.length > 200) { res.writeHead(400); res.end('搜索文本不能超过 200 个字符'); return; }
+        const snapshot = opts.runtimeLog.query({
+          level: rawLevel as BackendLogLevel | 'all', after, limit, search,
+        });
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify(snapshot));
+        return;
+      }
+      if (url.pathname === '/api/runtime-logs/download' && req.method === 'GET') {
+        if (!opts.runtimeLog) { res.writeHead(404); res.end('后端运行日志未启用'); return; }
+        const content = await readFile(opts.runtimeLog.filePath);
+        const safeName = opts.runtimeLog.fileName.replace(/[^A-Za-z0-9_.-]/g, '_');
+        res.writeHead(200, {
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'Content-Length': String(content.byteLength),
+          'Content-Disposition': `attachment; filename="${safeName}"`,
+          'Cache-Control': 'no-store',
+        });
+        res.end(content);
+        return;
+      }
       if (url.pathname === '/api/status' && req.method === 'GET') {
         if (!hub().mind.rels) {
           res.writeHead(404);
@@ -396,6 +440,10 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
               },
             });
           }
+          opts.runtimeLog?.info(
+            'llm-config',
+            `模型运行方式已切换 mode=${runtime.mode} provider=${runtime.provider} model=${runtime.model ?? 'none'} revision=${runtime.revision}`,
+          );
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ ok: true, config: runtime, probe, safety: llmConfigurationSafety() }));
         } catch (error) {
@@ -1200,14 +1248,17 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       }
       if (url.pathname === '/') return await file(res, resolve(publicDir, 'index.html'));
       if (url.pathname === '/stats.html') return await file(res, resolve(publicDir, 'stats.html'));
-      if (url.pathname === '/client.js' || url.pathname === '/stats.js' || url.pathname === '/style.css') {
+      if (url.pathname === '/logs.html') return await file(res, resolve(publicDir, 'logs.html'));
+      if (url.pathname === '/client.js' || url.pathname === '/stats.js' || url.pathname === '/logs.js' || url.pathname === '/style.css') {
         return await file(res, resolve(publicDir, url.pathname.slice(1)));
       }
       res.writeHead(404);
       res.end('not found');
     } catch (e) {
-      res.writeHead(500);
-      res.end(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.stack ?? e.message : String(e);
+      opts.runtimeLog?.error('web', `${req.method ?? 'UNKNOWN'} ${url.pathname}: ${message}`);
+      if (!res.headersSent) res.writeHead(500);
+      if (!res.writableEnded) res.end(e instanceof Error ? e.message : String(e));
     }
   });
 
@@ -1229,6 +1280,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
 
   await new Promise<void>((r) => server.listen(opts.port ?? 0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
+  opts.runtimeLog?.info('web', `研究控制台开始监听 http://127.0.0.1:${port}`);
   const interval = setInterval(() => {
     for (const snapshot of allSnapshots()) broadcast('snapshot', snapshot);
   }, snapshotMs);

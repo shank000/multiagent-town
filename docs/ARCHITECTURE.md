@@ -35,7 +35,7 @@
 | 运行时 | Node.js ≥ 22.5 |
 | 后端服务 | `node:http` + SSE（无框架） |
 | 数据库 | SQLite（`node:sqlite` 内置模块，零依赖） |
-| 前端 | 原生 Canvas 2D + DOM，`esbuild` 打包成 `public/client.js` |
+| 前端 | 原生 Canvas 2D + DOM，`esbuild` 分别打包研究台、统计页与日志页脚本 |
 | LLM | 自研 `LLMGateway`；`mock` / `deepseek` / `ollama` 三种 provider |
 | 测试 | `node:test`（内置），`tsx` 直接跑 TS |
 | 包管理 | pnpm（`package.json` + `pnpm-lock.yaml`） |
@@ -60,7 +60,7 @@
 │   静态文件 / SSE 事件流 / 世界控制 / 扮演接口 / 访客接口             │
 │   /api/state /api/status /api/relationships /api/agents/*/mind      │
 │   /api/guest/* /api/player/* /api/broadcast /api/rumor /api/stats   │
-│   static: index.html / stats.html / client.js / stats.js / style.css│
+│   static: index.html / stats.html / logs.html / client.js / *.js / style.css│
 └───────────────┬────────────────────────────────────────────────────┘
 ┌───────────────▼────────────────────────────────────────────────────┐
 │ 模拟引擎层 (src/engine + src/core)                                  │
@@ -169,12 +169,15 @@ multiagent-town/
 │   │   ├── memory.ts          # MemoryStore：记忆/日记/计划/持久会话与消息
 │   │   ├── relationships.ts   # 有向关系状态 + 多维证据账本
 │   │   └── agent-profile-config.ts # 桌面版/CLI 居民档案持久配置
+│   ├── runtime/
+│   │   └── backend-log.ts     # 当前进程 JSONL、内存窗口、控制台采集与凭据脱敏
 │   ├── web/                   # Web 服务与客户端
 │   │   ├── server.ts          # node:http 服务 + SSE + REST API
 │   │   ├── snapshot.ts        # 世界快照序列化
 │   │   └── client/            # 浏览器前端
 │   │       ├── main.ts        # 入口：SSE、状态同步、交互、扮演
 │   │       ├── stats.ts       # 数据统计页客户端（/stats.html，拉取 /api/stats）
+│   │       ├── logs.ts        # 后端日志页客户端（/logs.html，只读筛选与保存）
 │   │       ├── render.ts      # 地形/建筑/湖水/昼夜
 │   │       ├── tiles.ts       # 像素图集加载与瓦片映射
 │   │       ├── sprites.ts     # NPC 行走图/姿态
@@ -198,9 +201,11 @@ multiagent-town/
 ├── public/                    # 前端静态资源
 │   ├── index.html             # 小镇页面骨架
 │   ├── stats.html             # 数据统计与分析页面（/stats.html）
+│   ├── logs.html              # 当前后端进程日志页面（/logs.html）
 │   ├── style.css
 │   ├── client.js              # esbuild 产物 → 小镇页面（.gitignore）
 │   ├── stats.js               # esbuild 产物 → 统计页（.gitignore）
+│   ├── logs.js                # esbuild 产物 → 日志页（.gitignore）
 │   └── assets/                # 像素素材（见 ATTRIBUTION.md）
 ├── data/                      # 运行时 SQLite（.gitignore）
 ├── docs/                      # 设计/论文/竞赛文档
@@ -306,10 +311,11 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 ### 5.5 `src/web` —— Web 服务与浏览器
 
 **服务端**（`server.ts`）：
-- 静态文件：`/`、`/stats.html`、`/client.js`、`/stats.js`、`/style.css`、`/assets/*`；
+- 静态文件：`/`、`/stats.html`、`/logs.html`、`/client.js`、`/stats.js`、`/logs.js`、`/style.css`、`/assets/*`；
 - SSE：`GET /events`，200ms 推 `snapshot`，实时推 `event`；
 - 世界控制：`POST /api/world/control`（pause/resume/speed）；
 - 数据统计：`GET /api/stats?worldId=w1[&day=N]`（按世界定址，日级口径一致）；
+- 后端日志：`GET /api/runtime-logs` 只读筛选当前进程的有界内存日志，`GET /api/runtime-logs/download` 下载本次运行的完整脱敏 JSONL；服务端持有唯一文件路径，不接受浏览器路径参数；
 - 声望/关系：`GET /api/status`、`GET /api/relationships/:id`；
 - 居民档案：`PUT /api/agents/:id/profile`，按稳定 ID 同步全部平行世界并记录 `profile_set_hash`；
 - 社会互动：`POST /api/social/interact`，作为当前世界的显式研究者干预写入事件、记忆范围与关系证据；
@@ -321,6 +327,7 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 **客户端**（`src/web/client/*`）：
 - `main.ts`：SSE 接收快照与事件；相机/交互/扮演；
 - `stats.ts`：统计页客户端——独立选择观察世界，拉取 `/api/stats?worldId=...`，并以请求序号避免旧响应覆盖新选择；
+- `logs.ts`：后端日志客户端——级别/全文筛选、自动刷新、最新记录跟随、路径复制和完整文件保存；
 - `render.ts` + `tiles.ts` + `sprites.ts`：Canvas 像素世界（多图集回退链、程序化 fallback、屋顶剖切、昼夜、河光）；
 - `effects.ts`：粒子系统（Zzz/蒸汽/星光/信件/炊烟/萤火/雨丝/水花）；
 - `panel.ts`：侧边六标签面板（详情/档案/记忆/反思/对话/关系）；
@@ -474,7 +481,7 @@ pnpm experiment --days 30 --seeds 3
 ```bash
 pnpm typecheck     # tsc --noEmit
 pnpm test          # node:test 全量
-pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
+pnpm build:web     # 重新打包研究台、统计页与日志页脚本
 ```
 
 ---
@@ -489,6 +496,8 @@ pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
 | GET | `/api/worlds` | 平行世界元数据与当前活跃世界 |
 | POST | `/api/world/switch` | 切换主控制台观察世界 |
 | GET | `/api/stats?worldId=w1[&day=N]` | 指定世界的数据统计报告 |
+| GET | `/api/runtime-logs?level=all&q=&limit=500` | 当前进程的脱敏后端日志 |
+| GET | `/api/runtime-logs/download` | 保存本次运行的完整 JSONL 日志 |
 | GET | `/api/status` | 声望榜（Weighted PageRank） |
 | GET | `/api/relationships/:id` | 某 agent 的关系 + 声望 |
 | PUT | `/api/agents/:id/profile` | 同步更新三世界居民档案、初始状态、头像与档案指纹 |
@@ -543,7 +552,7 @@ pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
 
 ### 8.5 运行边界
 
-- `data/town.sqlite` 与 `public/client.js`、`public/stats.js` 由运行/构建生成，已加入 `.gitignore`；
+- 运行数据库/JSONL 与 `public/client.js`、`public/stats.js`、`public/logs.js` 由运行/构建生成，已加入 `.gitignore`；
 - 当前地图约 50 个对象、6 位常驻居民；更多居民/对象可直接由 seed 扩展；
 - 本地 TypeScript 小镇承担机制正控与可视化；正式比赛数据由 AgentSociety² 在线工作区生成，二者的证据范围分别记录在 `docs/runtime-validation.md`。
 
@@ -558,7 +567,7 @@ pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
 `data/town.sqlite` 保留事件/记忆/关系，支持 `pnpm replay` 回放和后续研究分析；测试可以用 `:memory:`。
 
 **Q：前端改了但页面没变化？**
-`pnpm town-web` 会先 `pnpm build:web`，手动运行 `pnpm build:web` 重新生成 `public/client.js`。
+`pnpm town-web` 会先 `pnpm build:web`，手动运行 `pnpm build:web` 重新生成三个页面的浏览器脚本。
 
 **Q：`thinking` 状态看起来卡住？**
 LLM 调用是异步的；mock 下几乎立即返回，deepseek 下受网络/API 限流影响。若使用真机，建议设置 `DEEPSEEK_API_KEY` 并检查网络。

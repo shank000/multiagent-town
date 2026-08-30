@@ -237,6 +237,7 @@ export class AgentExecutor {
       this.log.addEvent(this.thoughtEvent(agent, decision, now, quality));
     } catch (e) {
       entry.error = e instanceof Error ? e.message : String(e);
+      console.warn(`[agent-decision] agent=${agent.id} template=${req.template} failed: ${entry.error}`);
     }
   }
 

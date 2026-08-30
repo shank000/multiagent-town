@@ -13,6 +13,7 @@ import { EventLog } from '../src/store/events';
 import { createTownServer } from '../src/web/server';
 import { makeAgent, persona } from './helpers';
 import type { GameEvent, WorldObject } from '../src/core/types';
+import { BackendRuntimeLog } from '../src/runtime/backend-log';
 
 const OBJS: WorldObject[] = [
   { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
@@ -24,10 +25,12 @@ function fixtureDir(): string {
   writeFileSync(join(dir, 'index.html'), '<!doctype html><html lang="zh-CN"><body>fixture</body></html>');
   writeFileSync(join(dir, 'style.css'), 'body{}');
   writeFileSync(join(dir, 'client.js'), 'console.log(1)');
+  writeFileSync(join(dir, 'logs.html'), '<!doctype html><html><body>后端运行日志</body></html>');
+  writeFileSync(join(dir, 'logs.js'), 'console.log(2)');
   return dir;
 }
 
-async function setup() {
+async function setup(enableRuntimeLog = false) {
   const dir = fixtureDir();
   const db = openDb(':memory:');
   const log = new EventLog(db);
@@ -40,8 +43,11 @@ async function setup() {
   const gateway = new LLMGateway({ provider: 'mock' });
   const executor = new AgentExecutor(gateway, world, log);
   const loop = new WorldLoop(time, world, executor, log, db);
-  const server = await createTownServer({ world, time, loop, log, publicDir: dir, snapshotMs: 30, llm: gateway });
-  return { dir, db, log, world, time, loop, gateway, server, base: `http://127.0.0.1:${server.port}` };
+  const runtimeLog = enableRuntimeLog
+    ? new BackendRuntimeLog(join(dir, 'runtime.jsonl'), { captureConsole: false })
+    : undefined;
+  const server = await createTownServer({ world, time, loop, log, publicDir: dir, snapshotMs: 30, llm: gateway, runtimeLog });
+  return { dir, db, log, world, time, loop, gateway, runtimeLog, server, base: `http://127.0.0.1:${server.port}` };
 }
 
 test('静态页与快照接口', async () => {
@@ -116,6 +122,39 @@ test('推理状态接口公开有界队列与背压指标', async () => {
     });
   } finally {
     await server.close();
+  }
+});
+
+test('后端日志页面支持只读筛选、完整保存且不接受任意文件路径', async () => {
+  const { server, base, runtimeLog } = await setup(true);
+  try {
+    runtimeLog!.warn('dialogue', 'conversation=c1 apiKey=do-not-store');
+    runtimeLog!.error('ollama', 'request failed');
+    assert.equal((await fetch(`${base}/logs.html`)).status, 200);
+    assert.equal((await fetch(`${base}/logs.js`)).status, 200);
+
+    const response = await fetch(`${base}/api/runtime-logs?level=warn&q=conversation&limit=20&path=C:%5CWindows`);
+    assert.equal(response.status, 200);
+    const snapshot = await response.json() as {
+      filePath: string; entries: { level: string; source: string; message: string }[];
+    };
+    assert.equal(snapshot.filePath, runtimeLog!.filePath);
+    assert.equal(snapshot.entries.length, 1);
+    assert.equal(snapshot.entries[0].level, 'warn');
+    assert.equal(snapshot.entries[0].source, 'dialogue');
+    assert.match(snapshot.entries[0].message, /\[REDACTED\]/);
+    assert.doesNotMatch(snapshot.entries[0].message, /do-not-store/);
+
+    const download = await fetch(`${base}/api/runtime-logs/download?path=C:%5CWindows`);
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get('content-disposition') ?? '', /attachment/);
+    const content = await download.text();
+    assert.match(content, /"source":"ollama"/);
+    assert.doesNotMatch(content, /do-not-store/);
+    assert.equal((await fetch(`${base}/api/runtime-logs?limit=9999`)).status, 400);
+  } finally {
+    await server.close();
+    runtimeLog!.close();
   }
 });
 

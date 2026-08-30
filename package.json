@@ -15,7 +15,7 @@
     "replay": "node --no-warnings --import tsx src/cli/replay.ts",
     "interview": "node --no-warnings --import tsx src/cli/interview.ts",
     "acceptance": "node --no-warnings --import tsx --test tests/acceptance.test.ts",
-    "build:web": "esbuild src/web/client/main.ts --bundle --format=iife --target=chrome100 --outfile=public/client.js && esbuild src/web/client/stats.ts --bundle --format=iife --target=chrome100 --outfile=public/stats.js",
+    "build:web": "esbuild src/web/client/main.ts --bundle --format=iife --target=chrome100 --outfile=public/client.js && esbuild src/web/client/stats.ts --bundle --format=iife --target=chrome100 --outfile=public/stats.js && esbuild src/web/client/logs.ts --bundle --format=iife --target=chrome100 --outfile=public/logs.js",
     "build:windows": "node scripts/build-windows-exe.mjs",
     "desktop": "node --no-warnings --import tsx src/desktop/main.ts",
     "town-web": "pnpm build:web && node --no-warnings --import tsx src/cli/town-web.ts",

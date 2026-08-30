@@ -28,6 +28,23 @@ export interface GatewayConfig {
   backpressureResumeWaitMs?: number; // 排队时长降至该值后允许解除背压
   priorityAgingMs?: number; // 非对话任务每经过该时长提升一级，但不会进入对话等级
   expectedActiveAgents?: number; // 持续倍速估算所覆盖的居民数；三世界 Web 为 18
+  /** 不包含提示词与模型正文的请求级诊断，用于本地后端日志。 */
+  onDiagnostic?: (event: LLMGatewayDiagnostic) => void;
+}
+
+export interface LLMGatewayDiagnostic {
+  status: 'completed' | 'failed';
+  provider: string;
+  model: string | null;
+  template: string;
+  agentId: string | null;
+  scopeId: string;
+  priority: LLMRequestPriority;
+  queueWaitMs: number;
+  wallMs: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  error: string | null;
 }
 
 export type LLMRuntimeMode = 'mock' | 'ollama' | 'api' | 'custom';
@@ -147,9 +164,11 @@ export class LLMGateway {
   private calibrationTask: Promise<ThroughputSnapshot> | null = null;
   private runtime: Omit<LLMRuntimeSnapshot, 'revision'>;
   private runtimeRevision = 1;
+  private readonly onDiagnostic?: (event: LLMGatewayDiagnostic) => void;
 
   constructor(cfg: GatewayConfig) {
     this.retries = cfg.retries ?? 2;
+    this.onDiagnostic = cfg.onDiagnostic;
     this.backoffMs = cfg.backoffMs ?? 100;
     this.maxConcurrent = boundedInteger(cfg.maxConcurrent ?? 8, 'maxConcurrent', 1, 64);
     this.maxQueued = boundedInteger(cfg.maxQueued ?? 256, 'maxQueued', 1, 10_000);
@@ -399,15 +418,40 @@ export class LLMGateway {
         continue;
       }
       const dispatchedAt = Date.now();
+      const queueWaitMs = Math.max(0, dispatchedAt - item.enqueuedAt);
       const executionDeadlineAt = item.request.timeoutMs === undefined ? null : dispatchedAt + item.request.timeoutMs;
       try {
-        item.request.onDispatch?.(Math.max(0, dispatchedAt - item.enqueuedAt));
+        item.request.onDispatch?.(queueWaitMs);
       } catch (error) {
         console.warn('[llm-gateway] dispatch observer failed', error);
       }
       this.activeCount += 1;
       this.updatePressure();
-      void this.completeWithRetry(item.request, executionDeadlineAt).then(item.resolve, item.reject).finally(() => {
+      void this.completeWithRetry(item.request, executionDeadlineAt).then(
+        (response) => {
+          this.emitDiagnostic({
+            status: 'completed', provider: this.runtime.provider,
+            model: response.performance?.model ?? this.runtime.smallModel ?? this.runtime.model,
+            template: item.request.template, agentId: item.request.agentId ?? null,
+            scopeId: item.scopeId, priority: item.priority, queueWaitMs,
+            wallMs: Math.max(1, Date.now() - dispatchedAt),
+            inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, error: null,
+          });
+          item.resolve(response);
+        },
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.emitDiagnostic({
+            status: 'failed', provider: this.runtime.provider,
+            model: this.runtime.smallModel ?? this.runtime.model,
+            template: item.request.template, agentId: item.request.agentId ?? null,
+            scopeId: item.scopeId, priority: item.priority, queueWaitMs,
+            wallMs: Math.max(1, Date.now() - dispatchedAt),
+            inputTokens: null, outputTokens: null, error: message,
+          });
+          item.reject(error instanceof Error ? error : new Error(message));
+        },
+      ).finally(() => {
         this.activeCount -= 1;
         this.updatePressure();
         this.pump();
@@ -415,6 +459,12 @@ export class LLMGateway {
       });
     }
     this.resolveDrainIfIdle();
+  }
+
+  private emitDiagnostic(event: LLMGatewayDiagnostic): void {
+    try { this.onDiagnostic?.(event); } catch (error) {
+      console.warn('[llm-gateway] diagnostic observer failed', error);
+    }
   }
 
   private takeNext(now = Date.now()): QueueItem | null {

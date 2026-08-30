@@ -14,6 +14,7 @@
 - **结构指标**：同对重复率、互惠性、聚类系数、伙伴多样性、伙伴 HHI、窗口网络持久性与枢纽集中度。
 - **研究控制台**：小镇、人物关系、人物属性/对话/世界状态三个视窗；统一像素头像贯穿名册、档案、对话与时间线；居民编辑器可定义身份背景、能力、人格、初始心态和头像；6+4 测量支持悬停、点击、键盘定位、时间窗/Ego/阈值筛选及双人互动—关系—结构证据检查器。
 - **深度统计**：`/stats.html` 按世界和日期查看运行统计；伙伴选择因果指标仍由实验测量引擎独立计算。
+- **后端可观测性**：`/logs.html` 实时筛选当前进程的启动、模型、规划、对话、警告与异常日志，可复制文件路径并下载完整脱敏 JSONL。
 - **认知系统**：三因子记忆检索、日/小时规划、证据约束日记、可修订信念与行为指引、多轮对话与摘要、选择性谣言披露、公开活动和 PageRank 声望。
 - **外部智能体协议**：`town-agent` CLI 与 `/api/guest/*` 让外部 AI 以访客身份感知和行动。
 - **AgentSociety² 适配**：24 人正式实验矩阵、自定义 Agent/Environment、Replay schema、checkpoint 恢复、跨语言指标 parity 与数据质量门。
@@ -33,12 +34,15 @@ pnpm town-web --port 8787
 
 - 研究控制台：<http://127.0.0.1:8787/>
 - 深度统计：<http://127.0.0.1:8787/stats.html>
+- 后端日志：<http://127.0.0.1:8787/logs.html>
 
 `town-web` 每次默认创建带时间戳的新实验数据库，并为 `w1`、`w2`、`w3` 派生独立文件。临时演示可使用：
 
 ```bash
 pnpm town-web --port 8787 --db :memory:
 ```
+
+人物互动、记忆、反思、关系证据等研究记录保存在 `data/runs/town-…-w1.sqlite`、`-w2.sqlite`、`-w3.sqlite`。后端程序运行日志保存在同批次的 `data/runs/town-….runtime.jsonl`；它与研究事件库分离，API Key、Authorization、密码和令牌在写入前会被脱敏。
 
 ## LLM 配置
 
@@ -111,7 +115,7 @@ pnpm test
 pnpm build:web
 ```
 
-当前工程基线为 307 项 `node:test`；AgentSociety² 工作区另有 22 项 Python 协议测试，并通过 2.8.4 SDK/Replay/checkpoint 冒烟。
+当前工程基线为 333 项 `node:test`；AgentSociety² 工作区另有 22 项 Python 协议测试，并通过 2.8.4 SDK/Replay/checkpoint 冒烟。
 
 AgentSociety² 适配验证：
 

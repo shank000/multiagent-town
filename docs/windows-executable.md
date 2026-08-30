@@ -9,7 +9,7 @@ Windows x64 单文件版面向不使用命令行、未安装 Node.js 或 pnpm �
 3. 首次运行等待 `qwen3:4b` 和 `qwen3:4b-instruct` 准备完成。
 4. 在自动打开的浏览器中使用研究控制台；关闭启动窗口结束本次运行。
 
-每次运行都会在 `%LOCALAPPDATA%\MultiagentTown\runs` 创建三份独立 SQLite 数据库。界面资源按内容版本释放到 `%LOCALAPPDATA%\MultiagentTown\runtime`。默认端口为 8898；端口占用时会在后续 20 个端口中自动选择。
+每次运行都会在 `%LOCALAPPDATA%\MultiagentTown\runs` 创建三份独立 SQLite 数据库，以及一份同批次的 `town-….runtime.jsonl` 后端日志。研究控制台顶栏的“后端日志”可实时筛选、复制路径并保存完整日志；敏感凭据写入前统一脱敏。界面资源按内容版本释放到 `%LOCALAPPDATA%\MultiagentTown\runtime`。默认端口为 8898；端口占用时会在后续 20 个端口中自动选择。
 
 ## 维护者构建
 

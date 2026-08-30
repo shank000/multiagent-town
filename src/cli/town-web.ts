@@ -6,12 +6,24 @@ import { createTownServer } from '../web/server';
 import { createManagedWorld, startAllWorlds, stopAllWorlds } from '../engine/world-factory';
 import { assertFreshWorldDbPaths, parseArgs } from './town-web-config';
 import { loadAgentProfileConfig } from '../store/agent-profile-config';
+import { BackendRuntimeLog, runtimeLogPathForDatabase } from '../runtime/backend-log';
+
+let runtimeLog: BackendRuntimeLog | null = null;
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  runtimeLog = new BackendRuntimeLog(runtimeLogPathForDatabase(args.dbPath));
   const dbPaths = assertFreshWorldDbPaths(args);
   const provider = providerNameFromEnv();
-  const gateway = new LLMGateway({ ...gatewayConfigFromEnv(), expectedActiveAgents: 18 });
+  const gateway = new LLMGateway({
+    ...gatewayConfigFromEnv(),
+    expectedActiveAgents: 18,
+    onDiagnostic: (event) => {
+      const message = JSON.stringify(event);
+      if (event.status === 'failed') runtimeLog?.error('llm-request', message);
+      else runtimeLog?.debug('llm-request', message);
+    },
+  });
   const profileStorePath = process.env.TOWN_PROFILE_PATH?.trim() || undefined;
   const profileOverrides = loadAgentProfileConfig(profileStorePath);
   // 平行世界：三种社会实验各一世界（极简像素块示意见客户端小地图）
@@ -39,8 +51,9 @@ async function main(): Promise<void> {
     }),
   ];
   const main = worlds[0];
-  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port, llm: gateway, profileStorePath });
+  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port, llm: gateway, profileStorePath, runtimeLog });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
+  console.log(`后端日志：${runtimeLog.filePath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   startAllWorlds(worlds);
   let shutdownStarted = false;
@@ -54,6 +67,7 @@ async function main(): Promise<void> {
       await Promise.all(worlds.map((world) => world.mind.dispose()));
       await gateway.drain();
       for (const world of worlds) world.db.raw.close();
+      runtimeLog?.close();
       process.exit(0);
     })().catch((error) => {
       console.error('[town-web shutdown]', error);
@@ -64,4 +78,8 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
 }
 
-void main();
+void main().catch((error: unknown) => {
+  console.error('[town-web startup]', error);
+  runtimeLog?.close();
+  process.exitCode = 1;
+});

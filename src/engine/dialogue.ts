@@ -316,6 +316,7 @@ export class DialogueEngine {
         };
       } catch (err) {
         entry.error = err instanceof Error ? err.message : String(err);
+        console.warn(`[dialogue] conversation=${s.conversationId} speaker=${speaker.id} failed: ${entry.error}`);
       }
     })();
     this.track(task);
@@ -427,6 +428,7 @@ export class DialogueEngine {
       this.store.finishConversation(s.conversationId, 'completed', now, { summary });
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
+      console.warn(`[dialogue-summary] conversation=${s.conversationId} failed: ${errorText}`);
       try {
         this.store.finishConversation(s.conversationId, 'error', now, { errorText });
       } catch {

@@ -54,6 +54,14 @@ await build({
   outfile: join(publicDir, 'stats.js'),
   logLevel: 'info',
 });
+await build({
+  entryPoints: [join(root, 'src', 'web', 'client', 'logs.ts')],
+  bundle: true,
+  format: 'iife',
+  target: 'chrome100',
+  outfile: join(publicDir, 'logs.js'),
+  logLevel: 'info',
+});
 
 const bundlePath = join(workDir, 'desktop.cjs');
 await build({

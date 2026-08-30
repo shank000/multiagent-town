@@ -13,11 +13,13 @@ import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
 import { createTownServer, type TownWebServer } from '../web/server';
 import { loadAgentProfileConfig } from '../store/agent-profile-config';
 import { assertFreshWorldDbPaths, type TownWebArgs } from '../cli/town-web-config';
+import { BackendRuntimeLog, runtimeLogPathForDatabase } from '../runtime/backend-log';
 
 const APP_NAME = 'MultiagentTown';
 const DEFAULT_PORT = 8898;
 const DEFAULT_SPEED = 1;
 const OLLAMA_URL = 'http://127.0.0.1:11434';
+let runtimeLog: BackendRuntimeLog | null = null;
 
 interface DesktopArgs {
   noBrowser: boolean;
@@ -255,9 +257,14 @@ async function verifyRealModel(gateway: LLMGateway): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const args = parseDesktopArgs(process.argv.slice(2));
+  const appRoot = localDataRoot();
+  mkdirSync(appRoot, { recursive: true });
+  const publicDir = runtimePublicDir(appRoot);
+  const dbPath = uniqueDatabasePath(appRoot);
+  runtimeLog = new BackendRuntimeLog(runtimeLogPathForDatabase(dbPath));
   console.log('MultiAgent Town · 多智能体社会涌现实验平台');
   console.log('数据与实验记录保存在当前 Windows 用户的本地应用数据目录。\n');
-  const args = parseDesktopArgs(process.argv.slice(2));
   process.env.LLM_PROVIDER = 'ollama';
   process.env.OLLAMA_PROFILE ||= 'qwen3-balanced';
   process.env.OLLAMA_BASE_URL = OLLAMA_URL;
@@ -266,10 +273,6 @@ async function main(): Promise<void> {
   process.env.LLM_MAX_QUEUE ||= '96';
 
   const models = await ensureLocalOllama();
-  const appRoot = localDataRoot();
-  mkdirSync(appRoot, { recursive: true });
-  const publicDir = runtimePublicDir(appRoot);
-  const dbPath = uniqueDatabasePath(appRoot);
   const profileStorePath = join(appRoot, 'agent-profiles.json');
   const profileOverrides = loadAgentProfileConfig(profileStorePath);
   const port = await availablePort(args.port);
@@ -280,7 +283,15 @@ async function main(): Promise<void> {
     dbPathExplicit: false,
   };
   const dbPaths = assertFreshWorldDbPaths(webArgs);
-  const gateway = new LLMGateway({ ...gatewayConfigFromEnv(), expectedActiveAgents: 18 });
+  const gateway = new LLMGateway({
+    ...gatewayConfigFromEnv(),
+    expectedActiveAgents: 18,
+    onDiagnostic: (event) => {
+      const message = JSON.stringify(event);
+      if (event.status === 'failed') runtimeLog?.error('llm-request', message);
+      else runtimeLog?.debug('llm-request', message);
+    },
+  });
   if (args.smoke) await verifyRealModel(gateway);
   const worlds = [
     createManagedWorld('w1', 'mem-on', { seed: 1, gameMinutesPerTick: args.speed * 0.5, gateway, dbPath: dbPaths.w1, profileOverrides }),
@@ -300,8 +311,12 @@ async function main(): Promise<void> {
     await gateway.drain();
     for (const world of worlds) world.db.raw.close();
   };
-  process.once('SIGINT', () => void close().finally(() => process.exit(0)));
-  process.once('SIGTERM', () => void close().finally(() => process.exit(0)));
+  const closeProcess = () => void close().finally(() => {
+    runtimeLog?.close();
+    process.exit(0);
+  });
+  process.once('SIGINT', closeProcess);
+  process.once('SIGTERM', closeProcess);
 
   try {
     webServer = await createTownServer({
@@ -319,11 +334,13 @@ async function main(): Promise<void> {
       llm: gateway,
       publicDir,
       profileStorePath,
+      runtimeLog,
     });
     startAllWorlds(worlds);
     const url = `http://127.0.0.1:${webServer.port}/`;
     console.log(`本地模型：${models.join(' + ')}`);
     console.log(`实验数据库：${dirname(dbPath)}`);
+    console.log(`后端日志：${runtimeLog.filePath}`);
     console.log(`研究控制台：${url}`);
     console.log('保持此窗口运行；关闭窗口即可结束本次实验。\n');
     if (!args.noBrowser) openExternal(url);
@@ -336,6 +353,7 @@ async function main(): Promise<void> {
       }
       console.log('SMOKE_OK real_model=true worlds=3 agents_per_world=6');
       await close();
+      runtimeLog.close();
     }
   } catch (error) {
     await close();
@@ -353,5 +371,6 @@ void main().catch(async (error: unknown) => {
     await new Promise<void>((resolveInput) => process.stdin.once('data', () => resolveInput()));
     process.stdin.pause();
   }
+  runtimeLog?.close();
   process.exitCode = 1;
 });
