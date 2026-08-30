@@ -150,6 +150,19 @@ test('experiment workspace UI creates a town from initial config and selects one
   assert.match(css, /\.workspace-world-options\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
 });
 
+test('timeline controls expose fractional manual speeds and continuous model-aware governance', () => {
+  for (const speed of ['0.05', '0.1', '0.2', '0.3', '0.5', '0.75', '1']) {
+    assert.match(html, new RegExp(`<option value=["']${speed.replace('.', '\\.')}`));
+  }
+  assert.match(html, /id="timeline-status"/);
+  assert.match(html, /id="timeline-speed-select"/);
+  assert.match(html, /data-action="adaptive-speed"[^>]*>智能跟速</);
+  assert.match(client, /timelineControl/);
+  assert.match(client, /后续按负载持续调整/);
+  assert.match(server, /TimelineGovernor/);
+  assert.match(server, /timeline_speed_adjusted/);
+});
+
 test('narrative stream distinguishes planned, travelling, verified, cancelled and fulfilled world facts', () => {
   for (const kind of ['town_event_announcement', 'town_event_departure', 'town_event', 'town_event_cancelled']) {
     assert.match(client, new RegExp(`it\\.kind === ['"]${kind}['"]`));

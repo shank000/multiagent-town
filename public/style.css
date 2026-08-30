@@ -103,6 +103,14 @@ canvas { display: block; }
 .llm-status.busy .llm-dot { background: #f2b85c; box-shadow: 0 0 8px rgba(242, 184, 92, .7); }
 .llm-status.pressure { color: var(--danger); border-color: rgba(240, 124, 148, .45); }
 .llm-status.pressure .llm-dot { background: var(--danger); box-shadow: 0 0 8px rgba(240, 124, 148, .75); }
+.llm-status.sync { color: var(--teal); border-color: rgba(98, 218, 203, .42); }
+.llm-status.sync .llm-dot { animation: timeline-pulse 1s ease-in-out infinite; }
+.timeline-status { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid rgba(242, 198, 109, .22); border-radius: 999px; color: var(--ink-muted); font: 600 12px var(--font-mono); white-space: nowrap; }
+.timeline-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.timeline-status.adaptive { color: var(--accent-strong); border-color: rgba(242, 198, 109, .45); }
+.timeline-status.sync { color: var(--teal); border-color: rgba(98, 218, 203, .42); }
+.timeline-status.sync .timeline-dot { background: var(--teal); animation: timeline-pulse 1s ease-in-out infinite; }
+@keyframes timeline-pulse { 50% { opacity: .35; transform: scale(.72); } }
 
 .seg {
   display: flex;
@@ -121,6 +129,19 @@ canvas { display: block; }
   font: 600 13px var(--font-mono);
   transition: background .16s ease, color .16s ease, transform .16s ease;
 }
+.seg select {
+  min-width: 70px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 24px 0 9px;
+  background: rgba(255, 255, 255, .045);
+  color: var(--ink);
+  font: 700 13px var(--font-mono);
+  cursor: pointer;
+}
+.seg select.active { color: #151a20; background-color: var(--accent); }
+.seg select option { color: var(--ink); background: var(--bg-raised); }
 .seg button:hover { color: var(--ink); background: rgba(255, 255, 255, .055); }
 .seg button.active { color: #151a20; background: var(--accent); }
 .seg button:active { transform: translateY(1px); }
@@ -933,7 +954,7 @@ canvas { display: block; }
 
 @media (max-width: 980px) {
   #hud { height: auto; min-height: 72px; flex-wrap: wrap; gap: 10px 14px; padding: 10px 14px; }
-  .research-mode, .llm-status { display: none; }
+  .research-mode, .llm-status, .timeline-status { display: none; }
   #controls { order: 4; width: 100%; justify-content: center; }
   #research-workspace { inset: 122px 0 auto; grid-template-columns: minmax(0, 1fr); }
   .viewport, .inspector-viewport { grid-column: auto; min-height: 680px; }

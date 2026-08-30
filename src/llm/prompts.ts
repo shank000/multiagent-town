@@ -99,6 +99,8 @@ export interface ActionDecisionInput {
   objects: ActionObjectContext[];
   playerInstruction: string | null;
   mockContext: MockContextPayload;
+  /** 确定性 Mock Provider 需要机器可读上下文；真实模型不重复发送同一份数据。 */
+  includeMockContext?: boolean;
 }
 
 export function routineToText(p: Persona): string {
@@ -154,7 +156,9 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
     `非 idle 示例：{"thought":"去目标地点整理物品","action":{"type":"interact","target":${JSON.stringify(actionTargetExample)},"verb":"整理物品"},"duration_minutes":10}`,
     `只输出 JSON：一个符合上述约束的对象。`,
   ].join('\n');
-  const user = `可用对象：${JSON.stringify(input.objects)}\n\n<M0_CONTEXT>\n${JSON.stringify(input.mockContext)}\n</M0_CONTEXT>`;
+  const user = input.includeMockContext === false
+    ? `可用对象：${JSON.stringify(input.objects)}`
+    : `可用对象：${JSON.stringify(input.objects)}\n\n<M0_CONTEXT>\n${JSON.stringify(input.mockContext)}\n</M0_CONTEXT>`;
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
 }
 

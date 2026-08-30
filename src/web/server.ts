@@ -32,6 +32,12 @@ import { buildSnapshot, type WorldSnapshot } from './snapshot';
 import { startLoopGroup, stopLoopGroup } from '../engine/loop';
 import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
 import {
+  TimelineGovernor,
+  timelinePerformanceSummary,
+  type GovernedTimelineWorld,
+  type TimelineAdjustment,
+} from '../engine/timeline-governor';
+import {
   applyAgentProfile,
   normalizeAgentProfile,
   profileDefinitionOf,
@@ -176,6 +182,44 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   const clients = new Set<ServerResponse>();
   let seq = 0;
   let paused = opts.workspace?.current.meta.startPaused ?? false;
+  const timelineWorlds = (): GovernedTimelineWorld[] => (hubWorlds ?? [hub()]).map((world) => ({
+    id: world.meta.id,
+    time: world.time,
+  }));
+  const recordTimelineAdjustment = (adjustment: TimelineAdjustment) => {
+    const reasonLabel = adjustment.reason === 'manual_selection'
+      ? '手动选择'
+      : adjustment.reason === 'workspace_configuration'
+        ? '工作空间配置'
+        : adjustment.reason === 'queue_pressure'
+          ? '推理队列负载'
+          : adjustment.reason === 'recovery_hysteresis'
+            ? '持续稳定后渐进提速'
+            : adjustment.reason === 'warming_up'
+              ? '吞吐预热'
+              : '实测模型容量';
+    for (const world of hubWorlds ?? [hub()]) {
+      world.log.addEvent({
+        id: randomUUID(), type: 'system', actorId: null, targetIds: [],
+        description: `世界时间治理器设为 ${adjustment.toSpeed}×（${reasonLabel}）。`,
+        location: null, gameTime: world.time.state.totalMinutes,
+        payload: {
+          kind: 'timeline_speed_adjusted', mode: adjustment.mode,
+          fromSpeed: adjustment.fromSpeed, toSpeed: adjustment.toSpeed,
+          reason: adjustment.reason, sampleCount: adjustment.sampleCount,
+          generationTokensPerSecond: adjustment.generationTokensPerSecond,
+          p90LatencyMs: adjustment.p90LatencyMs,
+        },
+      });
+    }
+    opts.runtimeLog?.info(
+      'timeline',
+      `mode=${adjustment.mode} speed=${adjustment.fromSpeed}->${adjustment.toSpeed} reason=${adjustment.reason} ${timelinePerformanceSummary(opts.llm!.throughputSnapshot())}`,
+    );
+  };
+  const timelineGovernor = opts.llm
+    ? new TimelineGovernor(opts.llm, { onAdjustment: recordTimelineAdjustment })
+    : null;
 
   const llmConfigurationSafety = (requireSettledWorld = true) => {
     const scheduler = opts.llm?.schedulerSnapshot();
@@ -373,15 +417,23 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         return;
       }
       if (url.pathname === '/api/llm/status' && req.method === 'GET') {
+        const controlledTimelineWorlds = timelineWorlds();
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(opts.llm?.schedulerSnapshot() ?? {
+        res.end(JSON.stringify(opts.llm ? {
+          ...opts.llm.schedulerSnapshot(),
+          timeline: timelineGovernor?.snapshot(controlledTimelineWorlds, paused) ?? null,
+        } : {
           active: 0, queued: 0, maxConcurrent: 0, maxQueued: 0,
-          oldestWaitMs: 0, backpressured: false, pressureReason: null, byPriority: {}, byScope: {},
+          oldestActiveMs: 0, oldestWaitMs: 0, backpressured: false, pressureReason: null,
+          activeByPriority: {}, byPriority: {}, byScope: {},
           performance: {
-            provider: 'none', sampleCount: 0, generationTokensPerSecond: null,
+            provider: 'none', sampleCount: 0, generationTokensPerSecond: null, promptTokensPerSecond: null,
             effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
+            p90LoadMs: null, p90PromptMs: null, p90GenerationMs: null,
+            p90DialogueLatencyMs: null, p90QueueWaitMs: null,
             recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: MAX_WORLD_SPEED, confidence: 'unavailable',
           },
+          timeline: null,
         }));
         return;
       }
@@ -438,6 +490,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             .reduce((count, world) => count + world.world.allAgents().length, 0);
           const runtime = opts.llm.reconfigure(config);
           const controlledWorlds = hubWorlds ?? [hub()];
+          if (timelineGovernor?.mode === 'adaptive') timelineGovernor.enableAdaptive(timelineWorlds());
           for (const world of controlledWorlds) {
             world.log.addEvent({
               id: randomUUID(), type: 'system', actorId: null, targetIds: [],
@@ -902,6 +955,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           );
           bindHubResources();
           paused = built.meta.startPaused;
+          timelineGovernor?.setManual(built.meta.worldSpeed, timelineWorlds(), 'workspace_configuration');
           if (!paused) startLoopGroup(hubWorlds.map((world) => world.loop));
           opts.runtimeLog?.info(
             'workspace',
@@ -1282,16 +1336,19 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           const performance = opts.llm.throughputSnapshot().sampleCount >= 2
             ? opts.llm.throughputSnapshot()
             : await opts.llm.calibrate();
-          const speed = performance.recommendedMaxWorldSpeed ?? 1;
-          for (const world of controlledWorlds) world.time.gameMinutesPerTick = speed * 0.5;
+          const timeline = timelineGovernor?.enableAdaptive(timelineWorlds());
+          const speed = timeline?.selectedSpeed ?? performance.recommendedMaxWorldSpeed ?? 1;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true, speed, performance }));
+          res.end(JSON.stringify({ ok: true, speed, performance, timeline }));
           return;
         } else if (
           body.action === 'speed' && typeof body.value === 'number'
           && Number.isFinite(body.value) && body.value > 0 && body.value <= MAX_WORLD_SPEED
         ) {
-          for (const world of controlledWorlds) world.time.gameMinutesPerTick = body.value * 0.5;
+          timelineGovernor?.setManual(body.value, timelineWorlds());
+          if (!timelineGovernor) {
+            for (const world of controlledWorlds) world.time.gameMinutesPerTick = body.value * 0.5;
+          }
         } else {
           res.writeHead(400);
           res.end('bad control');
@@ -1348,6 +1405,9 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   const interval = setInterval(() => {
     for (const snapshot of allSnapshots()) broadcast('snapshot', snapshot);
   }, snapshotMs);
+  const timelineInterval = setInterval(() => {
+    timelineGovernor?.reconcile(timelineWorlds());
+  }, 2_000);
   const heartbeat = setInterval(() => {
     for (const c of clients) {
       if (c.writableEnded || c.destroyed) clients.delete(c);
@@ -1366,6 +1426,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         }
         clearHubResources();
         clearInterval(interval);
+        clearInterval(timelineInterval);
         clearInterval(heartbeat);
         for (const c of clients) c.end();
         server.close(() => r());

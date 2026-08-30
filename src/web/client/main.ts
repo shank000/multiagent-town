@@ -111,6 +111,17 @@ interface LLMConfigSafetyView {
   reasons: string[];
 }
 
+interface TimelineControlView {
+  mode: 'manual' | 'adaptive';
+  selectedSpeed: number;
+  effectiveSpeed: number;
+  recommendedSpeed: number | null;
+  adaptiveCeiling: number;
+  synchronizing: boolean;
+  paused: boolean;
+  reason: 'paused' | 'cognitive_sync' | 'queue_pressure' | 'warming_up' | 'measured_capacity' | 'manual';
+}
+
 const LIFE_CATEGORY_NAME: Record<string, string> = {
   nature: '自然环境',
   commerce: '日常交换',
@@ -122,6 +133,7 @@ const LIFE_CATEGORY_NAME: Record<string, string> = {
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 let snap: WorldSnapshot | null = null;
+let timelineControl: TimelineControlView | null = null;
 let selectedId: string | null = null;
 let selectedObjectId: string | null = null;
 
@@ -1084,9 +1096,10 @@ setInterval(pollExperiment, 2000);
 
 function pollLLMStatus(): void {
   void fetch('/api/llm/status').then((response) => response.json()).then((status: {
-    active?: number; queued?: number; maxQueued?: number; oldestWaitMs?: number; backpressured?: boolean;
-    pressureReason?: 'queue_capacity' | 'queue_wait' | null;
+    active?: number; queued?: number; maxQueued?: number; oldestActiveMs?: number; oldestWaitMs?: number; backpressured?: boolean;
+    pressureReason?: 'cognitive_sync' | 'queue_capacity' | 'queue_wait' | null;
     performance?: { provider?: string; generationTokensPerSecond?: number | null; recommendedMaxWorldSpeed?: number | null; confidence?: string };
+    timeline?: TimelineControlView | null;
   }) => {
     const element = document.getElementById('llm-status');
     if (!element) return;
@@ -1101,14 +1114,35 @@ function pollLLMStatus(): void {
     const inferredMode = llmRuntime?.mode
       ?? (status.performance?.provider === 'mock' ? 'mock' : status.performance?.provider === 'ollama' ? 'ollama' : 'api');
     const runtimeLabel = inferredMode === 'mock' ? 'Mock 模拟' : inferredMode === 'ollama' ? '本地推理' : 'API 推理';
+    const cognitiveSync = status.pressureReason === 'cognitive_sync';
     element.classList.toggle('busy', !status.backpressured && (active > 0 || queued > 0));
-    element.classList.toggle('pressure', !!status.backpressured);
-    const pressureLabel = status.pressureReason === 'queue_wait' ? '等待过长' : '队列拥塞';
-    element.innerHTML = status.backpressured
-      ? `<span class="llm-dot"></span>${runtimeLabel}背压 · ${pressureLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
+    element.classList.toggle('pressure', !!status.backpressured && !cognitiveSync);
+    element.classList.toggle('sync', cognitiveSync);
+    const pressureLabel = status.pressureReason === 'queue_wait' ? '等待过长'
+      : status.pressureReason === 'cognitive_sync' ? '认知同步' : '队列拥塞';
+    element.innerHTML = cognitiveSync
+      ? `<span class="llm-dot"></span>${runtimeLabel} · ${pressureLabel} · ${active} 生成中${queued ? ` · ${queued} 排队` : ''}${calibration}`
+      : status.backpressured
+        ? `<span class="llm-dot"></span>${runtimeLabel}背压 · ${pressureLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
       : queued > 0
         ? `<span class="llm-dot"></span>${runtimeLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
         : `<span class="llm-dot"></span>${runtimeLabel} · ${active ? '生成中' : '就绪'}${calibration}`;
+    timelineControl = status.timeline ?? null;
+    const timelineElement = document.getElementById('timeline-status');
+    if (timelineElement && timelineControl) {
+      const selected = timelineControl.selectedSpeed;
+      const label = timelineControl.paused
+        ? `时间暂停 · 设定 ${selected}×`
+        : timelineControl.synchronizing
+          ? `认知同步 · 设定 ${selected}×`
+          : timelineControl.mode === 'adaptive'
+            ? `智能跟速 · ${selected}×`
+            : `手动时间 · ${selected}×`;
+      timelineElement.classList.toggle('adaptive', timelineControl.mode === 'adaptive');
+      timelineElement.classList.toggle('sync', timelineControl.synchronizing);
+      timelineElement.innerHTML = `<span class="timeline-dot"></span>${label}`;
+    }
+    updateHud();
   }).catch(() => {
     const element = document.getElementById('llm-status');
     if (element) element.innerHTML = '<span class="llm-dot"></span>模型运行状态未知';
@@ -1909,7 +1943,7 @@ function bindControls(): void {
           showToast('高速观察已启用认知采样；推理积压时虚拟时钟会自动等待', 'info');
         } else if (action === 'adaptive-speed') {
           const rate = Number(result.performance?.generationTokensPerSecond);
-          showToast(`吞吐校准完成：${Number.isFinite(rate) ? `${rate.toFixed(1)} tok/s，` : ''}世界速度设为 ${result.speed ?? 1}×`, 'success');
+          showToast(`智能跟速已启用：${Number.isFinite(rate) ? `${rate.toFixed(1)} tok/s，` : ''}当前 ${result.speed ?? 1}×；后续按负载持续调整`, 'success');
         }
       } catch {
         showToast('世界时间控制未生效，请检查服务状态', 'error');
@@ -1917,6 +1951,25 @@ function bindControls(): void {
         button.disabled = false;
       }
     });
+  });
+  const speedSelect = document.getElementById('timeline-speed-select') as HTMLSelectElement;
+  speedSelect.addEventListener('change', async () => {
+    const value = Number(speedSelect.value);
+    speedSelect.disabled = true;
+    try {
+      const response = await fetch('/api/world/control', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'speed', value }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      timelineControl = timelineControl ? { ...timelineControl, mode: 'manual', selectedSpeed: value } : null;
+      showToast(`手动世界时间设为 ${value}×；真实模型生成期间仍自动进入认知同步`, 'info');
+    } catch {
+      showToast('世界时间倍率未生效，请检查服务状态', 'error');
+      updateHud();
+    } finally {
+      speedSelect.disabled = false;
+    }
   });
   document.getElementById('exp-start')!.addEventListener('click', async () => {
     const mem = (document.getElementById('exp-mem') as HTMLInputElement).checked ? 'on' : 'off';
@@ -2267,7 +2320,11 @@ function updateHud(): void {
   document.querySelectorAll<HTMLButtonElement>('#controls button[data-action]').forEach((button) => {
     const action = button.dataset.action;
     const speed = Number(button.dataset.value ?? NaN);
-    const active = action === 'pause' ? snap!.paused : !snap!.paused && speed === snap!.speedPerRealSecond;
+    const active = action === 'pause'
+      ? snap!.paused
+      : action === 'adaptive-speed'
+        ? !snap!.paused && timelineControl?.mode === 'adaptive'
+        : !snap!.paused && speed === snap!.speedPerRealSecond;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
     if (action === 'pause') {
@@ -2275,6 +2332,16 @@ function updateHud(): void {
       button.setAttribute('aria-label', snap!.paused ? '继续运行所有平行世界' : '暂停所有平行世界');
     }
   });
+  const speedSelect = document.getElementById('timeline-speed-select') as HTMLSelectElement | null;
+  if (speedSelect) {
+    const speed = String(snap.speedPerRealSecond);
+    if (Array.from(speedSelect.options).some((option) => option.value === speed)) speedSelect.value = speed;
+    speedSelect.classList.toggle('active', !snap.paused && timelineControl?.mode !== 'adaptive');
+  }
+  if (!timelineControl) {
+    const timelineElement = document.getElementById('timeline-status');
+    if (timelineElement) timelineElement.innerHTML = `<span class="timeline-dot"></span>${snap.paused ? '时间暂停' : '手动时间'} · ${snap.speedPerRealSecond}×`;
+  }
 }
 
 /** 环境粒子：白天炊烟（咖啡馆/面包店/住宅烟囱）、夜间萤火虫（湖/公园/树林，≤40 只） */

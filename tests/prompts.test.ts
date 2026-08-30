@@ -58,6 +58,25 @@ test('day 字段透传：第 2 天时钟正确', () => {
   assert.ok(sys.includes('第2天 08:00'));
 });
 
+test('真实模型动作提示只发送一份语义上下文并保留全部可用对象', () => {
+  const agent = makeAgent({ persona: persona({ name: '甲', occupation: '邮递员' }) });
+  const { messages } = buildActionDecisionMessages({
+    agent, day: 1, minuteOfDay: 600, locationName: '邮局', playerInstruction: null,
+    objects: [{ id: 'obj:post_office', name: '邮局' }, { id: 'obj:plaza', name: '广场' }],
+    mockContext: {
+      persona: agent.persona, minuteOfDay: 600, routine: [], memories: [{ content: '上午需要投递信件。', importance: 7 }],
+      insights: ['按路线依次投递更稳妥。'], agenda: '整理邮件', playerInstruction: null, objects: [],
+    },
+    includeMockContext: false,
+  });
+  const user = messages[1].content;
+  assert.ok(user.includes('obj:post_office'));
+  assert.ok(user.includes('obj:plaza'));
+  assert.ok(!user.includes('<M0_CONTEXT>'));
+  assert.ok(messages[0].content.includes('上午需要投递信件'));
+  assert.ok(messages[0].content.includes('按路线依次投递更稳妥'));
+});
+
 test('动作决策提示包含日记形成的心态与行为指引，并区分主观解释与客观事实', () => {
   const agent = makeAgent({ persona: persona({ name: '甲', occupation: '邮递员' }) });
   const { messages } = buildActionDecisionMessages({

@@ -384,6 +384,51 @@ test('真实响应时序形成吞吐快照与可持续世界倍速建议', async
   assert.deepEqual(gateway.schedulerSnapshot().performance, performance);
 });
 
+test('真实前台认知请求形成逻辑时间屏障并公开活跃优先级与耗时', async () => {
+  const releases: (() => void)[] = [];
+  const provider: LLMProvider = {
+    name: 'slow-foreground',
+    async complete(): Promise<LLMResponse> {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return { content: '{}', parsed: {}, usage: { inputTokens: 10, outputTokens: 5, costYuan: 0 } };
+    },
+  };
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1 });
+  const action = gateway.complete({ ...req([]), priority: 'action' });
+  await waitFor(() => releases.length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const active = gateway.schedulerSnapshot();
+  assert.equal(active.backpressured, true);
+  assert.equal(active.pressureReason, 'cognitive_sync');
+  assert.equal(active.activeByPriority.action, 1);
+  assert.ok(active.oldestActiveMs >= 1);
+  releases.shift()?.();
+  await action;
+  await gateway.drain();
+  assert.equal(gateway.schedulerSnapshot().backpressured, false);
+});
+
+test('极慢模型的可持续倍速建议可降到 1× 以下并保留对话 P90', async () => {
+  const provider: LLMProvider = {
+    name: 'very-slow-local',
+    async complete(): Promise<LLMResponse> {
+      return {
+        content: '{}', parsed: {}, usage: { inputTokens: 2_000, outputTokens: 60, costYuan: 0 },
+        performance: { totalMs: 60_000, promptMs: 10_000, generationMs: 50_000, outputTokensPerSecond: 1.2 },
+      };
+    },
+  };
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1, expectedActiveAgents: 6 });
+  await gateway.complete({ ...req([]), template: 'dialogue', priority: 'dialogue' });
+  const performance = gateway.throughputSnapshot();
+  assert.equal(performance.recommendedMaxWorldSpeed, 0.05);
+  assert.equal(performance.p90DialogueLatencyMs, 60_000);
+  assert.equal(performance.p90QueueWaitMs, 0);
+  assert.equal(performance.p90PromptMs, 10_000);
+  assert.equal(performance.p90GenerationMs, 50_000);
+  assert.equal(performance.promptTokensPerSecond, 200);
+});
+
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {

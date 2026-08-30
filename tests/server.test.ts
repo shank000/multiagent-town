@@ -109,15 +109,24 @@ test('推理状态接口公开有界队列与背压指标', async () => {
       queued: 0,
       maxConcurrent: 8,
       maxQueued: 256,
+      oldestActiveMs: 0,
       oldestWaitMs: 0,
       backpressured: false,
       pressureReason: null,
+      activeByPriority: { dialogue: 0, action: 0, planning: 0, reflection: 0, background: 0 },
       byPriority: { dialogue: 0, action: 0, planning: 0, reflection: 0, background: 0 },
       byScope: {},
       performance: {
-        provider: 'mock', sampleCount: 0, generationTokensPerSecond: null,
+        provider: 'mock', sampleCount: 0, generationTokensPerSecond: null, promptTokensPerSecond: null,
         effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
+        p90LoadMs: null, p90PromptMs: null, p90GenerationMs: null,
+        p90DialogueLatencyMs: null, p90QueueWaitMs: null,
         recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 60, confidence: 'unavailable',
+      },
+      timeline: {
+        mode: 'manual', selectedSpeed: 10, effectiveSpeed: 10,
+        recommendedSpeed: null, adaptiveCeiling: 60, synchronizing: false,
+        paused: false, reason: 'manual', stableEvaluations: 0, lastChangedAt: null,
       },
     });
   } finally {

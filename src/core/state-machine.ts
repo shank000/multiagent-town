@@ -152,17 +152,27 @@ export class AgentExecutor {
       mindState = this.mind.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
       agenda = this.mind.planner.currentAgendaLine(agent, day, minuteOfDay);
     }
+    const runtimeMode = this.llm.runtimeSnapshot().mode;
+    const playerInstruction = this.player?.current(agent.id, now) ?? null;
+    const detailedObjectIds = new Set<string>([
+      agent.locationId,
+      agent.homeObjectId,
+      ...agent.persona.routine.map((slot) => slot.target),
+    ].filter((value): value is string => typeof value === 'string'));
     const actionObjects = this.world.allObjects().map((object) => {
       const center = this.world.centerOf(object);
-      const canSenseState = !!object.state && (
-        Math.abs(agent.x - center.x) + Math.abs(agent.y - center.y) <= (object.observationRadius ?? 3)
-      );
+      const distance = Math.abs(agent.x - center.x) + Math.abs(agent.y - center.y);
+      const canSenseState = !!object.state && distance <= (object.observationRadius ?? 3);
+      // 真实模型只为现场、作息目标与家提供富描述；远处对象保留 id/name，仍可规划前往。
+      // Mock 保持完整机器上下文，从而不改变离线实验的确定性基线。
+      const detailed = runtimeMode === 'mock' || detailedObjectIds.has(object.id) || distance <= 8
+        || (!!playerInstruction && (playerInstruction.includes(object.id) || playerInstruction.includes(object.name)));
       return {
         id: object.id,
         name: object.name,
-        ...(object.description ? { description: object.description } : {}),
-        ...(object.affordances?.length ? { affordances: object.affordances.map((item) => ({ ...item })) } : {}),
-        ...(object.sensoryCues?.length ? { sensoryCues: [...object.sensoryCues] } : {}),
+        ...(detailed && object.description ? { description: object.description } : {}),
+        ...(detailed && object.affordances?.length ? { affordances: object.affordances.map((item) => ({ ...item })) } : {}),
+        ...(detailed && object.sensoryCues?.length ? { sensoryCues: [...object.sensoryCues] } : {}),
         ...(canSenseState ? { state: { label: object.state!.label, detail: object.state!.detail } } : {}),
       };
     });
@@ -172,18 +182,19 @@ export class AgentExecutor {
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
       objects: actionObjects,
-      playerInstruction: this.player?.current(agent.id, now) ?? null,
+      playerInstruction,
       mockContext: {
         persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights,
         behaviorGuidance, mindState, agenda,
-        playerInstruction: this.player?.current(agent.id, now) ?? null,
+        playerInstruction,
         objects: actionObjects,
       },
+      includeMockContext: runtimeMode === 'mock',
     });
     const req: LLMRequest = {
       tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true,
       jsonSchema: actionDecisionJsonSchema(this.world.allObjects().map((object) => object.id)), maxTokens: 256,
-      temperature: 0.45, agentId: agent.id, priority: 'action', scopeId: this.scopeId, timeoutMs: 60_000,
+      temperature: 0.45, reasoning: false, agentId: agent.id, priority: 'action', scopeId: this.scopeId, timeoutMs: 60_000,
     };
     const entry: PendingDecision = { resolved: null, error: null };
     this.pending.set(agent.id, entry);

@@ -130,6 +130,7 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
       playerInstruction: null,
       objects,
     },
+    includeMockContext: false,
   });
   const { value: response, latencyMs } = await timed(() => llm.complete({
     tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true,

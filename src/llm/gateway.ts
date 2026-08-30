@@ -4,7 +4,7 @@ import type { LLMProvider, LLMRequest, LLMRequestPriority, LLMResponse } from '.
 import { DeepSeekProvider } from './deepseek';
 import { OllamaProvider } from './ollama';
 import { MockProvider } from './mock';
-import { MAX_WORLD_SPEED, WORLD_SPEED_PRESETS } from '../engine/runtime-limits';
+import { MAX_WORLD_SPEED, MIN_WORLD_SPEED, WORLD_SPEED_PRESETS } from '../engine/runtime-limits';
 
 export interface GatewayConfig {
   provider?: LLMProvider | 'mock' | 'deepseek' | 'ollama';
@@ -74,9 +74,11 @@ export interface SchedulerSnapshot {
   queued: number;
   maxConcurrent: number;
   maxQueued: number;
+  oldestActiveMs: number;
   oldestWaitMs: number;
   backpressured: boolean;
-  pressureReason: 'queue_capacity' | 'queue_wait' | null;
+  pressureReason: 'cognitive_sync' | 'queue_capacity' | 'queue_wait' | null;
+  activeByPriority: Record<LLMRequestPriority, number>;
   byPriority: Record<LLMRequestPriority, number>;
   byScope: Record<string, number>;
   performance: ThroughputSnapshot;
@@ -86,20 +88,40 @@ export interface ThroughputSnapshot {
   provider: string;
   sampleCount: number;
   generationTokensPerSecond: number | null;
+  promptTokensPerSecond: number | null;
   effectiveTokensPerSecond: number | null;
   p50LatencyMs: number | null;
   p90LatencyMs: number | null;
+  p90LoadMs: number | null;
+  p90PromptMs: number | null;
+  p90GenerationMs: number | null;
+  p90DialogueLatencyMs: number | null;
+  p90QueueWaitMs: number | null;
   recommendedMaxWorldSpeed: number | null;
   burstMaxWorldSpeed: number;
   confidence: 'unavailable' | 'warming' | 'measured';
 }
 
 interface PerformanceSample {
+  template: string;
   tier: LLMRequest['tier'];
   priority: LLMRequestPriority;
   wallMs: number;
+  queueWaitMs: number;
+  inputTokens: number;
   outputTokens: number;
+  loadMs: number | null;
+  promptMs: number | null;
+  generationMs: number | null;
   generationTokensPerSecond: number | null;
+}
+
+interface ActiveItem {
+  sequence: number;
+  priority: LLMRequestPriority;
+  scopeId: string;
+  template: string;
+  startedAt: number;
 }
 
 interface QueueItem {
@@ -153,6 +175,7 @@ export class LLMGateway {
   private priorityAgingMs: number;
   private metrics = new Map<string, TemplateMetric>();
   private queue: QueueItem[] = [];
+  private activeItems = new Map<number, ActiveItem>();
   private activeCount = 0;
   private sequence = 0;
   private lastScopeByRank = new Map<number, string>();
@@ -279,7 +302,6 @@ export class LLMGateway {
     let lastErr: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       try {
-        const startedAt = Date.now();
         const remaining = remainingMs(deadlineAt);
         if (remaining !== null && remaining <= 0) throw deadlineError(req);
         const providerRequest = remaining === null ? req : { ...req, timeoutMs: remaining };
@@ -295,7 +317,6 @@ export class LLMGateway {
         }
         const final: LLMResponse = { ...res, parsed };
         this.record(req.template, final.usage);
-        this.recordPerformance(req, final, Math.max(1, Date.now() - startedAt));
         return final;
       } catch (e) {
         lastErr = e;
@@ -325,19 +346,29 @@ export class LLMGateway {
 
   schedulerSnapshot(now = Date.now()): SchedulerSnapshot {
     const byPriority = Object.fromEntries(PRIORITIES.map((priority) => [priority, 0])) as Record<LLMRequestPriority, number>;
+    const activeByPriority = Object.fromEntries(PRIORITIES.map((priority) => [priority, 0])) as Record<LLMRequestPriority, number>;
     const byScope: Record<string, number> = {};
+    for (const item of this.activeItems.values()) {
+      activeByPriority[item.priority] += 1;
+      byScope[item.scopeId] = (byScope[item.scopeId] ?? 0) + 1;
+    }
     for (const item of this.queue) {
       byPriority[item.priority] += 1;
       byScope[item.scopeId] = (byScope[item.scopeId] ?? 0) + 1;
     }
+    const synchronizing = this.requiresCognitiveSynchronization();
     return {
       active: this.activeCount,
       queued: this.queue.length,
       maxConcurrent: this.maxConcurrent,
       maxQueued: this.maxQueued,
+      oldestActiveMs: this.activeItems.size
+        ? Math.max(0, now - Math.min(...[...this.activeItems.values()].map((item) => item.startedAt)))
+        : 0,
       oldestWaitMs: this.queue.length ? Math.max(0, now - Math.min(...this.queue.map((item) => item.enqueuedAt))) : 0,
-      backpressured: this.isBackpressured(),
-      pressureReason: this.pressureReason,
+      backpressured: synchronizing || this.isQueueBackpressured(),
+      pressureReason: synchronizing ? 'cognitive_sync' : this.pressureReason,
+      activeByPriority,
       byPriority,
       byScope,
       performance: this.throughputSnapshot(),
@@ -374,6 +405,21 @@ export class LLMGateway {
 
   /** 高速世界循环据此暂缓虚拟时间，先让真实模型清理认知积压。 */
   isBackpressured(): boolean {
+    this.updatePressure();
+    return this.requiresCognitiveSynchronization() || this.pressureLatched;
+  }
+
+  /**
+   * 真实模型的前台认知请求是逻辑时间屏障：请求完成前世界只结算已经完成的状态，
+   * 不继续推进虚拟时钟。后台摘要与异步统计不阻塞社会时间。
+   */
+  private requiresCognitiveSynchronization(): boolean {
+    if (this.runtime.mode === 'mock') return false;
+    return [...this.activeItems.values()].some((item) => item.priority !== 'background')
+      || this.queue.some((item) => item.priority !== 'background');
+  }
+
+  private isQueueBackpressured(): boolean {
     this.updatePressure();
     return this.pressureLatched;
   }
@@ -430,15 +476,24 @@ export class LLMGateway {
         console.warn('[llm-gateway] dispatch observer failed', error);
       }
       this.activeCount += 1;
+      this.activeItems.set(item.sequence, {
+        sequence: item.sequence,
+        priority: item.priority,
+        scopeId: item.scopeId,
+        template: item.request.template,
+        startedAt: dispatchedAt,
+      });
       this.updatePressure();
       void this.completeWithRetry(item.request, executionDeadlineAt).then(
         (response) => {
+          const wallMs = Math.max(1, Date.now() - dispatchedAt);
+          this.recordPerformance(item.request, response, wallMs, queueWaitMs);
           this.emitDiagnostic({
             status: 'completed', provider: this.runtime.provider,
             model: response.performance?.model ?? this.runtime.smallModel ?? this.runtime.model,
             template: item.request.template, agentId: item.request.agentId ?? null,
             scopeId: item.scopeId, priority: item.priority, queueWaitMs,
-            wallMs: Math.max(1, Date.now() - dispatchedAt),
+            wallMs,
             inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, error: null,
           });
           item.resolve(response);
@@ -457,6 +512,7 @@ export class LLMGateway {
         },
       ).finally(() => {
         this.activeCount -= 1;
+        this.activeItems.delete(item.sequence);
         this.updatePressure();
         this.pump();
         this.resolveDrainIfIdle();
@@ -546,14 +602,24 @@ export class LLMGateway {
     const eligible = this.performanceSamples.filter((sample) => sample.priority !== 'background' && sample.outputTokens > 0);
     if (!eligible.length) {
       return {
-        provider: this.provider.name, sampleCount: 0, generationTokensPerSecond: null,
+        provider: this.provider.name, sampleCount: 0, generationTokensPerSecond: null, promptTokensPerSecond: null,
         effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
+        p90LoadMs: null, p90PromptMs: null, p90GenerationMs: null,
+        p90DialogueLatencyMs: null, p90QueueWaitMs: null,
         recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: MAX_WORLD_SPEED, confidence: 'unavailable',
       };
     }
     const generationRates = eligible.map((sample) => sample.generationTokensPerSecond).filter((value): value is number => value !== null);
+    const promptRates = eligible
+      .filter((sample) => sample.promptMs !== null && sample.promptMs > 0 && sample.inputTokens > 0)
+      .map((sample) => sample.inputTokens / (sample.promptMs! / 1000));
     const effectiveRates = eligible.map((sample) => sample.outputTokens / (sample.wallMs / 1000));
     const latencies = eligible.map((sample) => sample.wallMs);
+    const loadTimes = eligible.map((sample) => sample.loadMs).filter((value): value is number => value !== null);
+    const promptTimes = eligible.map((sample) => sample.promptMs).filter((value): value is number => value !== null);
+    const generationTimes = eligible.map((sample) => sample.generationMs).filter((value): value is number => value !== null);
+    const dialogueLatencies = eligible.filter((sample) => sample.priority === 'dialogue').map((sample) => sample.wallMs);
+    const queueWaits = eligible.map((sample) => sample.queueWaitMs);
     const effective = percentile(effectiveRates, 0.25);
     const p90 = percentile(latencies, 0.9);
     const hasLargeSample = eligible.some((sample) => sample.tier === 'large');
@@ -567,9 +633,15 @@ export class LLMGateway {
       provider: this.provider.name,
       sampleCount: eligible.length,
       generationTokensPerSecond: generationRates.length ? round1(percentile(generationRates, 0.5)) : null,
+      promptTokensPerSecond: promptRates.length ? round1(percentile(promptRates, 0.5)) : null,
       effectiveTokensPerSecond: round1(percentile(effectiveRates, 0.5)),
       p50LatencyMs: Math.round(percentile(latencies, 0.5)),
       p90LatencyMs: Math.round(p90),
+      p90LoadMs: loadTimes.length ? Math.round(percentile(loadTimes, 0.9)) : null,
+      p90PromptMs: promptTimes.length ? Math.round(percentile(promptTimes, 0.9)) : null,
+      p90GenerationMs: generationTimes.length ? Math.round(percentile(generationTimes, 0.9)) : null,
+      p90DialogueLatencyMs: dialogueLatencies.length ? Math.round(percentile(dialogueLatencies, 0.9)) : null,
+      p90QueueWaitMs: Math.round(percentile(queueWaits, 0.9)),
       // 冷启动探针只覆盖高频 small 层；在首次深反思完成前保持保守上限。
       recommendedMaxWorldSpeed: hasLargeSample ? rawRecommendation : Math.min(10, rawRecommendation),
       burstMaxWorldSpeed: MAX_WORLD_SPEED,
@@ -577,13 +649,23 @@ export class LLMGateway {
     };
   }
 
-  private recordPerformance(req: LLMRequest, response: LLMResponse, wallMs: number): void {
+  private recordPerformance(req: LLMRequest, response: LLMResponse, wallMs: number, queueWaitMs: number): void {
     const generationRate = response.performance?.outputTokensPerSecond;
+    const providerWorkMs = (response.performance?.loadMs ?? 0)
+      + (response.performance?.promptMs ?? 0)
+      + (response.performance?.generationMs ?? 0);
+    const observedWallMs = Math.max(wallMs, response.performance?.totalMs ?? 0, providerWorkMs, 1);
     this.performanceSamples.push({
+      template: req.template,
       tier: req.tier,
       priority: req.priority ?? inferPriority(req.template),
-      wallMs,
+      wallMs: observedWallMs,
+      queueWaitMs,
+      inputTokens: response.usage.inputTokens,
       outputTokens: response.usage.outputTokens,
+      loadMs: finiteTiming(response.performance?.loadMs),
+      promptMs: finiteTiming(response.performance?.promptMs),
+      generationMs: finiteTiming(response.performance?.generationMs),
       generationTokensPerSecond: typeof generationRate === 'number' && Number.isFinite(generationRate) && generationRate > 0
         ? generationRate
         : null,
@@ -661,13 +743,16 @@ function recommendedSpeed(
   const requestCapacityPerSecond = maxConcurrent / Math.max(0.001, p90LatencyMs / 1000);
   const expectedRequestsPerGameMinute = expectedActiveAgents / 30 + expectedActiveAgents / 60;
   const workloadBound = requestCapacityPerSecond * 0.65 / expectedRequestsPerGameMinute;
-  let rateBound = 1;
+  let rateBound: number = MIN_WORLD_SPEED;
   if (effectiveTokensPerSecond >= 45 && p90LatencyMs <= 2_500) rateBound = MAX_WORLD_SPEED;
-  else if (effectiveTokensPerSecond >= 25 && p90LatencyMs <= 5_000) rateBound = 60;
-  else if (effectiveTokensPerSecond >= 15 && p90LatencyMs <= 8_000) rateBound = 30;
-  else if (effectiveTokensPerSecond >= 8 && p90LatencyMs <= 15_000) rateBound = 10;
-  else if (effectiveTokensPerSecond >= 4 && p90LatencyMs <= 30_000) rateBound = 5;
-  return [...WORLD_SPEED_PRESETS].reverse().find((speed) => speed <= workloadBound && speed <= rateBound) ?? 1;
+  else if (effectiveTokensPerSecond >= 35 && p90LatencyMs <= 5_000) rateBound = 30;
+  else if (effectiveTokensPerSecond >= 25 && p90LatencyMs <= 8_000) rateBound = 10;
+  else if (effectiveTokensPerSecond >= 15 && p90LatencyMs <= 15_000) rateBound = 5;
+  else if (effectiveTokensPerSecond >= 8 && p90LatencyMs <= 30_000) rateBound = 2;
+  else if (effectiveTokensPerSecond >= 4) rateBound = 1;
+  else if (effectiveTokensPerSecond >= 2) rateBound = 0.5;
+  else if (effectiveTokensPerSecond >= 1) rateBound = 0.2;
+  return [...WORLD_SPEED_PRESETS].reverse().find((speed) => speed <= workloadBound && speed <= rateBound) ?? MIN_WORLD_SPEED;
 }
 
 function percentile(values: readonly number[], fraction: number): number {
@@ -678,6 +763,10 @@ function percentile(values: readonly number[], fraction: number): number {
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function finiteTiming(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function inferPriority(template: string): LLMRequestPriority {
