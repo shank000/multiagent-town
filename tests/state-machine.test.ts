@@ -217,3 +217,45 @@ test('注入 mind 后决策提示词包含记忆与议程', async () => {
   const mem = mind.store.recentMemories('agent:1', 20).find((m) => m.content.includes('煮咖啡'))!;
   assert.equal(mem.lastAccessGameTime, 10);
 });
+
+test('公共物件互动写入附近旁观者记忆与有向观察证据', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const objects: WorldObject[] = [
+    { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
+    {
+      id: 'obj:board', name: '公告栏', type: 'furniture', parentId: 'obj:town', x: 2, y: 2, w: 1, h: 1,
+      description: '公共公告栏', affordances: [{ verb: '阅读公告', outcome: '知道公共消息' }],
+      sensoryCues: ['纸张声'], observationRadius: 3,
+    },
+  ];
+  const actor = makeAgent({ id: 'agent:actor', name: '甲', x: 2, y: 2, locationId: 'obj:board' });
+  const observer = makeAgent({ id: 'agent:observer', name: '乙', x: 3, y: 2, locationId: 'obj:town' });
+  const distant = makeAgent({ id: 'agent:distant', name: '丙', x: 10, y: 7, locationId: 'obj:town' });
+  const world = new WorldState(objects, [actor, observer, distant]);
+  const gateway = new LLMGateway({
+    provider: new StubProvider([
+      { content: '', parsed: { thought: '看看邻里消息', action: { type: 'interact', target: 'obj:board', verb: '阅读公告' }, duration_minutes: 10 } },
+      { content: '', parsed: { importance: 6 } },
+    ]),
+    retries: 0,
+  });
+  const mind = new MindEngine({ db, llm: gateway, log });
+  const executor = new AgentExecutor(gateway, world, log, mind);
+
+  executor.progress(actor, 0, 10);
+  await flush();
+  executor.progress(actor, 0, 10);
+  await mind.drain();
+
+  const event = log.eventsForDay(1).find((item) => item.payload?.kind === 'public_object_interaction');
+  assert.ok(event);
+  assert.deepEqual(event.payload?.observerIds, [observer.id]);
+  assert.deepEqual(event.payload?.memoryAgentIds, [actor.id, observer.id]);
+  assert.ok(mind.store.recentMemories(observer.id, 10).some((memory) => memory.sourceEventId === event.id));
+  assert.ok(!mind.store.recentMemories(distant.id, 10).some((memory) => memory.sourceEventId === event.id));
+  const evidence = mind.rels.evidenceFor(observer.id, actor.id).find((item) => item.sourceEventId === event.id);
+  assert.equal(evidence?.sourceKind, 'observation');
+  assert.equal(evidence?.metadata.objectId, 'obj:board');
+  await mind.dispose();
+});

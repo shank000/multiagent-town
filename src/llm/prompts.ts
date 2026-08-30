@@ -12,6 +12,57 @@ export const HOUR_PLAN_TEMPLATE = 'hour_plan';
 export const REFLECTION_QUESTIONS_TEMPLATE = 'reflection_questions';
 export const REFLECTION_INSIGHTS_TEMPLATE = 'reflection_insights';
 export const REFLECTION_JOURNAL_TEMPLATE = 'reflection_journal';
+
+export const REFLECTION_JOURNAL_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['diary', 'mind_state', 'insights', 'beliefs', 'revisions', 'behavior_guidance'],
+  properties: {
+    diary: { type: 'string', minLength: 30, maxLength: 1200 },
+    mind_state: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['valence', 'energy', 'stress', 'social_need', 'occupational_focus', 'summary'],
+      properties: {
+        valence: { type: 'number', minimum: -1, maximum: 1 },
+        energy: { type: 'number', minimum: 0, maximum: 1 },
+        stress: { type: 'number', minimum: 0, maximum: 1 },
+        social_need: { type: 'number', minimum: 0, maximum: 1 },
+        occupational_focus: { type: 'number', minimum: 0, maximum: 1 },
+        summary: { type: 'string', minLength: 1, maxLength: 120 },
+      },
+    },
+    insights: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'string', minLength: 1, maxLength: 180 } },
+    beliefs: {
+      type: 'array', minItems: 1, maxItems: 5,
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['statement', 'confidence', 'evidence_ids', 'status', 'supersedes'],
+        properties: {
+          statement: { type: 'string', minLength: 1, maxLength: 220 },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          evidence_ids: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string' } },
+          status: { type: 'string', enum: ['new', 'reinforced', 'revised'] },
+          supersedes: { type: ['string', 'null'] },
+        },
+      },
+    },
+    revisions: {
+      type: 'array', maxItems: 3,
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['previous', 'revised', 'reason', 'evidence_ids'],
+        properties: {
+          previous: { type: 'string', minLength: 1, maxLength: 180 },
+          revised: { type: 'string', minLength: 1, maxLength: 180 },
+          reason: { type: 'string', minLength: 1, maxLength: 220 },
+          evidence_ids: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string' } },
+        },
+      },
+    },
+    behavior_guidance: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'string', minLength: 1, maxLength: 180 } },
+  },
+} as const;
 export const DIALOGUE_TEMPLATE = 'dialogue';
 export const DIALOGUE_SUMMARY_TEMPLATE = 'dialogue_summary';
 export const INTERVIEW_TEMPLATE = 'interview';
@@ -28,7 +79,16 @@ export interface MockContextPayload {
   mindState?: ReflectionMindState | null;
   agenda: string | null;
   playerInstruction: string | null;
-  objects: { id: string; name: string }[];
+  objects: ActionObjectContext[];
+}
+
+export interface ActionObjectContext {
+  id: string;
+  name: string;
+  description?: string;
+  affordances?: { verb: string; outcome: string }[];
+  sensoryCues?: string[];
+  state?: { label: string; detail: string };
 }
 
 export interface ActionDecisionInput {
@@ -36,7 +96,7 @@ export interface ActionDecisionInput {
   day: number;
   minuteOfDay: number;
   locationName: string;
-  objects: { id: string; name: string }[];
+  objects: ActionObjectContext[];
   playerInstruction: string | null;
   mockContext: MockContextPayload;
 }
@@ -88,6 +148,8 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
     `决定接下来 5~15 分钟做什么。地点必须从给定对象里选。`,
     'thought 只解释这一个即时行动，事实只能来自以上上下文；未来意图要写成“准备/打算”，不得把未观察到的事件写成已经发生，也不得描述 action 未编码的额外行动。',
     '动作字段必须匹配：idle 只能使用 JSON null 作为 target；move_to/interact 必须使用可用对象的 id 作为 target。',
+    '带有 affordances 的公共物件可以被观察和使用；选择 interact 时优先采用与人物背景、当前记忆和现场状态相符的 affordance verb，不要机械轮换物件。',
+    '对象中的 state 只会在你处于可感知范围内时出现，可把它当作当前亲眼看到、听到或闻到的现场线索。',
     'idle 示例：{"thought":"稍作休息","action":{"type":"idle","target":null,"verb":"休息"},"duration_minutes":10}',
     `非 idle 示例：{"thought":"去目标地点整理物品","action":{"type":"interact","target":${JSON.stringify(actionTargetExample)},"verb":"整理物品"},"duration_minutes":10}`,
     `只输出 JSON：一个符合上述约束的对象。`,

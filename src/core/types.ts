@@ -107,12 +107,34 @@ export interface Tile { x: number; y: number }
 
 export type ObjectType = 'town' | 'building' | 'room' | 'furniture' | 'zone' | 'water';
 
+export interface ObjectAffordance {
+  /** 供居民决策使用的自然语言动作。 */
+  verb: string;
+  /** 动作通常会带来的可观察结果。 */
+  outcome: string;
+}
+
+export interface WorldObjectState {
+  label: string;
+  detail: string;
+  updatedGameTime: number;
+  expiresGameTime: number;
+}
+
 export interface WorldObject {
   id: string;
   name: string;
   type: ObjectType;
   parentId: string | null;
   x: number; y: number; w: number; h: number; // 瓦片坐标与尺寸
+  /** 面向居民和研究者的环境语义。 */
+  description?: string;
+  affordances?: ObjectAffordance[];
+  sensoryCues?: string[];
+  /** 公共互动可被多远范围内的居民直接见证；缺省表示不广播旁观记忆。 */
+  observationRadius?: number;
+  /** 由日常生活事件维护的短期现场状态。 */
+  state?: WorldObjectState;
 }
 
 export type EventType = 'move' | 'chat' | 'interact' | 'broadcast' | 'system' | 'player';

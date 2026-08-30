@@ -14,6 +14,7 @@ import { ReflectionEngine } from './reflection';
 import { DialogueEngine } from './dialogue';
 import { RumorTracker } from './rumors';
 import { TownModel } from './town-model';
+import { TownLifeEngine } from './town-life';
 
 export interface MindEngineOptions {
   db: DbHandle;
@@ -30,6 +31,7 @@ export class MindEngine {
   readonly rels: RelationshipStore;
   readonly rumors: RumorTracker;
   readonly townModel: TownModel;
+  readonly townLife: TownLifeEngine;
   private writer: MemoryWriter;
   private pendingDaily = new Set<Promise<void>>();
 
@@ -44,6 +46,7 @@ export class MindEngine {
     this.rumors = new RumorTracker(opts.db);
     this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 12, this.rels, this.rumors, { scopeId });
     this.townModel = new TownModel(opts.log, this.rels);
+    this.townLife = new TownLifeEngine(opts.log);
   }
 
   tick(world: WorldState, dt: number, now: number, realtimeSampling = false): void {
@@ -83,6 +86,7 @@ export class MindEngine {
     }
     for (const a of world.allAgents()) this.reflection?.tick(a, day, now);
     this.dialogue?.tick(world, dt, now);
+    this.townLife.tick(world, dt, now);
     this.townModel.tick(world, dt, now);
   }
 

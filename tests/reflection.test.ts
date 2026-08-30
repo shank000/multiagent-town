@@ -4,7 +4,7 @@ import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
 import { MemoryStore } from '../src/store/memory';
 import { LLMGateway } from '../src/llm/gateway';
-import { ReflectionEngine } from '../src/engine/reflection';
+import { ReflectionEngine, reflectionDiaryOf } from '../src/engine/reflection';
 import { makeAgent, persona, flush } from './helpers';
 
 function setup() {
@@ -109,4 +109,18 @@ test('没有事件证据的日记明确记录证据不足，不形成无来源�
   assert.deepEqual(daily.evidenceIds, []);
   assert.deepEqual(daily.insights, []);
   assert.deepEqual(daily.beliefs, []);
+});
+
+test('最终日记只投影事件证据、心态与人物价值，不接纳模型新增事实', () => {
+  const agent = makeAgent({ id: 'agent:1', name: '甲', persona: persona({ name: '甲', occupation: '咖啡师' }) });
+  const diary = reflectionDiaryOf(agent, 1, [
+    { content: '早上为第一位客人调整了手冲配方。', importance: 8, createdGameTime: 540 },
+    { content: '打烊前两位客人因咖啡聊成了朋友。', importance: 7, createdGameTime: 1100 },
+  ], {
+    valence: 0.4, energy: 0.6, stress: 0.2, socialNeed: 0.7, occupationalFocus: 0.8, summary: '心情踏实',
+  });
+  assert.match(diary, /调整了手冲配方/);
+  assert.match(diary, /两位客人因咖啡聊成了朋友/);
+  assert.match(diary, /咖啡师/);
+  assert.doesNotMatch(diary, /干花|热可可|咖啡渍/);
 });

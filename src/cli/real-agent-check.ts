@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Agent } from '../core/types';
 import { actionDecisionJsonSchema } from '../core/state-machine';
 import { buildTown } from '../engine/seed';
+import { reflectionDiaryOf } from '../engine/reflection';
 import { personalityOf } from '../engine/town-model';
 import { assessDialogueTurn, conservativeDialogueReply, dialogueRepairInstruction } from '../engine/dialogue-quality';
 import { validateDecision } from '../llm/action-validator';
@@ -9,6 +10,7 @@ import { LLMGateway } from '../llm/gateway';
 import {
   ACTION_DECISION_TEMPLATE,
   DIALOGUE_TEMPLATE,
+  REFLECTION_JOURNAL_JSON_SCHEMA,
   REFLECTION_JOURNAL_TEMPLATE,
   buildActionDecisionMessages,
   dialogueMessages,
@@ -247,10 +249,11 @@ async function checkReflection(llm: LLMGateway, agent: Agent, scenario: AgentSce
   });
   const { value: response, latencyMs } = await timed(() => llm.complete({
     tier: 'large', template: REFLECTION_JOURNAL_TEMPLATE, messages, jsonMode: true,
-    maxTokens: 3072, temperature: 0.2, agentId: agent.id, reasoning: true,
+    jsonSchema: REFLECTION_JOURNAL_JSON_SCHEMA,
+    maxTokens: 1024, temperature: 0.2, agentId: agent.id, reasoning: false,
   }));
   const parsed = response.parsed as Record<string, unknown> | null;
-  const diary = typeof parsed?.diary === 'string' ? parsed.diary.trim() : '';
+  const generatedDiary = typeof parsed?.diary === 'string' ? parsed.diary.trim() : '';
   const mind = parsed?.mind_state as Record<string, unknown> | null;
   const numericRanges: [string, number, number][] = [
     ['valence', -1, 1], ['energy', 0, 1], ['stress', 0, 1],
@@ -264,9 +267,16 @@ async function checkReflection(llm: LLMGateway, agent: Agent, scenario: AgentSce
     && Array.isArray(parsed?.revisions)
     && !!stringArray(parsed?.behavior_guidance)
     && (stringArray(parsed?.behavior_guidance)?.length ?? 0) > 0;
-  const grounded = scenario.evidenceSignal.test(diary);
-  const personalized = diary.includes(agent.persona.occupation) || scenario.personaSignal.test(diary);
-  const schemaOk = diary.length >= 30 && mindOk && arraysOk;
+  const projectedDiary = reflectionDiaryOf(agent, 1, evidence.map((item, index) => ({
+    content: item.content, importance: item.importance, createdGameTime: index,
+  })), mindOk ? {
+    valence: Number(mind?.valence), energy: Number(mind?.energy), stress: Number(mind?.stress),
+    socialNeed: Number(mind?.social_need), occupationalFocus: Number(mind?.occupational_focus),
+    summary: String(mind?.summary),
+  } : { valence: 0, energy: 0.5, stress: 0.5, socialNeed: 0.5, occupationalFocus: 0.7, summary: '保持观察' });
+  const grounded = scenario.evidenceSignal.test(projectedDiary);
+  const personalized = projectedDiary.includes(agent.persona.occupation) || scenario.personaSignal.test(projectedDiary);
+  const schemaOk = generatedDiary.length >= 30 && mindOk && arraysOk;
   const ok = schemaOk && grounded && personalized;
   const failures = [
     schemaOk ? '' : '日记或心态 schema 不完整',
@@ -276,7 +286,7 @@ async function checkReflection(llm: LLMGateway, agent: Agent, scenario: AgentSce
   return {
     name: '反思', ok, latencyMs,
     detail: failures.length ? failures.join('；') : '证据有根据、心态完整且形成可执行指引',
-    sample: diary || JSON.stringify(response.parsed),
+    sample: projectedDiary || JSON.stringify(response.parsed),
   };
 }
 

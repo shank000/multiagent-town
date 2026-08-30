@@ -16,6 +16,7 @@ import type { LLMGateway } from '../llm/gateway';
 import { initialMindStateOf } from './agent-profile';
 import {
   REFLECTION_INSIGHTS_TEMPLATE,
+  REFLECTION_JOURNAL_JSON_SCHEMA,
   REFLECTION_JOURNAL_TEMPLATE,
   REFLECTION_QUESTIONS_TEMPLATE,
   reflectionInsightsMessages,
@@ -132,10 +133,8 @@ export class ReflectionEngine {
     const finalInsights = boundedEvidence.length
       ? (insights.length ? insights : uniqueStrings(candidateInsights, 5, 180))
       : [];
-    const diary = boundedEvidence.length
-      ? (textOf(journalResponse.diary, 1200) || fallbackDiary(agent, day, boundedEvidence))
-      : fallbackDiary(agent, day, boundedEvidence);
     const mindState = normalizeMindState(journalResponse.mind_state, prior?.mindState ?? initialMindStateOf(agent.persona), boundedEvidence);
+    const diary = reflectionDiaryOf(agent, day, boundedEvidence, mindState);
     const revisions = normalizeRevisions(journalResponse.revisions, priorInsights, allowedEvidence);
     const beliefs = normalizeBeliefs(journalResponse.beliefs, finalInsights, revisions, allowedEvidence);
     const guidance = uniqueStrings(journalResponse.behavior_guidance, 5, 180);
@@ -247,7 +246,8 @@ export class ReflectionEngine {
     prior: { diary: string; mindState: ReflectionMindState } | null,
   ): Promise<JournalRaw> {
     const result = await this.llm.complete({
-      tier: 'large', template: REFLECTION_JOURNAL_TEMPLATE, jsonMode: true, maxTokens: 3072, temperature: 0.2,
+      tier: 'large', template: REFLECTION_JOURNAL_TEMPLATE, jsonMode: true,
+      jsonSchema: REFLECTION_JOURNAL_JSON_SCHEMA, maxTokens: 1024, temperature: 0.2,
       messages: reflectionJournalMessages({
         agent,
         day,
@@ -260,7 +260,7 @@ export class ReflectionEngine {
         priorMindState: prior?.mindState ?? null,
       }),
       agentId: agent.id,
-      reasoning: true,
+      reasoning: false,
       priority: 'reflection',
       scopeId: this.scopeId,
       timeoutMs: 180_000,
@@ -377,6 +377,35 @@ function fallbackDiary(agent: Agent, day: number, evidence: Memory[]): string {
   if (!evidence.length) return `第${day}天没有足够的事件证据。我会继续履行${agent.persona.occupation}的职责，并留意自己的判断。`;
   const highlights = evidence.slice(-3).map((item) => item.content).join('；');
   return `今天作为${agent.persona.occupation}，我记得：${highlights}。这些是我对已发生事情的个人理解。`;
+}
+
+type DiaryEvidence = Pick<Memory, 'content' | 'importance'> & { createdGameTime?: number };
+
+/** 将客观事件、主观心态与人物价值分层组织，防止模型修辞被误记为发生过的事实。 */
+export function reflectionDiaryOf(
+  agent: Agent,
+  day: number,
+  evidence: readonly DiaryEvidence[],
+  mindState: ReflectionMindState,
+): string {
+  if (!evidence.length) return fallbackDiary(agent, day, []);
+  const highlights = [...evidence]
+    .sort((a, b) => b.importance - a.importance || (b.createdGameTime ?? 0) - (a.createdGameTime ?? 0))
+    .slice(0, 4)
+    .sort((a, b) => (a.createdGameTime ?? 0) - (b.createdGameTime ?? 0))
+    .map((item) => item.content.trim().replace(/\s+/g, ' ').replace(/[。！？；]+$/u, '').slice(0, 220))
+    .filter(Boolean);
+  const mood = mindState.stress >= 0.65
+    ? '我现在有些紧绷，需要放慢判断并核对细节'
+    : mindState.valence >= 0.35
+      ? '我现在感到踏实，也愿意继续留意新的变化'
+      : mindState.valence <= -0.25
+        ? '我现在有些低落，需要先照顾好精力再作决定'
+        : '我现在心绪平稳，会继续观察自己的判断如何变化';
+  const value = agent.persona.values[0]?.trim();
+  const valueLine = value ? `我仍然看重「${value}」；` : '';
+  const socialLine = mindState.socialNeed >= 0.65 ? '也会主动留意与邻里的联系' : '并依据新的观察修正行动';
+  return `第${day}天，我记下：${highlights.join('；')}。${mood}。作为${agent.persona.occupation}，${valueLine}我会把职责放进下一份计划，${socialLine}。`.slice(0, 1200);
 }
 
 function fallbackGuidance(agent: Agent, state: ReflectionMindState): string[] {

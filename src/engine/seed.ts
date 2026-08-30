@@ -28,7 +28,14 @@ export function hydrateWorld(db: DbHandle, world: WorldState): void {
        state_json = excluded.state_json`
   );
   for (const o of world.allObjects()) {
-    upsertObject.run(o.id, o.parentId, o.name, o.type, o.x, o.y, o.w, o.h, '{}');
+    const objectState = {
+      description: o.description ?? null,
+      affordances: o.affordances ?? [],
+      sensoryCues: o.sensoryCues ?? [],
+      observationRadius: o.observationRadius ?? null,
+      state: o.state ?? null,
+    };
+    upsertObject.run(o.id, o.parentId, o.name, o.type, o.x, o.y, o.w, o.h, JSON.stringify(objectState));
   }
   db.raw.prepare(
     `INSERT INTO world_meta(key, value) VALUES ('profile_set_hash', ?)
@@ -55,6 +62,92 @@ export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:park_easel', name: '公园画架', type: 'furniture', parentId: 'obj:park', x: 7, y: 27, w: 1, h: 1 },
   { id: 'obj:farm', name: '晨光农田', type: 'zone', parentId: 'obj:town', x: 24, y: 24, w: 8, h: 6 },
   { id: 'obj:path_main', name: '主街', type: 'zone', parentId: 'obj:town', x: 8, y: 16, w: 24, h: 2 },
+  // 可感知、可交互的公共生活物件；动作会留下旁观记忆与关系证据。
+  {
+    id: 'obj:notice_board', name: '广场公告栏', type: 'furniture', parentId: 'obj:plaza', x: 18, y: 18, w: 1, h: 1,
+    description: '贴着失物招领、活动预告和居民手写便笺的木制公告栏。',
+    affordances: [
+      { verb: '阅读公告', outcome: '知道近期活动、需求和失物信息' },
+      { verb: '张贴便笺', outcome: '把一条公开信息留给后来者' },
+    ],
+    sensoryCues: ['纸张被风吹动的沙沙声', '墨水与旧木板的气味'], observationRadius: 6,
+  },
+  {
+    id: 'obj:market_stall', name: '日常集市摊位', type: 'furniture', parentId: 'obj:plaza', x: 22, y: 18, w: 2, h: 1,
+    description: '居民轮流摆放蔬果、面包和手作小物的公共摊位。',
+    affordances: [
+      { verb: '挑选日用品', outcome: '了解今天的供应与价格' },
+      { verb: '帮忙整理摊位', outcome: '与摊主共同完成一件日常事务' },
+      { verb: '询问货物来历', outcome: '听到关于生产者和邻里的消息' },
+    ],
+    sensoryCues: ['新鲜果蔬和烤面包的混合香气', '零钱与篮筐碰撞声'], observationRadius: 7,
+  },
+  {
+    id: 'obj:plaza_fountain', name: '广场饮水泉', type: 'furniture', parentId: 'obj:plaza', x: 22, y: 21, w: 1, h: 1,
+    description: '一座可以接水、洗手，也常让人停下脚步的小石泉。',
+    affordances: [
+      { verb: '接一杯水', outcome: '短暂恢复精力并留意周围动静' },
+      { verb: '清理泉边落叶', outcome: '维护公共空间并被附近居民看见' },
+    ],
+    sensoryCues: ['细小而持续的流水声', '潮湿石面带来的清凉'], observationRadius: 5,
+  },
+  {
+    id: 'obj:park_bench', name: '湖边长椅', type: 'furniture', parentId: 'obj:park', x: 14, y: 30, w: 2, h: 1,
+    description: '朝向湖面的旧木长椅，扶手上留着多年的细小刻痕。',
+    affordances: [
+      { verb: '坐下观察湖面', outcome: '安静整理心绪并观察经过的人' },
+      { verb: '与身边人分享长椅', outcome: '形成低压力的共处机会' },
+    ],
+    sensoryCues: ['湖风吹过树叶的声音', '木板被晒暖后的气味'], observationRadius: 5,
+  },
+  {
+    id: 'obj:bird_feeder', name: '公园喂鸟台', type: 'furniture', parentId: 'obj:park', x: 11, y: 28, w: 1, h: 1,
+    description: '挂着谷物盒和浅水碟的小喂鸟台，清晨常聚来麻雀。',
+    affordances: [
+      { verb: '补充鸟食', outcome: '照料公园里的小动物' },
+      { verb: '观察鸟群', outcome: '记录天气、季节和鸟群反应' },
+    ],
+    sensoryCues: ['细碎的鸟鸣', '翅膀扑动和谷粒落盘声'], observationRadius: 5,
+  },
+  {
+    id: 'obj:water_pump', name: '农田水泵', type: 'furniture', parentId: 'obj:town', x: 23, y: 26, w: 1, h: 1,
+    description: '连接灌溉水渠的手压泵，农忙时需要居民轮流使用。',
+    affordances: [
+      { verb: '压水灌溉', outcome: '为农田或公共花圃补水' },
+      { verb: '检查水泵', outcome: '发现漏水、异响或维护需求' },
+    ],
+    sensoryCues: ['金属把手的吱呀声', '水流冲进木桶的回响'], observationRadius: 7,
+  },
+  {
+    id: 'obj:community_garden', name: '邻里共享菜园', type: 'furniture', parentId: 'obj:farm', x: 29, y: 27, w: 2, h: 2,
+    description: '由居民共同认领小块土地、记录播种与收成的共享菜园。',
+    affordances: [
+      { verb: '查看幼苗', outcome: '判断土壤、虫害和生长情况' },
+      { verb: '除草浇水', outcome: '为共同资源投入劳动' },
+      { verb: '留下种植记录', outcome: '把经验传给下一位照料者' },
+    ],
+    sensoryCues: ['湿土和青草气味', '叶片摩擦与昆虫低鸣'], observationRadius: 7,
+  },
+  {
+    id: 'obj:tool_rack', name: '公共工具架', type: 'furniture', parentId: 'obj:farm', x: 31, y: 24, w: 1, h: 1,
+    description: '放着锄头、剪枝钳、麻绳和修补工具的借用架。',
+    affordances: [
+      { verb: '借用工具', outcome: '为接下来的劳动准备器具' },
+      { verb: '归还并整理工具', outcome: '留下可靠、守序的公共行为记录' },
+      { verb: '修理松动工具', outcome: '为其他居民减少使用风险' },
+    ],
+    sensoryCues: ['木柄和金属轻碰的声音', '机油与干草气味'], observationRadius: 6,
+  },
+  {
+    id: 'obj:bus_stop', name: '主街候车亭', type: 'furniture', parentId: 'obj:path_main', x: 31, y: 16, w: 1, h: 2,
+    description: '贴着时刻表和外镇消息的简朴候车亭，也是接送包裹的地点。',
+    affordances: [
+      { verb: '查看时刻表', outcome: '了解外镇交通和今日班次' },
+      { verb: '等候班车', outcome: '观察来往旅客和新到货物' },
+      { verb: '帮忙搬取包裹', outcome: '为邻里提供一次可见的工具性支持' },
+    ],
+    sensoryCues: ['远处车轮压过石路的声音', '纸质时刻表被风掀动'], observationRadius: 8,
+  },
   // 住宅（四角）
   { id: 'obj:home_lin', name: '林晚晴的家', type: 'building', parentId: 'obj:town', x: 2, y: 2, w: 4, h: 4 },
   { id: 'obj:home_chen', name: '陈默的家', type: 'building', parentId: 'obj:town', x: 34, y: 2, w: 4, h: 4 },
@@ -256,7 +349,12 @@ export const DEFAULT_SEED: TownSeed = {
 export function buildTown(seed: TownSeed = DEFAULT_SEED): WorldState {
   // 平行世界从同一份种子构造，但运行态对象必须完全独立，避免一个世界的
   // persona / routine / 地图对象变更通过共享引用影响另一个世界。
-  const objects = seed.objects.map((object) => ({ ...object }));
+  const objects = seed.objects.map((object) => ({
+    ...object,
+    affordances: object.affordances?.map((affordance) => ({ ...affordance })),
+    sensoryCues: object.sensoryCues ? [...object.sensoryCues] : undefined,
+    state: object.state ? { ...object.state } : undefined,
+  }));
   const personas = seed.personas.map((persona): Persona => ({
     ...persona,
     appearance: { ...persona.appearance },

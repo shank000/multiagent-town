@@ -5,7 +5,7 @@ import type { GameEvent } from '../core/types';
 import type { WorldState } from '../core/world';
 
 export interface PerceptionEntry {
-  type: 'chat' | 'interact' | 'move' | 'join';
+  type: 'chat' | 'interact' | 'move' | 'join' | 'environment';
   from: string;
   attention: number;
   distance: number;
@@ -19,6 +19,7 @@ const RANGE = 12; // 曼哈顿距离（瓦片）感知上限
 const BASE_WEIGHTS: Record<PerceptionEntry['type'], number> = {
   chat: 1.0,
   interact: 0.5,
+  environment: 0.65,
   join: 0.3,
   move: 0.1,
 };
@@ -45,29 +46,38 @@ export class PerceptionEngine {
   }
 
   /** 事件入缓冲：判断事件 actor 与每位访客的距离并计算注意力 */
-  onEvent(e: GameEvent & { payload?: { kind?: string; fromId?: string; toId?: string; line?: string } | null }): void {
+  onEvent(e: GameEvent & { payload?: { kind?: string; fromId?: string; toId?: string; line?: string; objectId?: string; perceptionRadius?: number } | null }): void {
     const kind = e.payload?.kind ?? '';
     const actorId = e.actorId;
-    if (!actorId) return;
     const type: PerceptionEntry['type'] | null =
-      kind.startsWith('chat') || kind === 'experiment_pair_choice' ? 'chat'
+      kind === 'ambient_life' ? 'environment'
+        : kind.startsWith('chat') || kind === 'experiment_pair_choice' ? 'chat'
         : e.type === 'interact' ? 'interact'
           : e.type === 'move' ? 'move'
             : kind === 'guest_login' ? 'join'
               : null;
     if (!type) return;
-    const actor = this.world.getAgent(actorId);
-    if (!actor) return;
+    const actor = actorId && this.world.hasAgent(actorId) ? this.world.getAgent(actorId) : null;
+    const object = this.world.getObject(e.payload?.objectId ?? e.location);
+    const origin = actor
+      ? { x: actor.x, y: actor.y, name: actor.name }
+      : object
+        ? { ...this.world.centerOf(object), name: object.name }
+        : null;
+    if (!origin) return;
     for (const a of this.world.allAgents()) {
       if (a.id === actorId) continue;
       const base = BASE_WEIGHTS[type];
-      const d = Math.abs(actor.x - a.x) + Math.abs(actor.y - a.y);
-      const att = attentionOf(base, d, RANGE);
+      const d = Math.abs(origin.x - a.x) + Math.abs(origin.y - a.y);
+      const eventRange = type === 'environment' && typeof e.payload?.perceptionRadius === 'number'
+        ? Math.max(1, Math.min(RANGE, e.payload.perceptionRadius))
+        : RANGE;
+      const att = attentionOf(base, d, eventRange);
       if (att < ATTENTION_THRESHOLD) continue;
       const buf = this.buffers.get(a.id) ?? [];
       buf.push({
         type,
-        from: actor.name,
+        from: origin.name,
         attention: Math.round(att * 100) / 100,
         distance: d,
         text: (typeof e.description === 'string' ? e.description : null) ?? null,

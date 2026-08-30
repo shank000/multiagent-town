@@ -57,7 +57,7 @@ async function main(): Promise<void> {
         console.log('📡 环境感知：');
         for (const p of r.perceptions) {
           const icon = p.attention >= 0.7 ? '⚡' : p.attention >= 0.35 ? '●' : '○';
-          const t = p.type === 'chat' ? '💬' : p.type === 'interact' ? '🎭' : p.type === 'move' ? '🚶' : '👋';
+          const t = p.type === 'chat' ? '💬' : p.type === 'interact' ? '🎭' : p.type === 'move' ? '🚶' : p.type === 'environment' ? '🌿' : '👋';
           console.log(`  ${icon} ${t} ${p.from}${p.text ? `：${p.text.slice(0, 30)}` : ''} (距离 ${p.distance} 步)`);
         }
       }

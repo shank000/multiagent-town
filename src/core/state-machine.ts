@@ -152,18 +152,32 @@ export class AgentExecutor {
       mindState = this.mind.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
       agenda = this.mind.planner.currentAgendaLine(agent, day, minuteOfDay);
     }
+    const actionObjects = this.world.allObjects().map((object) => {
+      const center = this.world.centerOf(object);
+      const canSenseState = !!object.state && (
+        Math.abs(agent.x - center.x) + Math.abs(agent.y - center.y) <= (object.observationRadius ?? 3)
+      );
+      return {
+        id: object.id,
+        name: object.name,
+        ...(object.description ? { description: object.description } : {}),
+        ...(object.affordances?.length ? { affordances: object.affordances.map((item) => ({ ...item })) } : {}),
+        ...(object.sensoryCues?.length ? { sensoryCues: [...object.sensoryCues] } : {}),
+        ...(canSenseState ? { state: { label: object.state!.label, detail: object.state!.detail } } : {}),
+      };
+    });
     const { messages } = buildActionDecisionMessages({
       agent,
       day: Math.floor(now / MINUTES_PER_DAY) + 1,
       minuteOfDay,
       locationName: this.world.getObject(agent.locationId)?.name ?? agent.locationId,
-      objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
+      objects: actionObjects,
       playerInstruction: this.player?.current(agent.id, now) ?? null,
       mockContext: {
         persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights,
         behaviorGuidance, mindState, agenda,
         playerInstruction: this.player?.current(agent.id, now) ?? null,
-        objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
+        objects: actionObjects,
       },
     });
     const req: LLMRequest = {
@@ -319,7 +333,8 @@ export class AgentExecutor {
       d.action.type === 'interact'
         ? `开始「${d.action.verb}」，约 ${d.durationMinutes} 分钟`
         : `小憩，约 ${d.durationMinutes} 分钟`;
-    this.log.addEvent(this.makeEvent(d.action.type === 'interact' ? 'interact' : 'system', agent, d, now, desc));
+    if (d.action.type === 'interact') this.emitPublicActionStart(agent, d, now, desc);
+    else this.log.addEvent(this.makeEvent('system', agent, d, now, desc));
   }
 
   private stepMove(agent: Agent, dt: number, now: number): void {
@@ -365,9 +380,7 @@ export class AgentExecutor {
       agent.state = 'acting';
       agent.actionEndsAt = now + d.durationMinutes;
       this.log.addEvent(this.makeEvent('move', agent, d, now, `到达「${this.targetName(d)}」`));
-      this.log.addEvent(
-        this.makeEvent('interact', agent, d, now, `开始「${d.action.verb}」，约 ${d.durationMinutes} 分钟`)
-      );
+      this.emitPublicActionStart(agent, d, now, `开始「${d.action.verb}」，约 ${d.durationMinutes} 分钟`);
     }
   }
 
@@ -383,6 +396,50 @@ export class AgentExecutor {
 
   private targetName(d: Decision): string {
     return this.world.getObject(d.action.target)?.name ?? d.action.target ?? '';
+  }
+
+  /** 公共生活物件上的行动会被附近居民见证，并形成定向的观察证据。 */
+  private emitPublicActionStart(agent: Agent, d: Decision, now: number, description: string): void {
+    const event = this.makeEvent('interact', agent, d, now, description);
+    const object = this.world.getObject(d.action.target);
+    const radius = object?.observationRadius ?? 0;
+    const center = object ? this.world.centerOf(object) : null;
+    const observers = center && radius > 0
+      ? this.world.allAgents().filter((other) => (
+        other.id !== agent.id
+        && Math.abs(other.x - center.x) + Math.abs(other.y - center.y) <= radius
+      ))
+      : [];
+    if (object && observers.length > 0) {
+      event.payload = {
+        ...(event.payload ?? {}),
+        kind: 'public_object_interaction',
+        objectId: object.id,
+        objectName: object.name,
+        observerIds: observers.map((observer) => observer.id),
+        memoryAgentIds: [agent.id, ...observers.map((observer) => observer.id)],
+        sensoryCues: object.sensoryCues ?? [],
+      };
+    }
+    this.log.addEvent(event);
+    if (!object || !this.mind || observers.length === 0) return;
+    for (const observer of observers) {
+      this.mind.rels.update(observer.id, agent.id, {
+        knowledge: [event.description],
+        evidence: {
+          kind: 'observation',
+          eventId: event.id,
+          text: event.description,
+          metadata: {
+            channel: 'attention',
+            source: 'public_object',
+            objectId: object.id,
+            objectName: object.name,
+            actionVerb: d.action.verb,
+          },
+        },
+      }, now);
+    }
   }
 
   private makeEvent(type: GameEvent['type'], agent: Agent, d: Decision, now: number, description: string): GameEvent {
