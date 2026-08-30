@@ -19,7 +19,6 @@
       <button data-action="speed" data-value="1">1×</button>
       <button data-action="adaptive-speed" title="实测本地模型吞吐并设置可持续世界倍速">自适应</button>
       <button data-action="speed" data-value="60" title="高速认知采样；模型积压时虚拟时钟自动背压">60×</button>
-      <button data-action="speed" data-value="360" title="批量观察；模型积压时虚拟时钟自动背压">360×</button>
     </div>
     <a class="hud-link" href="/stats.html" aria-label="打开深度社会统计页">深度统计</a>
   </header>
@@ -145,6 +144,7 @@
             <div><span class="section-kicker">当前世界</span><div id="world-desc">载入世界状态……</div></div>
             <div class="card" id="run-status" role="status" aria-live="polite"><div class="dot"></div><span>实验</span><b>未运行</b></div>
           </div>
+          <div class="world-card-tools"><button class="mini-action" id="social-interaction-open" type="button">＋ 社会互动</button><button class="mini-action" id="world-card-toggle" type="button" aria-expanded="true">收起配置</button></div>
           <div id="world-badges" aria-label="当前世界实验配置"></div>
           <div class="experiment-grid">
             <label class="compact-field">关系记忆
@@ -193,6 +193,53 @@
     <button id="play-send">执行</button>
     <button id="play-exit">退出扮演</button>
   </div>
+  <dialog id="agent-editor" class="workspace-dialog" aria-labelledby="agent-editor-title">
+    <form id="agent-editor-form">
+      <header class="dialog-head"><div id="agent-editor-avatar"></div><div><span class="section-kicker">SYNCED RESEARCH PROFILE</span><h2 id="agent-editor-title">编辑居民档案</h2><p>身份与初始条件按稳定居民 ID 同步到三个平行世界。</p></div><button class="dialog-close" type="button" data-close-dialog="agent-editor" aria-label="关闭">×</button></header>
+      <div class="dialog-body">
+        <section class="editor-section"><h3>身份背景</h3><div class="editor-grid">
+          <label>姓名<input name="name" maxlength="16" required /></label><label>年龄<input name="age" type="number" min="16" max="100" required /></label>
+          <label>性别<select name="gender"><option>女</option><option>男</option></select></label><label>职业<input name="occupation" maxlength="32" required /></label>
+          <label class="wide">背景故事<textarea name="background" rows="5" maxlength="2000" required></textarea></label>
+          <label class="wide">核心动机<textarea name="motivation" rows="2" maxlength="240" required></textarea></label>
+          <label class="wide">人格标签（逗号分隔）<input name="traits" required /></label><label class="wide">长期目标（每行一项）<textarea name="goals" rows="3" required></textarea></label>
+          <label class="wide">说话风格<input name="speechStyle" maxlength="160" required /></label>
+        </div></section>
+        <section class="editor-section"><h3>外貌、经历与能力</h3><div class="editor-grid">
+          <label>发型<input name="hairStyle" required /></label><label>发色描述<input name="hairColor" required /></label><label>肤色描述<input name="skinTone" required /></label><label>服装描述<input name="outfit" required /></label>
+          <label class="wide">爱好（逗号分隔）<input name="hobbies" /></label><label class="wide">价值观（每行一项）<textarea name="values" rows="3" required></textarea></label>
+          <label class="wide">技能（每行“技能: 0-10”）<textarea name="skills" rows="4"></textarea></label>
+        </div></section>
+        <section class="editor-section"><h3>人格与初始心态</h3><div class="range-grid">
+          <label>外向 <output data-output="extraversion"></output><input name="extraversion" type="range" min="0" max="1" step="0.01" /></label>
+          <label>共情 <output data-output="empathy"></output><input name="empathy" type="range" min="0" max="1" step="0.01" /></label>
+          <label>诚实 <output data-output="honesty"></output><input name="honesty" type="range" min="0" max="1" step="0.01" /></label>
+          <label>好奇 <output data-output="curiosity"></output><input name="curiosity" type="range" min="0" max="1" step="0.01" /></label>
+          <label>耐心 <output data-output="patience"></output><input name="patience" type="range" min="0" max="1" step="0.01" /></label>
+          <label>情绪效价 <output data-output="valence"></output><input name="valence" type="range" min="-1" max="1" step="0.01" /></label>
+          <label>精力 <output data-output="energy"></output><input name="energy" type="range" min="0" max="1" step="0.01" /></label>
+          <label>压力 <output data-output="stress"></output><input name="stress" type="range" min="0" max="1" step="0.01" /></label>
+          <label>社交需要 <output data-output="socialNeed"></output><input name="socialNeed" type="range" min="0" max="1" step="0.01" /></label>
+          <label>职业专注 <output data-output="occupationalFocus"></output><input name="occupationalFocus" type="range" min="0" max="1" step="0.01" /></label>
+        </div><label class="location-field">新实验起始位置<select name="startingLocationId"></select></label></section>
+        <section class="editor-section avatar-editor"><h3>像素头像</h3><div class="editor-grid">
+          <label>角色图集槽位<input name="sprite" type="number" min="0" max="7" required /></label><label>配饰<select name="accessory"><option value="none">无</option><option value="glasses">眼镜</option><option value="beret">贝雷帽</option><option value="cap">便帽</option><option value="ribbon">发带</option><option value="beard">胡须</option></select></label>
+          <label>发色<input name="avatarHair" type="color" /></label><label>肤色<input name="avatarSkin" type="color" /></label><label>服装色<input name="avatarOutfit" type="color" /></label><label>强调色<input name="avatarAccent" type="color" /></label>
+        </div></section>
+      </div>
+      <footer class="dialog-actions"><span>初始状态用于新实验基线；当前运行位置保持不变。</span><button type="button" data-close-dialog="agent-editor">取消</button><button class="primary" id="agent-editor-save" type="submit">同步保存</button></footer>
+    </form>
+  </dialog>
+  <dialog id="social-interaction-dialog" class="workspace-dialog compact-dialog" aria-labelledby="social-interaction-title">
+    <form id="social-interaction-form">
+      <header class="dialog-head"><div class="dialog-symbol">◆</div><div><span class="section-kicker">CURRENT-WORLD INTERVENTION</span><h2 id="social-interaction-title">发起社会互动</h2><p>研究者操作只作用于当前世界，并写入干预标记、关系证据与记忆账本。</p></div><button class="dialog-close" type="button" data-close-dialog="social-interaction-dialog" aria-label="关闭">×</button></header>
+      <div class="dialog-body"><div class="editor-grid">
+        <label>发起者<select name="actorId"></select></label><label>对象<select name="targetId"></select></label>
+        <label class="wide">互动类型<select name="interactionType"><option value="observe">◉ 留意观察 · 单向形成观察记忆</option><option value="assist">✦ 主动帮助 · 提供具体支持</option><option value="share">◇ 分享信息 · 交换职业或兴趣线索</option><option value="invite">↗ 发出邀请 · 协调后续活动</option><option value="collaborate">◆ 共同做事 · 形成共享活动证据</option></select></label>
+      </div><div id="social-interaction-preview" class="interaction-preview"></div></div>
+      <footer class="dialog-actions"><span>该操作会被标记为 researcher intervention。</span><button type="button" data-close-dialog="social-interaction-dialog">取消</button><button class="primary" type="submit">记录互动</button></footer>
+    </form>
+  </dialog>
   <div id="ui-toast" role="status" aria-live="polite" hidden></div>
   <script src="/client.js"></script>
 </body>

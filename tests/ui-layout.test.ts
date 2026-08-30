@@ -10,6 +10,8 @@ const css = readFileSync(`${root}/public/style.css`, 'utf8');
 const client = readFileSync(`${root}/src/web/client/main.ts`, 'utf8');
 const panelClient = readFileSync(`${root}/src/web/client/panel.ts`, 'utf8');
 const consoleClient = readFileSync(`${root}/src/web/client/console.ts`, 'utf8');
+const avatarClient = readFileSync(`${root}/src/web/client/avatar.ts`, 'utf8');
+const server = readFileSync(`${root}/src/web/server.ts`, 'utf8');
 const statsHtml = readFileSync(`${root}/public/stats.html`, 'utf8');
 const statsClient = readFileSync(`${root}/src/web/client/stats.ts`, 'utf8');
 const packageJson = readFileSync(`${root}/package.json`, 'utf8');
@@ -96,6 +98,24 @@ test('inspector exposes directed relationship evidence and groups dialogue by pe
   assert.match(panelClient, /mind\.conversations/);
   assert.match(panelClient, /message\.fromName/);
   assert.match(panelClient, /conversation\.status/);
+});
+
+test('resident editor, pixel identity and multi-channel social interactions are visible and research-scoped', () => {
+  for (const id of ['agent-editor', 'agent-editor-form', 'social-interaction-dialog', 'social-interaction-form']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  for (const interaction of ['observe', 'assist', 'share', 'invite', 'collaborate']) {
+    assert.match(html, new RegExp(`value=["']${interaction}["']`));
+  }
+  assert.doesNotMatch(html, /data-value="360"/);
+  assert.match(client, /scope[^\n]+all_worlds|同步到三个世界/);
+  assert.match(html, /researcher intervention/);
+  assert.match(panelClient, /avatarFor\(message\.fromAgent/);
+  assert.match(avatarClient, /pixelAvatarMarkup/);
+  assert.match(css, /\.workspace-dialog/);
+  assert.match(css, /\.pixel-avatar/);
+  assert.match(server, /agent_profile_updated/);
+  assert.match(server, /\/api\/social\/interact/);
 });
 
 test('frequently used research controls meet the 40px target baseline', () => {

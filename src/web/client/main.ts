@@ -19,6 +19,7 @@ import {
 } from './console';
 import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
+import { pixelAvatarMarkup, type PixelAvatarView } from './avatar';
 
 interface ClockState { day: number; minutesOfDay: number; totalMinutes: number }
 interface ActiveConversationView {
@@ -40,6 +41,7 @@ interface TownEvent { id: string;
   payload: {
     kind?: string; line?: string; thought?: string; fromId?: string; toId?: string;
     conversationId?: string;
+    interactionType?: string; interactionLabel?: string; icon?: string; source?: string;
   } | null;
 }
 
@@ -220,7 +222,14 @@ async function main(): Promise<void> {
   bindMetricTabs();
   bindNarrativeFollow();
   bindPlayBar();
-  updatePanelDeps({ playing, togglePlay });
+  bindResearchDialogs();
+  updatePanelDeps({
+    playing,
+    togglePlay,
+    agentById: (id) => snap?.agents.find((agent) => agent.id === id) ?? null,
+    editProfile: openAgentEditor,
+    openInteraction: openSocialInteraction,
+  });
   bindPanel((tab) => { activeTab = tab; }, updatePanel);
   document.addEventListener('relationship-dyad-focus-cleared', () => {
     if (selectedNetworkEdge) clearNetworkEdgeSelection(false);
@@ -415,7 +424,8 @@ function onEvent(e: TownEvent & { worldId?: string }): void {
     const text = kind === 'thought' ? (e.payload?.thought ?? '') : (e.payload?.line ?? '');
     // 对话条（chat/chat_summary）显示 9 秒，thought 气泡维持 7 秒
     const until = performance.now() + (kind === 'thought' ? 7000 : 9000);
-    bubbles.set(fromId, { kind, speaker, text, until });
+    const accent = snap?.agents.find((agent) => agent.id === fromId)?.avatar.accent;
+    bubbles.set(fromId, { kind, speaker, text, until, accent });
   }
 }
 
@@ -454,6 +464,7 @@ interface NarrativeItem {
   text: string; line: string | null; thought: string | null;
   mode: string | null; chosen: string | null;
   candidates: { id: string; name: string; affection: number; lastInteraction: number }[] | null;
+  interactionType: string | null; interactionLabel: string | null; icon: string | null; source: string | null;
 }
 let lastNarrativeSignature = '';
 let lastNarrativeAt = 0;
@@ -496,7 +507,13 @@ function renderNarrative(items: NarrativeItem[]): void {
     const actorData = it.actor ? encodeURIComponent(it.actor) : '';
     if (it.kind.startsWith('chat')) {
       card.className = 'nar-bubble';
-      card.innerHTML = `<div class="nar-head"><button type="button" class="nar-ava" data-agent-id="${actorData}" aria-label="查看 ${escapeHtml(it.actorName)}">${escapeHtml(it.actorName.slice(0, 1))}</button><button type="button" class="nar-name" data-agent-id="${actorData}">${escapeHtml(it.actorName)}</button>${meta}</div><div class="nar-text">${escapeHtml(it.line ?? it.text)}</div>`;
+      const actor = it.actor ? snap?.agents.find((agent) => agent.id === it.actor) : null;
+      card.innerHTML = `<div class="nar-head"><button type="button" class="nar-ava" data-agent-id="${actorData}" aria-label="查看 ${escapeHtml(it.actorName)}">${actor ? pixelAvatarMarkup(actor.name, actor.avatar, 'narrative-avatar') : escapeHtml(it.actorName.slice(0, 1))}</button><div class="nar-speaker"><button type="button" class="nar-name" data-agent-id="${actorData}">${escapeHtml(it.actorName)}</button>${it.targetName ? `<small>对 ${escapeHtml(it.targetName)} 说</small>` : ''}</div>${meta}</div><div class="nar-text">${escapeHtml(it.line ?? it.text)}</div>`;
+    } else if (it.kind === 'social_interaction') {
+      const actor = it.actor ? snap?.agents.find((agent) => agent.id === it.actor) : null;
+      const target = it.target ? snap?.agents.find((agent) => agent.id === it.target) : null;
+      card.className = 'nar-card social-interaction';
+      card.innerHTML = `<div class="interaction-people">${actor ? `<button type="button" data-agent-id="${encodeURIComponent(actor.id)}">${pixelAvatarMarkup(actor.name, actor.avatar, 'narrative-avatar')}<span>${escapeHtml(actor.name)}</span></button>` : ''}<i>${escapeHtml(it.icon ?? '◆')}</i>${target ? `<button type="button" data-agent-id="${encodeURIComponent(target.id)}">${pixelAvatarMarkup(target.name, target.avatar, 'narrative-avatar')}<span>${escapeHtml(target.name)}</span></button>` : ''}${meta}</div><div class="nar-prose"><span class="nar-title">${escapeHtml(it.interactionLabel ?? '社会互动')}</span><br>${escapeHtml(it.text)}</div>${it.source === 'researcher' ? '<span class="intervention-tag">研究者干预 · 当前世界</span>' : ''}`;
     } else if (it.kind === 'thought' || ((it.kind.startsWith('thought')) && it.thought)) {
       card.className = 'nar-card thought';
       card.innerHTML = `${meta}<span class="nar-title">💭 ${escapeHtml(it.actorName)} 的内心独白</span><div class="nar-italic">${escapeHtml(it.thought ?? it.text)}</div>`;
@@ -570,7 +587,7 @@ async function pollNarrative(): Promise<void> {
 }
 const FEED_KINDS: [string, string][] = [
   ['chat', '💬 对话'], ['chat_summary', '📜 小结'], ['gift', '💐 馈礼'], ['rumor', '🗣 谣言'],
-  ['town_event', '🎪 活动'], ['broadcast', '📢 广播'], ['interact', '🛠 互动'], ['move', '🚶 移动'],
+  ['town_event', '🎪 活动'], ['broadcast', '📢 广播'], ['social_interaction', '◆ 社会互动'], ['interact', '🛠 互动'], ['move', '🚶 移动'],
 ];
 let activeFilter = '全部';
 function renderCharacterCard(id: string | null): void {
@@ -578,12 +595,229 @@ function renderCharacterCard(id: string | null): void {
   if (!box || !snap) return;
   const a = snap.agents.find((x) => x.id === id);
   if (!a) { box.innerHTML = '点击左侧名册或对话头像查看角色'; return; }
-  box.innerHTML = `<div class="char-head"><span class="char-ava">${escapeHtml(a.name.slice(0, 1))}</span>
+  box.innerHTML = `<div class="char-head">${pixelAvatarMarkup(a.name, a.avatar, 'character-avatar')}
     <div><div class="char-name">${escapeHtml(a.name)}</div><div class="char-sub">${escapeHtml(a.occupation)}</div></div></div>
     <div class="char-row"><span>状态</span>${escapeHtml(STATE_NAME[a.state] ?? a.state)}${a.verb ? ` · ${escapeHtml(a.verb)}` : ''}</div>
     <div class="char-row"><span>想法</span>${a.thought ? escapeHtml(a.thought) : '（暂无）'}</div>
     <div class="char-divider"></div>
-    <div class="char-row"><span>坐标</span>(${a.x}, ${a.y}) · ${escapeHtml(a.locationName)}</div>`;
+    <div class="char-row"><span>坐标</span>(${a.x}, ${a.y}) · ${escapeHtml(a.locationName)}</div>
+    <div class="character-actions"><button type="button" data-edit-agent="${encodeURIComponent(a.id)}">编辑档案</button><button type="button" data-interact-agent="${encodeURIComponent(a.id)}">发起互动</button></div>`;
+  box.querySelector<HTMLButtonElement>('[data-edit-agent]')?.addEventListener('click', () => openAgentEditor(a.id));
+  box.querySelector<HTMLButtonElement>('[data-interact-agent]')?.addEventListener('click', () => openSocialInteraction(a.id));
+}
+
+let editingAgentId: string | null = null;
+
+function formControl<T extends HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+  form: HTMLFormElement,
+  name: string,
+): T {
+  const control = form.elements.namedItem(name);
+  if (!(control instanceof HTMLInputElement) && !(control instanceof HTMLTextAreaElement) && !(control instanceof HTMLSelectElement)) {
+    throw new Error(`missing form control: ${name}`);
+  }
+  return control as T;
+}
+
+function lines(value: string): string[] {
+  return value.split(/\r?\n|[,，]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function profileFromEditor(form: HTMLFormElement): Record<string, unknown> {
+  const number = (name: string) => Number(formControl<HTMLInputElement>(form, name).value);
+  const skills: Record<string, number> = {};
+  for (const row of formControl<HTMLTextAreaElement>(form, 'skills').value.split(/\r?\n/)) {
+    if (!row.trim()) continue;
+    const match = row.match(/^\s*([^:：]+)\s*[:：]\s*(\d+(?:\.\d+)?)\s*$/);
+    if (!match) throw new Error(`技能格式无效：${row.trim()}`);
+    skills[match[1].trim()] = Number(match[2]);
+  }
+  return {
+    name: formControl<HTMLInputElement>(form, 'name').value,
+    age: number('age'),
+    occupation: formControl<HTMLInputElement>(form, 'occupation').value,
+    gender: formControl<HTMLSelectElement>(form, 'gender').value,
+    appearance: {
+      hairStyle: formControl<HTMLInputElement>(form, 'hairStyle').value,
+      hairColor: formControl<HTMLInputElement>(form, 'hairColor').value,
+      skinTone: formControl<HTMLInputElement>(form, 'skinTone').value,
+      outfit: formControl<HTMLInputElement>(form, 'outfit').value,
+    },
+    hobbies: lines(formControl<HTMLInputElement>(form, 'hobbies').value),
+    skills,
+    values: lines(formControl<HTMLTextAreaElement>(form, 'values').value),
+    motivation: formControl<HTMLTextAreaElement>(form, 'motivation').value,
+    background: formControl<HTMLTextAreaElement>(form, 'background').value,
+    traits: lines(formControl<HTMLInputElement>(form, 'traits').value),
+    goals: lines(formControl<HTMLTextAreaElement>(form, 'goals').value),
+    speechStyle: formControl<HTMLInputElement>(form, 'speechStyle').value,
+    personality: {
+      extraversion: number('extraversion'), empathy: number('empathy'), honesty: number('honesty'),
+      curiosity: number('curiosity'), patience: number('patience'),
+    },
+    avatar: {
+      sprite: number('sprite'),
+      hair: formControl<HTMLInputElement>(form, 'avatarHair').value,
+      skin: formControl<HTMLInputElement>(form, 'avatarSkin').value,
+      outfit: formControl<HTMLInputElement>(form, 'avatarOutfit').value,
+      accent: formControl<HTMLInputElement>(form, 'avatarAccent').value,
+      accessory: formControl<HTMLSelectElement>(form, 'accessory').value,
+    },
+    initialState: {
+      valence: number('valence'), energy: number('energy'), stress: number('stress'),
+      socialNeed: number('socialNeed'), occupationalFocus: number('occupationalFocus'),
+      startingLocationId: formControl<HTMLSelectElement>(form, 'startingLocationId').value,
+    },
+  };
+}
+
+function updateEditorAvatar(form: HTMLFormElement, name: string): void {
+  const avatar: PixelAvatarView = {
+    sprite: Number(formControl<HTMLInputElement>(form, 'sprite').value) || 0,
+    hair: formControl<HTMLInputElement>(form, 'avatarHair').value,
+    skin: formControl<HTMLInputElement>(form, 'avatarSkin').value,
+    outfit: formControl<HTMLInputElement>(form, 'avatarOutfit').value,
+    accent: formControl<HTMLInputElement>(form, 'avatarAccent').value,
+    accessory: formControl<HTMLSelectElement>(form, 'accessory').value as PixelAvatarView['accessory'],
+  };
+  const preview = document.getElementById('agent-editor-avatar');
+  if (preview) preview.innerHTML = pixelAvatarMarkup(name || '居民', avatar, 'editor-avatar');
+}
+
+function openAgentEditor(agentId: string): void {
+  const agent = snap?.agents.find((item) => item.id === agentId);
+  const dialog = document.getElementById('agent-editor') as HTMLDialogElement | null;
+  const form = document.getElementById('agent-editor-form') as HTMLFormElement | null;
+  if (!agent || !dialog || !form || !snap) return;
+  editingAgentId = agentId;
+  const set = (name: string, value: string | number) => { formControl(form, name).value = String(value); };
+  set('name', agent.name); set('age', agent.age); set('occupation', agent.occupation); set('gender', agent.gender);
+  set('background', agent.background); set('motivation', agent.motivation); set('traits', agent.traits.join('，'));
+  set('goals', agent.goals.join('\n')); set('speechStyle', agent.speechStyle); set('hobbies', agent.hobbies.join('，'));
+  set('values', agent.values.join('\n')); set('skills', Object.entries(agent.skills).map(([name, value]) => `${name}: ${value}`).join('\n'));
+  set('hairStyle', agent.appearance.hairStyle); set('hairColor', agent.appearance.hairColor);
+  set('skinTone', agent.appearance.skinTone); set('outfit', agent.appearance.outfit);
+  for (const [name, value] of Object.entries(agent.personality)) set(name, value);
+  for (const [name, value] of Object.entries(agent.initialState)) if (name !== 'startingLocationId') set(name, value);
+  set('sprite', agent.avatar.sprite); set('accessory', agent.avatar.accessory); set('avatarHair', agent.avatar.hair);
+  set('avatarSkin', agent.avatar.skin); set('avatarOutfit', agent.avatar.outfit); set('avatarAccent', agent.avatar.accent);
+  const location = formControl<HTMLSelectElement>(form, 'startingLocationId');
+  location.replaceChildren(...snap.objects.filter((object) => object.type !== 'water' && object.type !== 'town').map((object) => {
+    const option = document.createElement('option'); option.value = object.id; option.textContent = `${TYPE_NAME[object.type] ?? object.type} · ${object.name}`; return option;
+  }));
+  if (Array.from(location.options).some((option) => option.value === agent.initialState.startingLocationId)) {
+    location.value = agent.initialState.startingLocationId;
+  }
+  form.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach((input) => {
+    const output = form.querySelector<HTMLOutputElement>(`[data-output="${input.name}"]`);
+    if (output) output.value = Number(input.value).toFixed(2);
+  });
+  updateEditorAvatar(form, agent.name);
+  if (!dialog.open) dialog.showModal();
+}
+
+const INTERACTION_COPY: Record<string, string> = {
+  observe: '留意观察只给发起者形成记忆；对象不会知道自己被观察。',
+  assist: '主动帮助会形成支持、信任与尊重证据，双方都保留事件记忆。',
+  share: '分享信息形成沟通与知识交换证据，适合观察关系多重性。',
+  invite: '邀请记录协调意图与后续接触可能，双方都能记住这次邀请。',
+  collaborate: '共同做事形成共享活动证据，对尊重、信任和支持都有温和影响。',
+};
+
+function openSocialInteraction(actorId?: string): void {
+  if (!snap) return;
+  const dialog = document.getElementById('social-interaction-dialog') as HTMLDialogElement | null;
+  const form = document.getElementById('social-interaction-form') as HTMLFormElement | null;
+  if (!dialog || !form) return;
+  const options = snap.agents.map((agent) => {
+    const option = document.createElement('option'); option.value = agent.id; option.textContent = `${agent.name} · ${agent.occupation}`; return option;
+  });
+  const actor = formControl<HTMLSelectElement>(form, 'actorId');
+  const target = formControl<HTMLSelectElement>(form, 'targetId');
+  actor.replaceChildren(...options.map((option) => option.cloneNode(true)));
+  target.replaceChildren(...options.map((option) => option.cloneNode(true)));
+  actor.value = actorId && snap.agents.some((agent) => agent.id === actorId) ? actorId : (selectedId ?? snap.agents[0]?.id ?? '');
+  target.value = snap.agents.find((agent) => agent.id !== actor.value)?.id ?? '';
+  const type = formControl<HTMLSelectElement>(form, 'interactionType');
+  const preview = document.getElementById('social-interaction-preview');
+  if (preview) preview.textContent = INTERACTION_COPY[type.value] ?? '';
+  if (!dialog.open) dialog.showModal();
+}
+
+function bindResearchDialogs(): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => {
+    const dialog = document.getElementById(button.dataset.closeDialog ?? '') as HTMLDialogElement | null;
+    dialog?.close();
+  }));
+  const editor = document.getElementById('agent-editor-form') as HTMLFormElement;
+  editor.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input[type="range"], input[type="color"], input[name="sprite"], input[name="name"], select[name="accessory"]').forEach((input) => input.addEventListener('input', () => {
+    if (input instanceof HTMLInputElement && input.type === 'range') {
+      const output = editor.querySelector<HTMLOutputElement>(`[data-output="${input.name}"]`);
+      if (output) output.value = Number(input.value).toFixed(2);
+    }
+    updateEditorAvatar(editor, formControl<HTMLInputElement>(editor, 'name').value);
+  }));
+  editor.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!editingAgentId) return;
+    const button = document.getElementById('agent-editor-save') as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const profile = profileFromEditor(editor);
+      const response = await fetch(`/api/agents/${encodeURIComponent(editingAgentId)}/profile?worldId=${encodeURIComponent(activeWorldId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profile }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const refreshed = await fetchWorldSnapshot(activeWorldId);
+      snap = refreshed;
+      applySnapshot();
+      (document.getElementById('agent-editor') as HTMLDialogElement).close();
+      showToast('居民档案已同步到三个世界，并写入档案指纹', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '居民档案保存失败', 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+  const interactionForm = document.getElementById('social-interaction-form') as HTMLFormElement;
+  const updateInteractionPreview = () => {
+    const kind = formControl<HTMLSelectElement>(interactionForm, 'interactionType').value;
+    const preview = document.getElementById('social-interaction-preview');
+    if (preview) preview.textContent = INTERACTION_COPY[kind] ?? '';
+  };
+  formControl<HTMLSelectElement>(interactionForm, 'interactionType').addEventListener('change', updateInteractionPreview);
+  formControl<HTMLSelectElement>(interactionForm, 'actorId').addEventListener('change', () => {
+    const actorId = formControl<HTMLSelectElement>(interactionForm, 'actorId').value;
+    const target = formControl<HTMLSelectElement>(interactionForm, 'targetId');
+    if (target.value === actorId) target.value = snap?.agents.find((agent) => agent.id !== actorId)?.id ?? '';
+  });
+  interactionForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const actorId = formControl<HTMLSelectElement>(interactionForm, 'actorId').value;
+    const targetId = formControl<HTMLSelectElement>(interactionForm, 'targetId').value;
+    const interactionType = formControl<HTMLSelectElement>(interactionForm, 'interactionType').value;
+    try {
+      const response = await fetch(`/api/social/interact?worldId=${encodeURIComponent(activeWorldId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actorId, targetId, interactionType }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      (document.getElementById('social-interaction-dialog') as HTMLDialogElement).close();
+      showToast('社会互动已记录到当前世界的事件、记忆与关系证据', 'success');
+      lastNarrativeAt = 0;
+      void pollNarrative();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '社会互动记录失败', 'error');
+    }
+  });
+  document.getElementById('social-interaction-open')?.addEventListener('click', () => openSocialInteraction(selectedId ?? undefined));
+  document.getElementById('world-card-toggle')?.addEventListener('click', (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const card = button.closest('.world-card');
+    const compact = card?.classList.toggle('is-compact') ?? false;
+    button.textContent = compact ? '展开配置' : '收起配置';
+    button.setAttribute('aria-expanded', String(!compact));
+  });
 }
 
 function renderSelectedCard(): void {
@@ -695,28 +929,14 @@ function installWorldSnapshot(next: WorldSnapshot): void {
 function renderRoster(): void {
   const box = document.getElementById('roster');
   if (!box || !snap) return;
-  let buttons = Array.from(box.querySelectorAll<HTMLButtonElement>('.roster-item'));
-  const sameResidents = buttons.length === snap.agents.length
-    && buttons.every((button, index) => button.dataset.id === snap!.agents[index].id);
-  if (!sameResidents) {
-    box.innerHTML = snap.agents.map((agent) =>
-      `<button type="button" class="roster-item" data-id="${escapeHtml(agent.id)}"><span></span><span class="v"></span></button>`
-    ).join('');
-    buttons = Array.from(box.querySelectorAll<HTMLButtonElement>('.roster-item'));
-    buttons.forEach((button) => button.addEventListener('click', () => {
-      const id = button.dataset.id;
-      if (id) selectAgent(id);
-    }));
-  }
-  buttons.forEach((button, index) => {
-    const agent = snap!.agents[index];
+  box.innerHTML = snap.agents.map((agent) => {
     const active = agent.id === selectedId;
-    button.classList.toggle('hot', active);
-    button.setAttribute('aria-pressed', String(active));
-    const labels = button.querySelectorAll('span');
-    if (labels[0]) labels[0].textContent = agent.name;
-    if (labels[1]) labels[1].textContent = STATE_NAME[agent.state] ?? agent.state;
-  });
+    return `<button type="button" class="roster-item${active ? ' hot' : ''}" data-id="${escapeHtml(agent.id)}" aria-pressed="${active}">${pixelAvatarMarkup(agent.name, agent.avatar, 'roster-avatar')}<span class="roster-copy"><b>${escapeHtml(agent.name)}</b><small>${escapeHtml(agent.occupation)}</small></span><span class="v">${escapeHtml(STATE_NAME[agent.state] ?? agent.state)}</span></button>`;
+  }).join('');
+  box.querySelectorAll<HTMLButtonElement>('.roster-item').forEach((button) => button.addEventListener('click', () => {
+    const id = button.dataset.id;
+    if (id) selectAgent(id);
+  }));
 }
 
 /** 实验运行状态轮询 */

@@ -2,13 +2,20 @@
 // 面板依赖（playing 集合 / togglePlay）由 main.ts 通过 updatePanelDeps 注入，panel.ts 不反向 import main.ts。
 
 import type { ObjectView } from './types';
+import { pixelAvatarMarkup, type PixelAvatarView } from './avatar';
 
 export interface AgentView {
   id: string; name: string; occupation: string; state: string;
   age: number; gender: string;
   appearance: { hairStyle: string; hairColor: string; skinTone: string; outfit: string };
   hobbies: string[]; skills: Record<string, number>; values: string[]; motivation: string;
+  traits: string[]; goals: string[]; speechStyle: string;
   personality: { extraversion: number; empathy: number; honesty: number; curiosity: number; patience: number };
+  avatar: PixelAvatarView;
+  initialState: {
+    valence: number; energy: number; stress: number; socialNeed: number; occupationalFocus: number;
+    startingLocationId: string;
+  };
   x: number; y: number; locationId: string; locationName: string;
   verb: string; thought: string | null;
   actionType: 'move_to' | 'interact' | 'idle' | null;
@@ -32,9 +39,20 @@ export function escapeHtml(s: string): string {
 interface PanelDeps {
   playing: ReadonlySet<string>;
   togglePlay: (id: string) => void;
+  agentById: (id: string) => AgentView | null;
+  editProfile: (id: string) => void;
+  openInteraction: (actorId: string) => void;
 }
 let deps: PanelDeps | null = null;
 let renderVersion = 0;
+
+const FALLBACK_AVATAR: PixelAvatarView = {
+  sprite: 0, hair: '#3b2c28', skin: '#efc39f', outfit: '#526779', accent: '#d9aa67', accessory: 'none',
+};
+
+function avatarFor(id: string, name: string, className = 'conversation-avatar'): string {
+  return pixelAvatarMarkup(name, deps?.agentById(id)?.avatar ?? FALLBACK_AVATAR, className);
+}
 
 export type RelationshipWindowDays = number | 'all';
 export interface RelationshipDyadFocus {
@@ -82,14 +100,16 @@ export function renderDetail(body: HTMLElement, a: AgentView): void {
   renderVersion++;
   const isPlaying = deps?.playing.has(a.id) ?? false;
   body.innerHTML = `
-    <h3>${escapeHtml(a.name)}</h3>
+    <div class="profile-identity">${pixelAvatarMarkup(a.name, a.avatar, 'profile-avatar')}<div><h3>${escapeHtml(a.name)}</h3><small>${escapeHtml(a.occupation)} · ${escapeHtml(a.gender)} · ${a.age} 岁</small></div></div>
     <p><span class="label">职业</span> ${escapeHtml(a.occupation)}</p>
     <p><span class="label">状态</span> ${escapeHtml(STATE_NAME[a.state] ?? a.state)}</p>
     <p><span class="label">位置</span> ${escapeHtml(a.locationName)}</p>
     ${a.verb ? `<p><span class="label">正在</span> ${escapeHtml(a.verb)}</p>` : ''}
     ${a.thought ? `<p><span class="label">想法</span> ${escapeHtml(a.thought)}</p>` : ''}
     <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>
-    <button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button>`;
+    <div class="panel-actions"><button id="profile-edit">编辑档案</button><button id="social-open">发起互动</button><button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button></div>`;
+  document.getElementById('profile-edit')!.addEventListener('click', () => deps?.editProfile(a.id));
+  document.getElementById('social-open')!.addEventListener('click', () => deps?.openInteraction(a.id));
   document.getElementById('play-toggle')!.addEventListener('click', () => deps?.togglePlay(a.id));
 }
 
@@ -105,15 +125,19 @@ export function renderProfile(body: HTMLElement, a: AgentView): void {
     `<div class="mem-item">${k}<div class="bar"><div class="bar-fill pers" style="width:${Math.round(v * 100)}%"></div></div></div>`).join('');
   const tags = a.hobbies.map((h) => `<span class="tag">${escapeHtml(h)}</span>`).join('');
   body.innerHTML = `
-    <h3>${escapeHtml(a.name)} 的档案</h3>
+    <div class="profile-identity">${pixelAvatarMarkup(a.name, a.avatar, 'profile-avatar')}<div><h3>${escapeHtml(a.name)} 的档案</h3><small>${escapeHtml(a.speechStyle)}</small></div></div>
     <p><span class="label">性别</span> ${escapeHtml(a.gender)} · <span class="label">年龄</span> ${a.age} · <span class="label">职业</span> ${escapeHtml(a.occupation)}</p>
     <p><span class="label">外貌</span> ${escapeHtml(a.appearance.hairStyle)}，${escapeHtml(a.appearance.hairColor)}，${escapeHtml(a.appearance.skinTone)}肤色，常穿${escapeHtml(a.appearance.outfit)}</p>
     <p class="label">爱好</p><p>${tags}</p>
     <p class="label">技能</p>${skillBars}
     <p class="label">性格五维</p>${persBars}
     <div class="profile-card"><p class="label">价值观</p><p>${a.values.map((v) => `· ${escapeHtml(v)}`).join('<br>')}</p></div>
+    <div class="profile-card"><p class="label">人格标签</p><p>${a.traits.map((v) => `· ${escapeHtml(v)}`).join('<br>')}</p></div>
+    <div class="profile-card"><p class="label">长期目标</p><p>${a.goals.map((v) => `· ${escapeHtml(v)}`).join('<br>')}</p></div>
     <div class="profile-card"><p class="label">动机</p><p>${escapeHtml(a.motivation)}</p></div>
-    <div class="profile-card"><p class="label">背景故事</p><p>${escapeHtml(a.background)}</p></div>`;
+    <div class="profile-card"><p class="label">背景故事</p><p>${escapeHtml(a.background)}</p></div>
+    <button id="profile-edit" class="wide-action">编辑身份、初始状态与像素头像</button>`;
+  document.getElementById('profile-edit')!.addEventListener('click', () => deps?.editProfile(a.id));
 }
 
 export function renderObjectCard(body: HTMLElement, o: ObjectView): void {
@@ -343,6 +367,11 @@ const evidenceKindLabels: Record<string, string> = {
   gift_sent: '馈礼送出',
   gift_received: '馈礼收到',
   shared_activity: '共同活动',
+  observation: '留意观察',
+  assistance: '主动帮助',
+  information_share: '信息分享',
+  invitation: '活动邀请',
+  collaboration: '共同协作',
   manual: '研究者记录',
   other: '其他关系事件',
 };
@@ -351,6 +380,7 @@ const channelLabels: Record<string, string> = {
   communication: '沟通',
   resource_exchange: '资源交换',
   shared_activity: '共同活动',
+  attention: '注意与观察',
   partner_choice: '伙伴选择',
   other: '其他',
 };
@@ -470,8 +500,9 @@ function renderDyadConversations(response: RelationshipDyadResponse): string {
     const transcript = messages.map((message, messageIndex) => {
       const turn = safeTurnLabel(message.turnIndex, messageIndex);
       return `<div class="conversation-turn ${message.fromAgent === response.people.a.id ? 'mine' : 'theirs'}">
-        <div><b>${escapeHtml(message.fromName)}</b><span>→ ${escapeHtml(message.toName)} · ${turn}</span></div>
-        <p>${escapeHtml(message.content)}</p><time>${safeGameTimeLabel(message.gameTime)}</time>
+        ${avatarFor(message.fromAgent, message.fromName)}
+        <div class="conversation-content"><div><b>${escapeHtml(message.fromName)}</b><span>→ ${escapeHtml(message.toName)} · ${turn}</span></div>
+        <p>${escapeHtml(message.content)}</p><time>${safeGameTimeLabel(message.gameTime)}</time></div>
       </div>`;
     }).join('');
     const status = conversation.status === 'active' || conversation.status === 'completed'
@@ -648,7 +679,7 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
                   const delta = item.affectionDelta * .45 + item.respectDelta * .25
                     + item.trustDelta * .2 + item.supportDelta * .1 - item.tensionDelta * .45;
                   return `<div class="evidence-item">
-                    <div><span>${escapeHtml(item.sourceKind)}</span><time>${gameTimeLabel(item.gameTime)}</time></div>
+                    <div><span>${escapeHtml(evidenceKindLabels[item.sourceKind] ?? item.sourceKind)}</span><time>${gameTimeLabel(item.gameTime)}</time></div>
                     <p>${escapeHtml(item.sourceText)}</p>
                     <small>净变化 ${signed(delta)}${item.sourceEventId ? ` · 事件 ${escapeHtml(item.sourceEventId.slice(0, 8))}` : ''}</small>
                   </div>`;
@@ -677,9 +708,10 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
             const people = conversation.participants.map((participant) => participant.name).join(' ↔ ');
             const transcript = conversation.messages.map((message) => `
               <div class="conversation-turn ${message.fromAgent === agentId ? 'mine' : 'theirs'}">
-                <div><b>${escapeHtml(message.fromName)}</b><span>→ ${escapeHtml(message.toName)} · 第${(message.turnIndex ?? 0) + 1}轮</span></div>
+                ${avatarFor(message.fromAgent, message.fromName)}
+                <div class="conversation-content"><div><b>${escapeHtml(message.fromName)}</b><span>→ ${escapeHtml(message.toName)} · 第${(message.turnIndex ?? 0) + 1}轮</span></div>
                 <p>${escapeHtml(message.content)}</p>
-                <time>${gameTimeLabel(message.gameTime)}</time>
+                <time>${gameTimeLabel(message.gameTime)}</time></div>
               </div>`).join('');
             return `<details class="conversation-card" ${conversation.status === 'active' || index === 0 ? 'open' : ''}>
               <summary><span>${escapeHtml(people)}</span><b data-status="${conversation.status}">${statusLabel[conversation.status]}</b><small>${conversation.turnCount} 轮</small></summary>
@@ -690,7 +722,7 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
             </details>`;
           }).join('')
         : mind.dialogues.length
-          ? mind.dialogues.map((message) => `<div class="dl-item">${escapeHtml(message.fromAgent)} → ${escapeHtml(message.toAgent)}：${escapeHtml(message.content)}</div>`).join('')
+          ? mind.dialogues.map((message) => `<div class="dl-item dialogue-row">${avatarFor(message.fromAgent, message.fromAgent)}<span>${escapeHtml(message.fromAgent)} → ${escapeHtml(message.toAgent)}：${escapeHtml(message.content)}</span></div>`).join('')
           : '<p class="label">暂无对话</p>';
     }
   } catch {

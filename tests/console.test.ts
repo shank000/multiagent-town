@@ -27,7 +27,10 @@ function agent(id: string, name: string): AgentView {
     id, name, occupation: '研究居民', state: 'idle', age: 30, gender: '未设定',
     appearance: { hairStyle: '', hairColor: '', skinTone: '', outfit: '' },
     hobbies: [], skills: {}, values: [], motivation: '',
+    traits: [], goals: [], speechStyle: '',
     personality: { extraversion: 0.5, empathy: 0.5, honesty: 0.5, curiosity: 0.5, patience: 0.5 },
+    avatar: { sprite: 0, hair: '#333333', skin: '#eeeeee', outfit: '#555555', accent: '#aaaaaa', accessory: 'none' },
+    initialState: { valence: 0, energy: .5, stress: .5, socialNeed: .5, occupationalFocus: .5, startingLocationId: 'obj:plaza' },
     x: 0, y: 0, locationId: '', locationName: '', verb: '', thought: null,
     actionType: null, targetId: null, targetName: null, path: [], spriteIndex: 0, background: '',
   };

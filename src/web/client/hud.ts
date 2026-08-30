@@ -4,7 +4,13 @@
 
 import { TILE } from './render';
 
-export interface Bubble { kind: 'chat' | 'thought' | 'chat_summary'; speaker: string; text: string; until: number }
+export interface Bubble {
+  kind: 'chat' | 'thought' | 'chat_summary';
+  speaker: string;
+  text: string;
+  until: number;
+  accent?: string;
+}
 export interface DisplayPos { x: number; y: number } // display 的像素坐标子集
 
 export function dprScale(): number {
@@ -98,6 +104,7 @@ export function drawBubbles(
   display: Map<string, DisplayPos>,
   nowMs: number
 ): void {
+  const occupied: { x: number; y: number; w: number; h: number }[] = [];
   for (const [id, b] of bubbles) {
     if (nowMs > b.until) {
       bubbles.delete(id);
@@ -107,15 +114,22 @@ export function drawBubbles(
     if (!d) continue;
     const isDialogue = b.kind === 'chat' || b.kind === 'chat_summary';
     const prefix = b.kind === 'chat_summary' ? '📜' : b.kind === 'chat' ? '💬' : '💭';
-    const textLines = wrap(b.text, 14);
-    // 对话条：说话人姓名行 + 文本行、宽 180；thought 维持单行
-    const rows = isDialogue ? [`${prefix} ${b.speaker}`, ...textLines] : textLines.map((l) => `${prefix}${l}`);
-    const w = isDialogue ? 180 : Math.max(...textLines.map((l) => l.length)) * 12 + 14;
-    const h = rows.length * 14 + 12;
+    const rawLines = wrap(b.text, isDialogue ? 15 : 13);
+    const textLines = rawLines.slice(0, isDialogue ? 4 : 3);
+    if (rawLines.length > textLines.length) textLines[textLines.length - 1] = `${textLines[textLines.length - 1].slice(0, -1)}…`;
+    const rows = isDialogue ? textLines : textLines.map((line) => `${prefix} ${line}`);
+    const w = isDialogue ? 204 : Math.max(92, Math.max(...rows.map((line) => line.length)) * 13 + 20);
+    const headerH = isDialogue ? 25 : 0;
+    const h = headerH + rows.length * 17 + 15;
     const anchorX = Math.round(d.x + TILE / 2);
     const anchorY = Math.round(d.y - 18);
-    const bx = Math.round(anchorX - w / 2);
-    const by = Math.round(d.y - 40 - h);
+    let bx = Math.round(anchorX - w / 2);
+    let by = Math.round(d.y - 42 - h);
+    while (occupied.some((box) => bx < box.x + box.w && bx + w > box.x && by < box.y + box.h && by + h > box.y)) {
+      by -= h + 8;
+      bx += occupied.length % 2 === 0 ? 12 : -12;
+    }
+    occupied.push({ x: bx, y: by, w, h });
     if (isDialogue) {
       // 世界层像素尾从气泡底边连续指到说话者头顶，镜头缩放后仍保持最近邻边缘。
       const tailY = by + h - 2;
@@ -125,20 +139,32 @@ export function drawBubbles(
       ctx.fillStyle = 'rgba(245,233,200,0.95)';
       ctx.fillRect(anchorX - 1, tailY, 2, Math.max(2, tailH - 2));
     }
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fillRect(bx + 4, by + 5, w, h);
     ctx.fillStyle = 'rgba(245,233,200,0.95)';
     ctx.fillRect(bx, by, w, h);
     ctx.strokeStyle = '#241d12';
     ctx.lineWidth = 2;
     ctx.strokeRect(bx, by, w, h);
-    ctx.fillStyle = '#e3b23c';
+    const accent = b.accent && /^#[0-9a-fA-F]{6}$/.test(b.accent) ? b.accent : '#e3b23c';
+    ctx.fillStyle = accent;
     ctx.fillRect(bx, by, 2, 2);
     ctx.fillRect(bx + w - 2, by, 2, 2);
     ctx.fillRect(bx, by + h - 2, 2, 2);
     ctx.fillRect(bx + w - 2, by + h - 2, 2, 2);
+    if (isDialogue) {
+      ctx.fillStyle = '#2e2921';
+      ctx.fillRect(bx + 2, by + 2, w - 4, headerH - 2);
+      ctx.fillStyle = accent;
+      ctx.fillRect(bx + 2, by + 2, 5, headerH - 2);
+      ctx.fillStyle = '#fff7df';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(`${prefix} ${b.speaker}`, bx + 12, by + 18);
+    }
     ctx.fillStyle = '#241d12';
-    rows.forEach((l, i) => {
-      ctx.font = i === 0 && isDialogue ? 'bold 12px monospace' : '12px monospace';
-      ctx.fillText(l, bx + 7, by + 16 + i * 14);
+    rows.forEach((line, index) => {
+      ctx.font = '13px sans-serif';
+      ctx.fillText(line, bx + 10, by + headerH + 17 + index * 17);
     });
   }
 }
