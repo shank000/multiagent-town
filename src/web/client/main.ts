@@ -1,10 +1,10 @@
 // 像素小镇浏览器客户端：Canvas 2D 像素渲染，零依赖，SSE 实时刷新
 
 import {
-  drawNpc, npcAnimationPhase, npcConversationPlacement, npcPoseFor, npcRouteWaypoints, npcTargetPlacement,
+  actionVisualFor, drawNpc, npcAnimationPhase, npcConversationPlacement, npcPoseFor, npcRouteWaypoints, npcTargetPlacement,
   type Dir, type NpcPose,
 } from './sprites';
-import { drawTerrain, drawObjectDetail, drawObjectSelection, drawInterior, applyDayNight, TILE } from './render';
+import { drawTerrain, drawObjectDetail, drawObjectSelection, drawInterior, drawLampGlow, applyDayNight, TILE } from './render';
 import { computeFit, zoomOffsets, detailScale, stepPixelZoom, clampCameraOffsets, type FitCamera } from './camera';
 import { ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, paperFlutter, smokePuff, fireflySpawn, rainDrop, rainSplash, type Particle } from './effects';
 import {
@@ -17,7 +17,7 @@ import {
   type MetricsPayload, type MetricKey, type NetworkNodeLayout, type NetworkEdgeLayout,
   type NetworkMode, type NetworkLens, type NetworkRenderResult, type SocialNetworkPayload,
 } from './console';
-import { drawTooltip, drawBanner, drawBubbles, actionIconFor, dprScale, type Bubble, type DisplayPos } from './hud';
+import { drawTooltip, drawBanner, drawBubbles, dprScale, type Bubble, type DisplayPos } from './hud';
 import type { ObjectView } from './types';
 import { pixelAvatarMarkup, type PixelAvatarView } from './avatar';
 
@@ -1999,7 +1999,8 @@ function loop(): void {
     const d = display.get(a.id);
     if (!d) continue;
     if (conversing.has(a.id)) continue;
-    const actionPose = npcPoseFor(a.state, a.targetName, false, a.verb);
+    const actionVisual = a.state === 'acting' ? actionVisualFor(a.verb, a.targetName) : null;
+    const actionPose = npcPoseFor(a.state, a.targetName, false, a.verb, actionVisual);
     const actionPlacement = targetPlacementForAgent(a, d, actionPose);
     const fxCx = actionPlacement?.cx ?? d.x + TILE / 2;
     const fxCy = actionPlacement?.cy ?? d.y + TILE / 2;
@@ -2179,20 +2180,30 @@ function draw(): void {
   applyCamera();
   drawTerrain(ctx, worldW, worldH);
   drawObjects();
-  const conversationRender = conversationRenderAt(nowMs);
-  drawAgents(nowMs, conversationRender);
-  drawWorldFx(ctx, nowMs);
-  drawBubbles(ctx, bubbles, bubbleDisplayAt(conversationRender), nowMs);
   applyDayNight(ctx, worldW, worldH, snap.clock.minutesOfDay);
   if (snap.weather === 'rain') {
     ctx.fillStyle = 'rgba(70,90,130,0.12)';
     ctx.fillRect(0, 0, worldW, worldH);
   }
+  drawEmissiveLights(nowMs);
+  const conversationRender = conversationRenderAt(nowMs);
+  drawAgents(nowMs, conversationRender);
+  drawWorldFx(ctx, nowMs);
+  drawBubbles(ctx, bubbles, bubbleDisplayAt(conversationRender), nowMs);
   // HUD 层：重置变换，按屏幕坐标绘制（tooltip/banner + 雨丝）
   resetCamera();
   if (snap.weather === 'rain') drawRainScreen(ctx);
   drawTooltip(ctx, tooltip, canvas.width, canvas.height);
   drawBanner(ctx, banner, nowMs, canvas.width);
+}
+
+/** 夜色与天气着色后补绘路灯发光层，使暖光真实落在地面并保持灯室清晰。 */
+function drawEmissiveLights(nowMs: number): void {
+  const minute = snap?.clock.minutesOfDay ?? 720;
+  if (minute >= 300 && minute < 1200) return;
+  for (const lamp of snap?.objects.filter((object) => object.id.startsWith('obj:lamp')) ?? []) {
+    drawLampGlow(ctx, lamp.x * TILE, lamp.y * TILE, nowMs, true);
+  }
 }
 
 /** 世界层粒子绘制：跳过 rain/splash（屏幕层单独画） */
@@ -2313,7 +2324,7 @@ function bubbleDisplayAt(staged: Map<string, ConversationRenderState>): Map<stri
 }
 
 function targetPlacementForAgent(a: AgentView, d: Display, pose: NpcPose) {
-  if (!snap || (pose !== 'sleep' && pose !== 'sit') || !a.targetName) return null;
+  if (!snap || (pose !== 'sleep' && pose !== 'sit' && pose !== 'interact') || !a.targetName) return null;
   const exactTarget = a.targetId ? snap.objects.find((object) => object.id === a.targetId) : null;
   const candidates = exactTarget ? [exactTarget] : snap.objects.filter((object) => object.name === a.targetName);
   const containsAgent = (object: ObjectView) => (
@@ -2347,25 +2358,17 @@ function drawAgents(now: number, conversationRender: Map<string, ConversationRen
     const d = display.get(a.id)!;
     const conversation = conversationRender.get(a.id);
     const walking = !conversation && (d.waypoints.length > 0 || Math.abs(d.tx - d.x) > 1 || Math.abs(d.ty - d.y) > 1);
+    const actionVisual = !conversation && a.state === 'acting' ? actionVisualFor(a.verb, a.targetName) : null;
     const pose = conversation
       ? (conversation.speaking ? 'speak' : 'interact')
-      : npcPoseFor(a.state, a.targetName, walking, a.verb);
+      : npcPoseFor(a.state, a.targetName, walking, a.verb, actionVisual);
     const targetPlacement = conversation ? null : targetPlacementForAgent(a, d, pose);
     const dir: Dir = conversation?.dir ?? targetPlacement?.dir ?? d.dir;
     const cx = conversation?.cx ?? targetPlacement?.cx ?? d.x + TILE / 2;
     const cy = conversation?.cy ?? targetPlacement?.cy ?? d.y + TILE / 2;
     drawNpc(ctx, cx, cy, dir, a.spriteIndex, {
-      pose, nowMs: now, phase: d.phase, selected: a.id === selectedId, name: a.name,
+      pose, nowMs: now, phase: d.phase, selected: a.id === selectedId, name: a.name, actionVisual,
     });
-    // 动作图标：acting 且映射到图标时，头顶弹跳。
-    if (a.state === 'acting') {
-      const icon = actionIconFor(a.verb, a.targetName);
-      if (icon) {
-        const bounce = Math.round(Math.sin(now / 250) * 2);
-        ctx.font = '14px monospace';
-        ctx.fillText(icon, Math.round(cx) - 7, Math.round(cy) - 44 + bounce);
-      }
-    }
     // 正在被玩家扮演的 NPC：名字旁补 🎮 徽标
     if (playing.has(a.id)) {
       ctx.font = '10px monospace';

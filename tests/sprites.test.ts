@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PALETTES,
+  actionAnimationBeat,
+  actionVisualFor,
+  drawActionVisual,
   drawNpc,
   npcAnimationPhase,
   npcConversationPlacement,
@@ -35,23 +38,27 @@ test('居民步态相位稳定且不同居民不强制同步', () => {
   const lin = npcAnimationPhase('agent:lin');
   const chen = npcAnimationPhase('agent:chen');
   assert.equal(npcAnimationPhase('agent:lin'), lin);
-  assert.ok(Number.isInteger(lin) && lin >= 0 && lin < 480);
-  assert.ok(Number.isInteger(chen) && chen >= 0 && chen < 480);
+  assert.ok(Number.isInteger(lin) && lin >= 0 && lin < 720);
+  assert.ok(Number.isInteger(chen) && chen >= 0 && chen < 720);
   assert.notEqual(lin, chen);
 });
 
-test('步态四拍包含独立帧、bob 与左右摆动且全为整数像素', () => {
+test('步态八拍包含落脚保持、bob 与双向摆臂且全为整数像素', () => {
   const expected = [
     { frame: 0, bob: 0, swing: 0 },
     { frame: 1, bob: -1, swing: -1 },
+    { frame: 1, bob: -1, swing: -2 },
+    { frame: 0, bob: 0, swing: -1 },
     { frame: 0, bob: 0, swing: 0 },
     { frame: 2, bob: -1, swing: 1 },
+    { frame: 2, bob: -1, swing: 2 },
+    { frame: 0, bob: 0, swing: 1 },
   ];
-  assert.deepEqual([0, 120, 240, 360].map((time) => npcMotionAt(time, 0, 'walk')), expected);
+  assert.deepEqual([0, 90, 180, 270, 360, 450, 540, 630].map((time) => npcMotionAt(time, 0, 'walk')), expected);
   for (const motion of expected) {
     assert.ok(Object.values(motion).every(Number.isInteger));
   }
-  assert.deepEqual(npcMotionAt(360, 0, 'idle'), { frame: 0, bob: 0, swing: 0 });
+  assert.deepEqual(npcMotionAt(630, 0, 'idle'), { frame: 0, bob: 0, swing: 0 });
 });
 
 test('快照状态与动作语义映射为明确且可证伪的视觉姿态', () => {
@@ -121,6 +128,45 @@ test('睡眠与坐姿按家具几何取得自然锚点和方向', () => {
     npcTargetPlacement('idle', { x: 0, y: 0, w: 32, h: 32 }, 48.4, 64.4, 'left'),
     { cx: 48, cy: 64, dir: 'left' },
   );
+  assert.deepEqual(
+    npcTargetPlacement('interact', { x: 96, y: 96, w: 32, h: 32 }, 112, 112, 'right'),
+    { cx: 100, cy: 117, dir: 'right' },
+  );
+});
+
+test('动作语义覆盖日常活动并为未知动作提供通用执行动画', () => {
+  const cases = [
+    ['睡觉', '床', 'sleep'], ['沿湖散步', '湖畔', 'stroll'], ['在码头钓鱼', '湖边码头', 'fish'],
+    ['给共享菜园浇水', '共享菜园', 'water'], ['在公园写生', '画架', 'paint'],
+    ['坐在沙发上看书', '沙发', 'read'], ['留下种植记录', '共享菜园', 'write'],
+    ['到咖啡馆送信', '咖啡馆吧台', 'mail'], ['煮咖啡招待客人', '吧台', 'coffee'],
+    ['烤面包', '厨房', 'cook'], ['在花店理花插花', '花店', 'flower'],
+    ['归还并整理工具', '工具架', 'repair'], ['清理泉边落叶', '喷泉', 'clean'],
+    ['挑选日用品', '摊位', 'trade'], ['帮忙搬取包裹', '车站', 'carry'],
+    ['观察鸟群', '喂鸟器', 'observe'], ['在广场讲古', '广场', 'social'],
+    ['休息一下', null, 'rest'], ['校准新装置', '工作台', 'generic'],
+  ] as const;
+  for (const [verb, target, kind] of cases) assert.equal(actionVisualFor(verb, target).kind, kind, verb);
+  assert.equal(actionVisualFor('坐在沙发上看书', '沙发').pose, 'sit');
+  assert.equal(actionVisualFor('沿湖散步', '湖畔').pose, 'walk');
+});
+
+test('每种动作道具按稳定八拍绘制且只使用整数像素', () => {
+  const beat = actionAnimationBeat(240, 0);
+  assert.deepEqual(beat, { beat: 2, reach: 2, lift: -1 });
+  const kinds = [
+    'sleep', 'rest', 'stroll', 'coffee', 'read', 'write', 'paint', 'mail', 'flower',
+    'water', 'fish', 'repair', 'clean', 'trade', 'carry', 'observe', 'cook', 'social', 'generic',
+  ] as const;
+  for (const kind of kinds) {
+    const recording = recordingCtx();
+    drawActionVisual(recording.ctx, 48.4, 64.4, 'right', {
+      kind,
+      pose: kind === 'sleep' ? 'sleep' : kind === 'read' ? 'sit' : kind === 'stroll' ? 'walk' : 'interact',
+    }, 240, 0);
+    assert.ok(recording.fillRects.length >= 1, kind);
+    for (const args of recording.fillRects) assert.ok(args.every(Number.isInteger), `${kind}: ${args.join(',')}`);
+  }
 });
 
 test('睡觉与坐姿使用独立程序化轮廓，不绘制直立图集且不产生亚像素', () => {

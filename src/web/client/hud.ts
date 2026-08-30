@@ -17,25 +17,7 @@ export function dprScale(): number {
   return (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
 }
 
-/** 动作图标（纯函数，可测）：按 verb 关键词 / 目标名映射 emoji；无匹配返回 null。
- *  优先级：送信/分拣先于咖啡（'到咖啡馆送信' 显示 ✉️ 而非 ☕）。 */
-export function actionIconFor(verb: string, targetName: string | null): string | null {
-  if (/信|分拣|送/.test(verb)) return '✉️';
-  if (/煮|咖啡|泡/.test(verb)) return '☕';
-  if (/写生|画|速写/.test(verb)) return '🎨';
-  if (targetName === '床') return '💤';
-  if (/公告|便笺|时刻表/.test(verb)) return '📌';
-  if (/浇水|灌溉|压水|接.*水|水泵/.test(verb)) return '💧';
-  if (/鸟|谷粒/.test(verb)) return '🐦';
-  if (/工具|修理|修补/.test(verb)) return '🧰';
-  if (/幼苗|菜园|除草|种植/.test(verb)) return '🌱';
-  if (/包裹|班车|候车/.test(verb)) return '📦';
-  if (/摊位|日用品|货物/.test(verb)) return '🧺';
-  if (/书|读/.test(verb)) return '📖';
-  if (/钓鱼|鱼/.test(verb)) return '🎣';
-  return null;
-}
-
+/** 中英文连续文本按固定字符数换行。 */
 export function wrap(text: string, max: number): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += max) out.push(text.slice(i, i + max));

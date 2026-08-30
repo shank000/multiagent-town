@@ -5,7 +5,6 @@ import {
   ParticleSystem, sitDust, steamPuff, sparkleBurst, zzzPuff, smokePuff, fireflySpawn, paperFlutter,
   rainDrop, rainSplash,
 } from '../src/web/client/effects';
-import { actionIconFor } from '../src/web/client/hud';
 
 function mockCtx() {
   const noop = () => {};
@@ -59,17 +58,4 @@ test('draw 冒烟：mock ctx 不抛异常', () => {
   const sys = new ParticleSystem();
   sys.spawn([...sitDust(5, 5), ...zzzPuff(5, 5), ...fireflySpawn(5, 5)]);
   sys.draw(mockCtx(), 1000);
-});
-
-test('actionIconFor：verb 关键词映射动作图标', () => {
-  assert.equal(actionIconFor('煮咖啡招待客人', null), '☕');
-  assert.equal(actionIconFor('在公园写生', null), '🎨');
-  assert.equal(actionIconFor('到咖啡馆送信', null), '✉️');
-  assert.equal(actionIconFor('睡觉', '床'), '💤');
-  assert.equal(actionIconFor('坐在沙发上看书', null), '📖');
-  assert.equal(actionIconFor('在码头钓鱼', null), '🎣');
-  assert.equal(actionIconFor('阅读公告', null), '📌');
-  assert.equal(actionIconFor('给共享菜园浇水', null), '💧');
-  assert.equal(actionIconFor('归还并整理工具', null), '🧰');
-  assert.equal(actionIconFor('随便走走', null), null);
 });
