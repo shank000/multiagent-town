@@ -28,7 +28,7 @@ interface AgentScenario {
 }
 
 interface CheckResult {
-  name: '行动' | '对话' | '反思';
+  name: '行动' | '对话' | '世界事实' | '反思';
   ok: boolean;
   latencyMs: number;
   detail: string;
@@ -229,6 +229,83 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
   };
 }
 
+async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Promise<CheckResult> {
+  const prompt = '我们昨天一起参加了湖边派对，还互相送了鲜花，你记得吗？';
+  const evidence = [
+    '活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。',
+    '「湖边派对」现场核验未达到两人：无人实际到场，活动取消。',
+  ];
+  const messages = dialogueMessages({
+    speakerName: agent.name,
+    speakerPool: agent.persona.greetingPool ?? [],
+    otherName: other.name,
+    goal: '诚实核对共同经历',
+    turns: 1,
+    rumors: [],
+    affection: 0.2,
+    honesty: personalityOf(agent.persona).honesty,
+    speakerPersona: agent.persona,
+    otherPersona: other.persona,
+    locationId: 'obj:plaza',
+    relationshipHistory: [],
+    speakerMemories: evidence,
+    conversationId: `world-fact-check:${agent.id}`,
+    participants: [agent.id, other.id],
+    history: [{ turnIndex: 0, speakerName: other.name, listenerName: agent.name, content: prompt }],
+  });
+  const schema = {
+    type: 'object', additionalProperties: false, required: ['utterance', 'end_dialogue'],
+    properties: { utterance: { type: 'string', minLength: 1, maxLength: 120 }, end_dialogue: { type: 'boolean' } },
+  } as const;
+  const started = performance.now();
+  let utterance = '';
+  let rejectedReasons: string[] = [];
+  let attempts = 0;
+  for (attempts = 1; attempts <= 2; attempts += 1) {
+    const candidateMessages = messages.map((message) => ({ ...message }));
+    if (attempts > 1) candidateMessages[candidateMessages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
+    const response = await llm.complete({
+      tier: 'small', template: DIALOGUE_TEMPLATE, messages: candidateMessages, jsonMode: true,
+      jsonSchema: schema, maxTokens: 192, temperature: attempts === 1 ? 0.25 : 0.1,
+      agentId: agent.id, reasoning: false, priority: 'dialogue', scopeId: 'real-agent-check', timeoutMs: 90_000,
+    });
+    const parsed = response.parsed as { utterance?: unknown } | null;
+    utterance = typeof parsed?.utterance === 'string' ? parsed.utterance.trim() : '';
+    const assessment = assessDialogueTurn({
+      utterance,
+      latestPrompt: prompt,
+      priorTurns: [prompt],
+      evidence,
+      speakerName: agent.name,
+      otherName: other.name,
+      knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
+    });
+    if (assessment.ok) break;
+    rejectedReasons = assessment.reasons;
+  }
+  if (rejectedReasons.length && attempts > 2) utterance = conservativeDialogueReply(prompt, evidence);
+  const finalAssessment = assessDialogueTurn({
+    utterance,
+    latestPrompt: prompt,
+    priorTurns: [prompt],
+    evidence,
+    speakerName: agent.name,
+    otherName: other.name,
+    knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
+  });
+  const deniesFalsePremise = /取消|尚未发生|没有|根本没|不曾|不能确认|实际到场/u.test(utterance)
+    || /(?:不|没|未|无).{0,6}(?:记得|去|到|参加|参与|看到|见到|送|收到)/u.test(utterance);
+  return {
+    name: '世界事实',
+    ok: finalAssessment.ok && deniesFalsePremise,
+    latencyMs: Math.round(performance.now() - started),
+    detail: finalAssessment.ok && deniesFalsePremise
+      ? `拒绝把预告、取消和馈礼意向写成已发生（${Math.min(attempts, 2)} 次生成）`
+      : [...finalAssessment.reasons, deniesFalsePremise ? '' : '没有否定虚假共同经历'].filter(Boolean).join('；'),
+    sample: utterance,
+  };
+}
+
 async function checkReflection(llm: LLMGateway, agent: Agent, scenario: AgentScenario): Promise<CheckResult> {
   const evidence = scenario.evidence.map((content, index) => ({
     id: `evidence:${agent.id}:${index + 1}`,
@@ -316,9 +393,9 @@ async function main(): Promise<void> {
     .split(',')
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean));
-  const validChecks = new Set(['action', 'dialogue', 'reflection']);
+  const validChecks = new Set(['action', 'dialogue', 'world', 'reflection']);
   if ([...requestedChecks].some((name) => !validChecks.has(name))) {
-    throw new Error(`REAL_AGENT_CHECKS 仅支持 action,dialogue,reflection：${[...requestedChecks].join(', ')}`);
+    throw new Error(`REAL_AGENT_CHECKS 仅支持 action,dialogue,world,reflection：${[...requestedChecks].join(', ')}`);
   }
   const results: AgentResult[] = [];
 
@@ -335,6 +412,7 @@ async function main(): Promise<void> {
     const runs: { key: string; name: CheckResult['name']; run: () => Promise<CheckResult> }[] = [
       { key: 'action', name: '行动', run: () => checkAction(llm, agent) },
       { key: 'dialogue', name: '对话', run: () => checkDialogue(llm, agent, other, scenario) },
+      { key: 'world', name: '世界事实', run: () => checkWorldFacts(llm, agent, other) },
       { key: 'reflection', name: '反思', run: () => checkReflection(llm, agent, scenario) },
     ];
     for (const candidate of runs) {

@@ -50,7 +50,7 @@ export class WorldLoop {
     for (const agent of this.world.allAgents()) {
       this.executor.progress(agent, dt, clock.totalMinutes, options.realtimeSampling === true);
     }
-    this.social?.tick(this.world.allAgents(), dt, clock.totalMinutes);
+    this.social?.tick(this.world.allAgents(), dt, clock.totalMinutes, this.world);
     this.mind?.tick(this.world, dt, clock.totalMinutes, options.realtimeSampling === true);
     this.experiment?.tick(clock.totalMinutes);
     if (clock.day !== this.lastDay) {

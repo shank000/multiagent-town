@@ -1,7 +1,7 @@
 // 对话引擎：多轮对话（≤12 轮、每 2 游戏分钟一句）+ 结束摘要写回双方记忆流（spec §5.7）
 
 import { randomUUID } from 'node:crypto';
-import type { Agent, GameEvent } from '../core/types';
+import type { Agent, GameEvent, WorldObject } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
 import { keywordSimilarity, type MemoryStore } from '../store/memory';
@@ -67,6 +67,8 @@ export interface DialogueStartOptions {
   /** 日常社交默认要求相邻；正式实验可用 arranged 表示已安排的一对一会面。 */
   requireAdjacent?: boolean;
   source?: 'proximity' | 'experiment' | 'manual';
+  /** 用于把首轮台词约束在真实地点、物件与可执行功能内。 */
+  world?: WorldState;
 }
 
 export interface DialogueEngineOptions {
@@ -156,7 +158,7 @@ export class DialogueEngine {
         arranged: !requireAdjacent,
       },
     });
-    this.speak(a, b, s, now);
+    this.speak(a, b, s, now, options.world);
     return true;
   }
 
@@ -192,12 +194,12 @@ export class DialogueEngine {
       if (s.phase === 'active' && !p && now - s.lastUtterAt >= 2) {
         const speaker = world.getAgent(s.turns.length % 2 === 0 ? s.a : s.b);
         const other = world.getAgent(speaker.id === s.a ? s.b : s.a);
-        this.speak(speaker, other, s, now);
+        this.speak(speaker, other, s, now, world);
       }
     }
   }
 
-  private speak(speaker: Agent, other: Agent, s: Session, now: number): void {
+  private speak(speaker: Agent, other: Agent, s: Session, now: number, world?: WorldState): void {
     const key = pairKey(s.a, s.b);
     s.lastUtterAt = now;
     const entry: Pending = { resolved: null, error: null, startedAtMs: Date.now() };
@@ -229,6 +231,7 @@ export class DialogueEngine {
           locationId: speaker.locationId,
           relationshipHistory: relationship?.knowledge.slice(-3) ?? [],
           speakerMemories,
+          worldFacts: world ? dialogueWorldFacts(world, speaker) : [],
           conversationId: s.conversationId,
           participants: [s.a, s.b] as [string, string],
           history: s.turns.map((turn, turnIndex) => {
@@ -399,4 +402,30 @@ export class DialogueEngine {
       s.phase = 'completed';
     }
   }
+}
+
+function dialogueWorldFacts(world: WorldState, speaker: Agent): string[] {
+  const current = world.objectAt({ x: speaker.x, y: speaker.y });
+  const facts = current
+    ? [`当前实际位置：${current.name}${current.description ? `；${current.description}` : ''}`]
+    : ['当前实际位置：小镇公共区域'];
+  const nearby = world.allObjects()
+    .filter((object) => object.affordances?.length && distanceToObject(speaker, object) <= Math.max(3, object.observationRadius ?? 0))
+    .sort((left, right) => distanceToObject(speaker, left) - distanceToObject(speaker, right))
+    .slice(0, 6);
+  for (const object of nearby) {
+    facts.push(`现场物件「${object.name}」可执行：${object.affordances!.map((item) => item.verb).join('、')}`);
+    if (object.state) facts.push(`现场状态「${object.name}」：${object.state.label}；${object.state.detail}`);
+  }
+  const mechanisms = world.allObjects()
+    .filter((object) => object.affordances?.some((item) => /参加|集市|读书会|派对|购买|订购|配送|赠送/u.test(item.verb)))
+    .slice(0, 8)
+    .map((object) => `小镇功能「${object.name}」：${object.affordances!.map((item) => item.verb).join('、')}（功能存在不代表事件已经发生）`);
+  return [...facts, ...mechanisms];
+}
+
+function distanceToObject(agent: Agent, object: WorldObject): number {
+  const dx = agent.x < object.x ? object.x - agent.x : agent.x >= object.x + object.w ? agent.x - (object.x + object.w - 1) : 0;
+  const dy = agent.y < object.y ? object.y - agent.y : agent.y >= object.y + object.h ? agent.y - (object.y + object.h - 1) : 0;
+  return dx + dy;
 }

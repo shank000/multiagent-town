@@ -120,27 +120,38 @@ export class PartnerChoiceExperiment {
       });
       if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
       if (!this.mind.dialogue.isActive(agent.id, partner.id)) {
-        this.mind.dialogue.start(agent, partner, now, { requireAdjacent: false, source: 'experiment' });
+        this.mind.dialogue.start(agent, partner, now, { requireAdjacent: false, source: 'experiment', world: this.world });
       }
     }
   }
 
-  /** 馈礼：每日工资入账 → 买鲜花 → 赠予伙伴（关系升温），事件与亲密度同步 */
+  /** 馈礼：工资购买 → 花店订单履约 → 收礼方库存入账 → 关系证据同步。 */
   private gift(gifter: Agent, receiver: Agent, now: number): void {
     this.economy.earnDaily(gifter.id);
     if (!this.economy.buy(gifter.id, 'flower')) return;
     const delta = this.economy.give(gifter.id, receiver.id, 'flower');
     if (delta === null) return;
     const giftEventId = randomUUID();
+    const sourceObjectId = 'obj:flower_counter';
+    const sourceObjectName = this.world.getObject(sourceObjectId)?.name ?? '花店服务台';
+    const deliveryLocationId = receiver.locationId;
+    const deliveryLocationName = this.world.getObject(deliveryLocationId)?.name ?? deliveryLocationId;
+    const receiverInventory = this.economy.inventoryOf(receiver.id);
     this.log.addEvent({
       id: giftEventId,
       type: 'system',
       actorId: gifter.id,
       targetIds: [receiver.id],
-      description: `「${gifter.name}」把一束${ITEMS.flower.name}送给了「${receiver.name}」`,
-      location: gifter.locationId,
+      description: `花店订单（已履约）：「${gifter.name}」从${sourceObjectName}购买一束${ITEMS.flower.name}，配送到${deliveryLocationName}并交给「${receiver.name}」。`,
+      location: sourceObjectId,
       gameTime: now,
-      payload: { kind: 'gift', fromId: gifter.id, toId: receiver.id, item: 'flower' },
+      payload: {
+        kind: 'gift', status: 'fulfilled', fromId: gifter.id, toId: receiver.id, item: 'flower',
+        mechanism: 'flower_shop_delivery', sourceObjectId, sourceObjectName,
+        deliveryLocationId, deliveryLocationName,
+        receiverInventory: { flower: receiverInventory.flower ?? 0 },
+        memoryAgentIds: [gifter.id, receiver.id],
+      },
     });
     this.mind.rels.update(gifter.id, receiver.id, {
       affectionDelta: delta,
@@ -148,7 +159,7 @@ export class PartnerChoiceExperiment {
         kind: 'gift_sent', eventId: giftEventId,
         text: `赠送${ITEMS.flower.name}`,
         supportDelta: delta * 0.5,
-        metadata: { item: 'flower', role: 'sender' },
+        metadata: { item: 'flower', role: 'sender', status: 'fulfilled', sourceObjectId, deliveryLocationId },
       },
     }, now);
     this.mind.rels.update(receiver.id, gifter.id, {
@@ -158,7 +169,7 @@ export class PartnerChoiceExperiment {
         text: `收到${ITEMS.flower.name}`,
         trustDelta: delta * 0.3,
         supportDelta: delta,
-        metadata: { item: 'flower', role: 'receiver' },
+        metadata: { item: 'flower', role: 'receiver', status: 'fulfilled', sourceObjectId, deliveryLocationId },
       },
     }, now);
   }

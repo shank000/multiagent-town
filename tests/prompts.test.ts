@@ -103,6 +103,7 @@ test('对话提示词允许结束对话（end_dialogue 非写死 false）', () =
     rumors: [], affection: 0, honesty: 0.5,
     speakerPersona, otherPersona, locationId: 'obj:plaza', relationshipHistory: ['昨天约好修椅子。'],
     speakerMemories: ['今天修好了旧椅子的榫头。'],
+    worldFacts: ['当前实际位置：中央广场', '小镇功能「花店服务台」：委托送花（功能存在不代表事件已经发生）'],
     conversationId: 'conversation:1', participants: ['agent:a', 'agent:b'],
     history: [{ turnIndex: 0, speakerName: '乙', listenerName: '甲', content: '你今天好吗？' }],
   });
@@ -115,6 +116,9 @@ test('对话提示词允许结束对话（end_dialogue 非写死 false）', () =
   assert.ok(sys.includes('说话风格：简短直接'));
   assert.ok(sys.includes('昨天约好修椅子'));
   assert.ok(sys.includes('今天修好了旧椅子的榫头'));
+  assert.ok(sys.includes('当前实际位置：中央广场'));
+  assert.ok(sys.includes('功能存在不等于事件已发生'));
+  assert.ok(sys.includes('任何已经发生的共同经历都必须有完成证据'));
   assert.ok(sys.includes('不要用「你刚才提到」'));
   assert.ok(sys.includes('第一句必须先给出答案'));
   assert.ok(sys.includes('禁止编造书名'));

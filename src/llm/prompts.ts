@@ -203,6 +203,7 @@ export function dialogueMessages(ctx: {
   locationId?: string;
   relationshipHistory?: string[];
   speakerMemories?: string[];
+  worldFacts?: string[];
   conversationId?: string;
   participants?: [string, string];
   history?: { turnIndex: number; speakerName: string; listenerName: string; content: string }[];
@@ -227,9 +228,12 @@ export function dialogueMessages(ctx: {
   const speakerMemories = ctx.speakerMemories?.length
     ? `\n你近期可确认的个人记忆：\n${ctx.speakerMemories.slice(-8).map((item) => `- ${item}`).join('\n')}`
     : '\n没有可确认的近期个人记忆。';
+  const worldFacts = ctx.worldFacts?.length
+    ? `\n当前场景与世界功能（功能存在不等于事件已发生）：\n${ctx.worldFacts.map((item) => `- ${item}`).join('\n')}`
+    : '\n没有额外的现场功能信息。';
   const location = ctx.locationId ? `\n当前会话地点：${ctx.locationId}。` : '';
   return simpleMessages(
-    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}${otherProfile}${location}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
+    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}${otherProfile}${location}${worldFacts}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
     '规则：\n' +
     '1. 直接回应对方最后一句的信息、问题或情绪，然后再推进一个紧密相关的话题。对方提出明确问题时，第一句必须先给出答案；不知道或没有相关经历也要直说，回答之前不得转向别的话题。\n' +
     '2. 不要用「你刚才提到」「围绕我们的话题」「我认真想了想」等套话复述前文，也不要回避一个明确问题。\n' +
@@ -237,6 +241,7 @@ export function dialogueMessages(ctx: {
     '4. 既往摘要只是回忆；已经说过的内容只有在追问、修正或兑现约定时才重提。\n' +
     '5. 每次只说 1~3 句，不要替对方说话；若已聊了 3 句以上或话头已尽，把 end_dialogue 设为 true。\n' +
     '6. 关于“最近做了什么、读了什么、谁说了什么”等事实，只能使用人物背景、近期记忆、既往摘要或本次前文中明确给出的内容；没有依据时自然说明不知道、没印象或最近没有，禁止编造书名、引语和共同经历。\n' +
+    '7. 世界事件有明确状态边界：「活动预告（尚未发生）」只表示计划，不能说自己已经参加；只有「活动现场（已核验）」且名单包含自己时才能声称参加。只有「花店订单（已履约）」或明确的赠送/收到证据才能声称鲜花已经送达。场景功能清单只说明可执行条件；清单外活动只能作为愿望或提议，任何已经发生的共同经历都必须有完成证据。\n' +
     '只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}',
     ctx
   );

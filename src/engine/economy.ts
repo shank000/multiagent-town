@@ -35,11 +35,14 @@ export class Economy {
     return true;
   }
 
-  /** 赠送物品：赠礼者移出物品，收礼方亲密度由调用方按 ItemDef 更新 */
+  /** 赠送物品：赠礼者移出、收礼者入库，关系效应由调用方按 ItemDef 更新。 */
   give(gifterId: string, receiverId: string, itemKey: string): number | null {
     const inv = this.items.get(gifterId);
     if (!inv || (inv[itemKey] ?? 0) < 1) return null;
     inv[itemKey] -= 1;
+    const receiverInventory = this.items.get(receiverId) ?? {};
+    receiverInventory[itemKey] = (receiverInventory[itemKey] ?? 0) + 1;
+    this.items.set(receiverId, receiverInventory);
     return ITEMS[itemKey]?.affectionDelta ?? 0;
   }
 

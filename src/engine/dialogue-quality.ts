@@ -72,6 +72,7 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
   if (new RegExp(`${escapeRegExp(context.otherName)}\\s*[：:]`).test(utterance)) {
     reasons.push('替对方生成了发言');
   }
+  reasons.push(...worldClaimReasons(context));
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
@@ -88,7 +89,78 @@ export function conservativeDialogueReply(latestPrompt: string, evidence: readon
 }
 
 export function dialogueRepairInstruction(reasons: readonly string[]): string {
-  return `\n\n<QUALITY_REPAIR>上一版台词未通过入库检查：${reasons.join('；')}。请直接重写台词，只使用已提供事实，不增加具体人名、作品名、时间或事件；明确问题必须先回答。</QUALITY_REPAIR>`;
+  return `\n\n<QUALITY_REPAIR>上一版台词未通过入库检查：${reasons.join('；')}。请直接重写台词，只使用已提供事实，不增加具体人名、作品名、时间或事件；活动预告不能写成已经参加，馈礼意向不能写成已经送达；明确问题必须先回答。</QUALITY_REPAIR>`;
+}
+
+function worldClaimReasons(context: DialogueQualityContext): string[] {
+  const reasons: string[] = [];
+  const clauses = context.utterance.split(/[。！？!?；\n]/u).map((item) => item.trim()).filter(Boolean);
+  for (const clause of clauses) {
+    const activity = activityNameIn(clause);
+    if (activity && completedActivityClaim(clause) && !prospectiveClaim(clause)) {
+      const requiredNames = claimParticipants(clause, context.speakerName, context.otherName);
+      const supported = context.evidence.some((item) => (
+        activityNameIn(item) === activity
+        && /活动现场（已核验）|实际到场参加|实际共同参加|到场后共同参加/u.test(item)
+        && requiredNames.every((name) => item.includes(name))
+      ));
+      if (!supported) reasons.push(`把没有现场到场证据的「${activity}」写成已参加`);
+    }
+    if (completedFlowerClaim(clause) && !prospectiveClaim(clause)) {
+      const requiredNames = claimParticipants(clause, context.speakerName, context.otherName);
+      const supported = context.evidence.some((item) => (
+        /鲜花|花束|送花/u.test(item)
+        && /花店订单（已履约）|配送.+交给|赠送鲜花|收到鲜花/u.test(item)
+        && requiredNames.every((name) => item.includes(name))
+      ));
+      if (!supported) reasons.push('把没有履约证据的送花或收花意向写成已完成');
+    }
+    if (!activity && !completedFlowerClaim(clause) && completedSharedClaim(clause) && !prospectiveClaim(clause)) {
+      const supported = context.evidence.some((item) => completedSharedEvidence(clause, item));
+      if (!supported) reasons.push('把没有完成证据的共同经历写成已经发生');
+    }
+  }
+  return reasons;
+}
+
+function activityNameIn(text: string): string | null {
+  if (/湖边派对|湖边聚会/u.test(text)) return '湖边派对';
+  if (/书店读书会|读书会/u.test(text)) return '书店读书会';
+  if (/广场集市|晚间集市/u.test(text)) return '广场集市';
+  return text.match(/篝火晚会|音乐会|晚会|派对|聚会|市集|庆典|比赛|演出|展览|舞会|宴会|婚礼|会议|讲座|公益活动|节日活动/u)?.[0] ?? null;
+}
+
+function completedActivityClaim(text: string): boolean {
+  return /参加(?:了|过)?|实际到场|一起(?:去|逛|参加)|共同(?:去|逛|参加)|去过|逛过|在.{0,8}(?:派对|聚会|读书会|集市)/u.test(text);
+}
+
+function completedFlowerClaim(text: string): boolean {
+  return /(?:送给|送了|赠送|配送|托.{0,4}送).{0,12}(?:鲜花|花束|花)|(?:收到|收下|拿到).{0,12}(?:鲜花|花束|花)/u.test(text);
+}
+
+function completedSharedClaim(text: string): boolean {
+  const shared = /我们|咱们|一起|共同|(?:我|你).{0,8}(?:和|跟)(?:你|我)/u.test(text);
+  const completed = /昨天|昨晚|那天|上次|曾经|之前|(?:参加|去|逛|看|吃|喝|聊|玩|帮|送|收|合作|拜访|见|遇到|散步|完成)(?:了|过)/u.test(text);
+  return shared && completed;
+}
+
+function completedSharedEvidence(claim: string, evidence: string): boolean {
+  if (!/实际|已核验|已履约|完成|共同|一起|参加|对话|帮助|拜访|赠送|收到/u.test(evidence)) return false;
+  const claimTerms = meaningfulBigrams(claim);
+  const evidenceTerms = meaningfulBigrams(evidence);
+  let overlap = 0;
+  for (const term of claimTerms) if (evidenceTerms.has(term)) overlap += 1;
+  return overlap >= 2;
+}
+
+function prospectiveClaim(text: string): boolean {
+  return /想(?:要)?|打算|准备|计划|希望|邀请|要不要|可以(?:去|送|参加)|下次|将会|还没|尚未|没有/u.test(text);
+}
+
+function claimParticipants(text: string, speakerName: string, otherName: string): string[] {
+  if (/我们|咱们|一起|共同/u.test(text)) return [speakerName, otherName];
+  if (new RegExp(`(?:你|${escapeRegExp(otherName)}).{0,8}(?:参加|收到|收下|送)`, 'u').test(text)) return [otherName];
+  return [speakerName];
 }
 
 function directlyAddresses(prompt: string, utterance: string, evidence: readonly string[]): boolean {

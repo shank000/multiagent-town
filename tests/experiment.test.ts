@@ -86,6 +86,30 @@ test('经济系统：工资/购买/赠送/余额不足', async () => {
   assert.equal(eco.buy(a, 'flower'), false, '余额不足不能购买');
   const delta = eco.give(a, b, 'flower');
   assert.equal(delta, ITEMS.flower.affectionDelta);
+  assert.equal(eco.inventoryOf(b).flower, 1, '收礼方库存形成可核验物品状态');
   assert.equal(eco.give(a, b, 'flower'), ITEMS.flower.affectionDelta, '第二束花仍可赠送'); // 买了 2 束
+  assert.equal(eco.inventoryOf(b).flower, 2);
   assert.equal(eco.give(a, b, 'flower'), null, '无库存不能赠送');
+});
+
+test('实验馈礼由花店订单履约并记录来源、配送地点与收礼库存', async () => {
+  const { db, log, world, mind } = setup();
+  try {
+    const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off', giftExchange: 'on' }, { seed: 17 });
+    exp.round(1170);
+    const gifts = log.eventsBetween(0, 2000).filter((event) => event.payload?.kind === 'gift');
+    assert.equal(gifts.length, world.allAgents().length);
+    for (const gift of gifts) {
+      assert.equal(gift.location, 'obj:flower_counter');
+      assert.equal(gift.payload?.status, 'fulfilled');
+      assert.equal(gift.payload?.mechanism, 'flower_shop_delivery');
+      assert.equal(gift.payload?.sourceObjectId, 'obj:flower_counter');
+      assert.equal(typeof gift.payload?.deliveryLocationId, 'string');
+      assert.ok(Number((gift.payload?.receiverInventory as { flower?: number }).flower) >= 1);
+      assert.match(gift.description, /花店订单（已履约）.*配送.*交给/);
+    }
+  } finally {
+    await mind.dispose();
+    db.raw.close();
+  }
 });

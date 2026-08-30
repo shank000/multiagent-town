@@ -75,3 +75,76 @@ test('问题可通过已知证据桥接到不复述问题词面的直接答案',
   });
   assert.equal(result.ok, true);
 });
+
+test('活动预告不能支持已参加叙述，现场核验必须包含说话者与同伴', () => {
+  const planned = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们参加过湖边派对吗？',
+    priorTurns: ['我们参加过湖边派对吗？'],
+    evidence: ['活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。'],
+    utterance: '我们一起参加了湖边派对，聊得很开心。',
+  });
+  assert.equal(planned.ok, false);
+  assert.ok(planned.reasons.some((reason) => reason.includes('没有现场到场证据')));
+
+  const verified = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们参加过湖边派对吗？',
+    priorTurns: ['我们参加过湖边派对吗？'],
+    evidence: ['活动现场（已核验）：沈屿、陈默在「湖边」实际到场参加「湖边派对」。'],
+    utterance: '参加过，我们一起参加了湖边派对。',
+  });
+  assert.equal(verified.ok, true);
+});
+
+test('送花意向不能冒充已履约馈礼，完成叙述需要花店订单证据', () => {
+  const imagined = assessDialogueTurn({
+    ...base,
+    latestPrompt: '你给我送过花吗？',
+    priorTurns: ['你给我送过花吗？'],
+    evidence: ['我计划下次给陈默送一束花。'],
+    utterance: '送过，我已经送给你一束鲜花了。',
+  });
+  assert.equal(imagined.ok, false);
+  assert.ok(imagined.reasons.some((reason) => reason.includes('没有履约证据')));
+
+  const fulfilled = assessDialogueTurn({
+    ...base,
+    latestPrompt: '你给我送过花吗？',
+    priorTurns: ['你给我送过花吗？'],
+    evidence: ['花店订单（已履约）：「沈屿」从花店服务台购买一束鲜花，配送到书店并交给「陈默」。'],
+    utterance: '送过，我通过花店送给你一束鲜花。',
+  });
+  assert.equal(fulfilled.ok, true);
+});
+
+test('任意共同活动与共同经历都需要对应的完成证据', () => {
+  const inventedEvent = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们昨晚一起做了什么？',
+    priorTurns: ['我们昨晚一起做了什么？'],
+    evidence: ['公告栏上写着有人提议以后举办篝火晚会。'],
+    utterance: '我们昨晚一起参加了篝火晚会。',
+  });
+  assert.equal(inventedEvent.ok, false);
+  assert.ok(inventedEvent.reasons.some((reason) => reason.includes('没有现场到场证据')));
+
+  const inventedWalk = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们以前一起做过什么？',
+    priorTurns: ['我们以前一起做过什么？'],
+    evidence: [],
+    utterance: '我们之前一起去湖边散步了。',
+  });
+  assert.equal(inventedWalk.ok, false);
+  assert.ok(inventedWalk.reasons.some((reason) => reason.includes('没有完成证据')));
+
+  const groundedWalk = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们以前一起做过什么？',
+    priorTurns: ['我们以前一起做过什么？'],
+    evidence: ['沈屿与陈默共同去湖边散步，已经完成一次邻里陪伴。'],
+    utterance: '我们之前一起去湖边散步了。',
+  });
+  assert.equal(groundedWalk.ok, true);
+});

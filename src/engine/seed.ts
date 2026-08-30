@@ -51,14 +51,30 @@ export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:cafe_table1', name: '咖啡桌', type: 'furniture', parentId: 'obj:cafe', x: 8, y: 9, w: 1, h: 1 },
   { id: 'obj:cafe_table2', name: '咖啡桌', type: 'furniture', parentId: 'obj:cafe', x: 11, y: 9, w: 1, h: 1 },
   { id: 'obj:bookstore', name: '默语书店', type: 'building', parentId: 'obj:town', x: 18, y: 8, w: 4, h: 4 },
-  { id: 'obj:bookstore_counter', name: '书店柜台', type: 'room', parentId: 'obj:bookstore', x: 19, y: 8, w: 2, h: 1 },
+  {
+    id: 'obj:bookstore_counter', name: '书店柜台', type: 'room', parentId: 'obj:bookstore', x: 19, y: 8, w: 2, h: 1,
+    description: '书店内用于整理书目、接待读者和围坐交流的木柜台。',
+    affordances: [
+      { verb: '整理书架', outcome: '让书目位置与借阅记录保持一致' },
+      { verb: '参加读书会', outcome: '在实际到场后与其他读者讨论同一主题' },
+    ],
+    sensoryCues: ['纸页翻动的声音', '旧木书架与纸张的气味'], observationRadius: 4,
+  },
   { id: 'obj:post_office', name: '小镇邮局', type: 'building', parentId: 'obj:town', x: 28, y: 8, w: 4, h: 4 },
   { id: 'obj:bakery', name: '晨光面包店', type: 'building', parentId: 'obj:town', x: 32, y: 18, w: 4, h: 4 },
   { id: 'obj:clinic', name: '小镇诊所', type: 'building', parentId: 'obj:town', x: 4, y: 18, w: 4, h: 4 },
   // 公共区域
   { id: 'obj:plaza', name: '中央广场', type: 'zone', parentId: 'obj:town', x: 18, y: 18, w: 6, h: 6 },
   { id: 'obj:park', name: '湖边公园', type: 'zone', parentId: 'obj:town', x: 6, y: 26, w: 10, h: 6 },
-  { id: 'obj:lake', name: '湖边', type: 'zone', parentId: 'obj:town', x: 16, y: 28, w: 4, h: 2 },
+  {
+    id: 'obj:lake', name: '湖边', type: 'zone', parentId: 'obj:town', x: 16, y: 28, w: 4, h: 2,
+    description: '靠近码头的开阔湖岸，可供居民散步、观察水面或举行小型聚会。',
+    affordances: [
+      { verb: '沿湖散步', outcome: '观察天气、水面和附近居民的活动' },
+      { verb: '参加湖边聚会', outcome: '实际到场后形成可被核验的共同活动' },
+    ],
+    sensoryCues: ['湖水拍岸声', '带着水汽的晚风'], observationRadius: 6,
+  },
   { id: 'obj:park_easel', name: '公园画架', type: 'furniture', parentId: 'obj:park', x: 7, y: 27, w: 1, h: 1 },
   { id: 'obj:farm', name: '晨光农田', type: 'zone', parentId: 'obj:town', x: 24, y: 24, w: 8, h: 6 },
   { id: 'obj:path_main', name: '主街', type: 'zone', parentId: 'obj:town', x: 8, y: 16, w: 24, h: 2 },
@@ -79,6 +95,7 @@ export const TOWN_OBJECTS: WorldObject[] = [
       { verb: '挑选日用品', outcome: '了解今天的供应与价格' },
       { verb: '帮忙整理摊位', outcome: '与摊主共同完成一件日常事务' },
       { verb: '询问货物来历', outcome: '听到关于生产者和邻里的消息' },
+      { verb: '参加晚间集市', outcome: '实际到场后浏览摊位并形成共同活动记录' },
     ],
     sensoryCues: ['新鲜果蔬和烤面包的混合香气', '零钱与篮筐碰撞声'], observationRadius: 7,
   },
@@ -175,6 +192,15 @@ export const TOWN_OBJECTS: WorldObject[] = [
   { id: 'obj:lamp_lake', name: '湖边路灯', type: 'zone', parentId: 'obj:town', x: 16, y: 27, w: 1, h: 1 },
   // 白露花店 / 杂货店 / 湖边码头与装饰
   { id: 'obj:flower_shop', name: '白露花店', type: 'building', parentId: 'obj:town', x: 12, y: 18, w: 4, h: 4 },
+  {
+    id: 'obj:flower_counter', name: '花店服务台', type: 'room', parentId: 'obj:flower_shop', x: 13, y: 18, w: 2, h: 1,
+    description: '花店处理选花、包装、订单与小镇内配送的服务台。',
+    affordances: [
+      { verb: '购买鲜花', outcome: '支付金币并把鲜花加入个人物品' },
+      { verb: '委托送花', outcome: '生成可追溯订单并把花束配送给指定居民' },
+    ],
+    sensoryCues: ['剪枝与包装纸摩擦声', '新鲜花枝和湿润泥土的气味'], observationRadius: 4,
+  },
   { id: 'obj:grocer', name: '小镇杂货店', type: 'building', parentId: 'obj:town', x: 24, y: 12, w: 4, h: 4 },
   { id: 'obj:pier', name: '湖边码头', type: 'zone', parentId: 'obj:town', x: 16, y: 26, w: 4, h: 2 },
   { id: 'obj:boat', name: '小船', type: 'furniture', parentId: 'obj:pier', x: 17, y: 27, w: 2, h: 1 },

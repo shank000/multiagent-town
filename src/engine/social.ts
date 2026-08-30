@@ -3,6 +3,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Agent, GameEvent } from '../core/types';
+import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
 import type { DialogueEngine } from './dialogue';
 import type { RelationshipStore } from '../store/relationships';
@@ -28,7 +29,7 @@ export class SocialTicker {
   ) {}
 
   /** 每 tick 调用一次；dt = 本次推进的游戏分钟数 */
-  tick(agents: Agent[], dt: number, now: number): void {
+  tick(agents: Agent[], dt: number, now: number, world?: WorldState): void {
     const min = this.cfg.minProximityMinutes ?? 3;
     const cooldown = this.cfg.cooldownMinutes ?? 90;
     for (let i = 0; i < agents.length; i++) {
@@ -47,7 +48,7 @@ export class SocialTicker {
           if (this.dialogue && (count === 0 || !this.rels)) {
             // 完整对话引擎负责该社会接触的唯一记录；已有会话或参与者正忙时不生成散落 chat。
             if (!this.dialogue.isActive(a.id, b.id)) {
-              this.dialogue.start(a, b, now, { requireAdjacent: true, source: 'proximity' });
+              this.dialogue.start(a, b, now, { requireAdjacent: true, source: 'proximity', world });
             }
           } else if (this.rels) {
             const kinds: readonly SocialInteractionKind[] = ['observe', 'assist', 'share', 'invite', 'collaborate'];
