@@ -1,3 +1,5 @@
+<img width="2682" height="1893" alt="image" src="https://github.com/user-attachments/assets/66d63404-709b-4b34-9551-9050b84a7b3d" />
+
 # MultiAgent Town
 
 面向计算社会科学实验的多智能体社会涌现平台。系统以中文像素小镇为可观察环境，持续记录居民的互动、记忆、关系与伙伴选择，并提供平行世界对照、结构化 Replay、社会网络指标和可插拔分析层。
