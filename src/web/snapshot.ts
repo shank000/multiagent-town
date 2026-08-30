@@ -4,6 +4,7 @@ import { TimeEngine, type ClockState } from '../core/time';
 import { weatherForDay } from '../core/weather';
 import { GRID_W, GRID_H, type WorldState } from '../core/world';
 import type { Agent, WorldObject } from '../core/types';
+import type { ActiveConversation } from '../engine/dialogue';
 
 export interface AgentView {
   id: string;
@@ -24,8 +25,11 @@ export interface AgentView {
   locationName: string;
   verb: string;             // 当前动作动词；无动作时为空串
   thought: string | null;
+  actionType: 'move_to' | 'interact' | 'idle' | null;
+  targetId: string | null;
   targetName: string | null; // 当前动作目标对象名
-  spriteIndex: number;       // 客户端配色索引（0..5，按 allAgents 顺序）
+  path: { x: number; y: number }[]; // 服务器 A* waypoint；客户端高倍速逐段插值
+  spriteIndex: number;       // 客户端角色索引（按 allAgents 顺序，图集侧安全循环）
   background: string;
 }
 
@@ -46,13 +50,15 @@ export interface WorldSnapshot {
   agents: AgentView[];
   seq: number;
   weather: 'clear' | 'rain';
+  activeConversations: ActiveConversation[];
 }
 
 export function buildSnapshot(
   world: WorldState,
   time: TimeEngine,
   paused: boolean,
-  seq: number
+  seq: number,
+  activeConversations: readonly ActiveConversation[] = []
 ): WorldSnapshot {
   const agents: AgentView[] = world.allAgents().map((a, i) => {
     const action = a.action;
@@ -76,7 +82,10 @@ export function buildSnapshot(
       locationName: world.getObject(a.locationId)?.name ?? a.locationId,
       verb: action && busy ? action.action.verb : '',
       thought: a.thought,
+      actionType: action?.action.type ?? null,
+      targetId: action?.action.target ?? null,
       targetName: action ? world.getObject(action.action.target)?.name ?? null : null,
+      path: a.path.map((tile) => ({ ...tile })),
       spriteIndex: i,
       background: a.persona.background,
     };
@@ -93,5 +102,6 @@ export function buildSnapshot(
     agents,
     seq,
     weather: weatherForDay(time.state.day),
+    activeConversations: activeConversations.map((conversation) => ({ ...conversation })),
   };
 }

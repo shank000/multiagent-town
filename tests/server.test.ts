@@ -40,8 +40,8 @@ async function setup() {
   const gateway = new LLMGateway({ provider: 'mock' });
   const executor = new AgentExecutor(gateway, world, log);
   const loop = new WorldLoop(time, world, executor, log, db);
-  const server = await createTownServer({ world, time, loop, log, publicDir: dir, snapshotMs: 30 });
-  return { dir, db, log, world, time, loop, server, base: `http://127.0.0.1:${server.port}` };
+  const server = await createTownServer({ world, time, loop, log, publicDir: dir, snapshotMs: 30, llm: gateway });
+  return { dir, db, log, world, time, loop, gateway, server, base: `http://127.0.0.1:${server.port}` };
 }
 
 test('静态页与快照接口', async () => {
@@ -70,6 +70,14 @@ test('控制接口：调速与暂停', async () => {
       body: JSON.stringify({ action: 'speed', value: 120 }),
     });
     assert.equal(time.gameMinutesPerTick, 60);
+    const adaptive = await fetch(`${base}/api/world/control`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'adaptive-speed' }),
+    });
+    assert.equal(adaptive.status, 200);
+    assert.equal(((await adaptive.json()) as { speed: number }).speed, 1);
+    assert.equal(time.gameMinutesPerTick, 0.5);
     await fetch(`${base}/api/world/control`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -77,6 +85,58 @@ test('控制接口：调速与暂停', async () => {
     });
     const snap = (await (await fetch(`${base}/api/state`)).json()) as { paused: boolean };
     assert.equal(snap.paused, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test('推理状态接口公开有界队列与背压指标', async () => {
+  const { server, base } = await setup();
+  try {
+    const response = await fetch(`${base}/api/llm/status`);
+    assert.equal(response.status, 200);
+    const status = await response.json() as {
+      active: number; queued: number; maxConcurrent: number; maxQueued: number; backpressured: boolean;
+    };
+    assert.deepEqual(status, {
+      active: 0,
+      queued: 0,
+      maxConcurrent: 8,
+      maxQueued: 256,
+      oldestWaitMs: 0,
+      backpressured: false,
+      byPriority: { dialogue: 0, action: 0, planning: 0, reflection: 0, background: 0 },
+      byScope: {},
+      performance: {
+        provider: 'mock', sampleCount: 0, generationTokensPerSecond: null,
+        effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
+        recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 360, confidence: 'unavailable',
+      },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('动作质量记录保留在事件库且不进入叙事接口', async () => {
+  const { server, base, log } = await setup();
+  try {
+    log.addEvent({
+      id: 'quality-1', type: 'system', actorId: 'agent:1', targetIds: [],
+      description: '甲 的动作决策完成了结构质量校正。', location: 'obj:plaza', gameTime: 0,
+      payload: { kind: 'action_decision_quality', status: 'normalized', attempts: 1, validator: 'action-decision/v2' },
+    });
+    log.addEvent({
+      id: 'story-1', type: 'interact', actorId: 'agent:1', targetIds: ['obj:plaza'],
+      description: '甲 开始整理广场。', location: 'obj:plaza', gameTime: 0,
+      payload: { kind: 'interact' },
+    });
+    assert.equal(log.eventsOfKind('action_decision_quality').length, 1);
+    const narrative = await (await fetch(`${base}/api/narrative?limit=100`)).json() as {
+      items: Array<{ id: string; kind: string }>;
+    };
+    assert.ok(narrative.items.some((item) => item.id === 'story-1'));
+    assert.ok(!narrative.items.some((item) => item.kind === 'action_decision_quality'));
   } finally {
     await server.close();
   }

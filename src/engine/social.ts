@@ -36,8 +36,11 @@ export class SocialTicker {
           continue;
         }
         if (this.proximity.get(key)! >= min && now >= (this.nextAt.get(key) ?? 0)) {
-          if (this.dialogue && !this.dialogue.isActive(a.id, b.id)) {
-            this.dialogue.start(a, b, now);
+          if (this.dialogue) {
+            // 完整对话引擎负责该社会接触的唯一记录；已有会话或参与者正忙时不生成散落 chat。
+            if (!this.dialogue.isActive(a.id, b.id)) {
+              this.dialogue.start(a, b, now, { requireAdjacent: true, source: 'proximity' });
+            }
           } else {
             const count = this.triggerCount.get(key) ?? 0;
             const line = pickLine(a, count);

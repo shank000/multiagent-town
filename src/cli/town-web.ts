@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPaths = assertFreshWorldDbPaths(args);
   const provider = providerNameFromEnv();
-  const gateway = new LLMGateway(gatewayConfigFromEnv());
+  const gateway = new LLMGateway({ ...gatewayConfigFromEnv(), expectedActiveAgents: 18 });
   // 平行世界：三种社会实验各一世界（极简像素块示意见客户端小地图）
   const worlds = [
     createManagedWorld('w1', 'mem-on', {
@@ -33,7 +33,7 @@ async function main(): Promise<void> {
     }),
   ];
   const main = worlds[0];
-  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port });
+  const server = await createTownServer({ world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind, player: main.player, rels: main.mind.rels, rumors: main.mind.rumors, experiment: main.experiment ?? undefined, worlds, port: args.port, llm: gateway });
   console.log(`[multiagent-town 像素小镇] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   startAllWorlds(worlds);

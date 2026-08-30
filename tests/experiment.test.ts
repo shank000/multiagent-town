@@ -48,12 +48,26 @@ test('记忆开：优先选择亲密度更高的伙伴', () => {
   assert.ok(wins.high > wins.low * 2, `高亲密度应显著占优 (high=${wins.high}, low=${wins.low})`);
 });
 
-test('round：全员各选一伙伴并记录 choice 事件', () => {
+test('round：全员各选一伙伴、保留候选快照并安排远距一对一会话', async () => {
   const { db, log, world, mind } = setup();
-  const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off', giftExchange: 'off' });
-  exp.round(1170);
-  const ev = log.eventsBetween(0, 1e9).filter((e) => (e.payload as { kind?: string } | null)?.kind === 'experiment_pair_choice');
-  assert.equal(ev.length, world.allAgents().length, '每位参与者一条选择事件');
+  try {
+    world.allAgents().forEach((agent, index) => { agent.x = index * 3; agent.y = 0; });
+    const exp = new PartnerChoiceExperiment(log, world, mind, { historyAccess: 'off', giftExchange: 'off' });
+    exp.round(1170);
+    const ev = log.eventsBetween(0, 1e9).filter((e) => (e.payload as { kind?: string } | null)?.kind === 'experiment_pair_choice');
+    assert.equal(ev.length, world.allAgents().length, '每位参与者一条选择事件');
+    for (const event of ev) {
+      const payload = event.payload as { candidates?: { id: string }[]; chosen?: string };
+      assert.equal(payload.candidates?.length, world.allAgents().length - 1);
+      assert.ok(payload.candidates?.some((candidate) => candidate.id === payload.chosen));
+    }
+    const starts = log.eventsBetween(0, 1e9).filter((event) => event.payload?.kind === 'chat_start');
+    assert.ok(starts.length >= 1, '正式选择轮次会安排一对一会话');
+    assert.ok(starts.every((event) => event.payload?.arranged === true));
+  } finally {
+    await mind.dispose();
+    db.raw.close();
+  }
 });
 
 test('经济系统：工资/购买/赠送/余额不足', async () => {

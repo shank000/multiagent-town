@@ -19,6 +19,7 @@ export interface MindEngineOptions {
   db: DbHandle;
   llm: LLMGateway;
   log: EventLog;
+  scopeId?: string;
 }
 
 export class MindEngine {
@@ -30,46 +31,95 @@ export class MindEngine {
   readonly rumors: RumorTracker;
   readonly townModel: TownModel;
   private writer: MemoryWriter;
-  private lastMinute = 0;
+  private pendingDaily = new Set<Promise<void>>();
 
   constructor(opts: MindEngineOptions) {
     this.store = new MemoryStore(opts.db);
-    this.planner = new Planner(opts.llm, this.store);
-    this.reflection = new ReflectionEngine(opts.llm, this.store, opts.log);
-    this.writer = new MemoryWriter(this.store, opts.llm);
+    const scopeId = opts.scopeId?.trim() || 'default';
+    this.planner = new Planner(opts.llm, this.store, scopeId);
+    this.reflection = new ReflectionEngine(opts.llm, this.store, opts.log, scopeId);
+    this.writer = new MemoryWriter(this.store, opts.llm, scopeId);
     this.writer.attach(opts.log);
     this.rels = new RelationshipStore(opts.db);
     this.rumors = new RumorTracker(opts.db);
-    this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 12, this.rels, this.rumors);
+    this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 12, this.rels, this.rumors, { scopeId });
     this.townModel = new TownModel(opts.log, this.rels);
   }
 
-  tick(world: WorldState, dt: number, now: number): void {
+  tick(world: WorldState, dt: number, now: number, realtimeSampling = false): void {
     const day = Math.floor(now / MINUTES_PER_DAY) + 1;
     const minute = now % MINUTES_PER_DAY;
-    const hour = Math.floor(minute / 60);
-    if (this.lastMinute < 300 && minute >= 300) {
-      // 跨 5:00：先日计划、完成后再小时分解（避免同 tick 竞争覆盖 plans 行）
-      for (const a of world.allAgents()) {
-        void this.planner.dailyPlan(a, day, now)
-          .catch((err) => console.error('[planner] dailyPlan', err))
-          .then(() => this.planner.decomposeHour(a, day, hour, now))
-          .catch((err) => console.error('[planner] decomposeHour', err));
+    const previousTotal = Math.max(0, now - dt);
+    for (
+      let boundary = (Math.floor(previousTotal / MINUTES_PER_DAY) + 1) * MINUTES_PER_DAY;
+      boundary <= now;
+      boundary += MINUTES_PER_DAY
+    ) {
+      const completedDay = boundary / MINUTES_PER_DAY;
+      for (const agent of world.allAgents()) this.scheduleDailyReflection(agent, completedDay, boundary - 1);
+    }
+    const dailyPlanBoundaries: number[] = [];
+    for (let boundary = nextDailyBoundary(previousTotal, 300); boundary <= now; boundary += MINUTES_PER_DAY) {
+      dailyPlanBoundaries.push(boundary);
+    }
+    const latestDailyBoundary = dailyPlanBoundaries.at(-1);
+    if (latestDailyBoundary !== undefined) {
+      const planDay = Math.floor(latestDailyBoundary / MINUTES_PER_DAY) + 1;
+      for (const agent of world.allAgents()) {
+        void this.planner.scheduleDailyAndHour(agent, planDay, 5, now)
+          .catch((error) => console.error('[planner] daily', error));
       }
-    } else if (hour !== Math.floor(this.lastMinute / 60)) {
-      for (const a of world.allAgents()) {
-        void this.planner.decomposeHour(a, day, hour, now).catch((err) => console.error('[planner] decomposeHour', err));
+    } else {
+      const previousHour = Math.floor(previousTotal / 60);
+      const currentHour = Math.floor(now / 60);
+      const hourOfDay = Math.floor(minute / 60);
+      const stride = realtimeSampling ? (dt >= 30 ? 6 : dt >= 5 ? 3 : 1) : 1;
+      if (currentHour !== previousHour && hourOfDay % stride === 0) {
+        for (const agent of world.allAgents()) {
+          void this.planner.scheduleHour(agent, day, hourOfDay, now)
+            .catch((error) => console.error('[planner] hour', error));
+        }
       }
     }
-    this.lastMinute = minute;
     for (const a of world.allAgents()) this.reflection?.tick(a, day, now);
     this.dialogue?.tick(world, dt, now);
     this.townModel.tick(world, dt, now);
   }
 
+  private scheduleDailyReflection(agent: Agent, day: number, now: number): void {
+    let task: Promise<void>;
+    task = this.writer.flush()
+      .then(() => this.reflection.summarizeDay(agent, day, now))
+      .catch((error) => console.error('[reflection] daily', error))
+      .finally(() => this.pendingDaily.delete(task));
+    this.pendingDaily.add(task);
+  }
+
+  /** 等待已接收事件、日记与反思全部形成，供确定性测试和安全关闭使用。 */
+  async drain(): Promise<void> {
+    await this.dialogue.drain();
+    await this.writer.flush();
+    await this.planner.drain();
+    while (this.pendingDaily.size > 0) await Promise.allSettled([...this.pendingDaily]);
+    await this.reflection.drain();
+    await this.dialogue.drain();
+    await this.writer.flush();
+  }
+
+  /** 跨日反思仍在形成时暂缓高速虚拟时钟，保证每日研究记录完整。 */
+  isBackpressured(): boolean {
+    return this.pendingDaily.size > 6;
+  }
+
   /** 停止接收新事件并等待事件记忆写入完成。 */
   async dispose(): Promise<void> {
     this.writer.detach();
-    await this.writer.flush();
+    await this.drain();
   }
+}
+
+function nextDailyBoundary(previousTotal: number, minuteOfDay: number): number {
+  const dayStart = Math.floor(previousTotal / MINUTES_PER_DAY) * MINUTES_PER_DAY;
+  const today = dayStart + minuteOfDay;
+  return today > previousTotal ? today : today + MINUTES_PER_DAY;
 }

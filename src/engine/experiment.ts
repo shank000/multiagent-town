@@ -119,7 +119,9 @@ export class PartnerChoiceExperiment {
         },
       });
       if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
-      if (!this.mind.dialogue.isActive(agent.id, partner.id)) this.mind.dialogue.start(agent, partner, now);
+      if (!this.mind.dialogue.isActive(agent.id, partner.id)) {
+        this.mind.dialogue.start(agent, partner, now, { requireAdjacent: false, source: 'experiment' });
+      }
     }
   }
 
@@ -129,10 +131,9 @@ export class PartnerChoiceExperiment {
     if (!this.economy.buy(gifter.id, 'flower')) return;
     const delta = this.economy.give(gifter.id, receiver.id, 'flower');
     if (delta === null) return;
-    this.mind.rels.update(gifter.id, receiver.id, { affectionDelta: delta }, now);
-    this.mind.rels.update(receiver.id, gifter.id, { affectionDelta: delta * 0.5 }, now);
+    const giftEventId = randomUUID();
     this.log.addEvent({
-      id: randomUUID(),
+      id: giftEventId,
       type: 'system',
       actorId: gifter.id,
       targetIds: [receiver.id],
@@ -141,6 +142,25 @@ export class PartnerChoiceExperiment {
       gameTime: now,
       payload: { kind: 'gift', fromId: gifter.id, toId: receiver.id, item: 'flower' },
     });
+    this.mind.rels.update(gifter.id, receiver.id, {
+      affectionDelta: delta,
+      evidence: {
+        kind: 'gift_sent', eventId: giftEventId,
+        text: `赠送${ITEMS.flower.name}`,
+        supportDelta: delta * 0.5,
+        metadata: { item: 'flower', role: 'sender' },
+      },
+    }, now);
+    this.mind.rels.update(receiver.id, gifter.id, {
+      affectionDelta: delta * 0.5,
+      evidence: {
+        kind: 'gift_received', eventId: giftEventId,
+        text: `收到${ITEMS.flower.name}`,
+        trustDelta: delta * 0.3,
+        supportDelta: delta,
+        metadata: { item: 'flower', role: 'receiver' },
+      },
+    }, now);
   }
 
   /** 候选者快照：等量可用伙伴 + 各自关系痕迹（供叙事呈现「历史依赖选择」） */

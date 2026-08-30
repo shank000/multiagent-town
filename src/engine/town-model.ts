@@ -63,16 +63,28 @@ export class TownModel {
       });
       return;
     }
+    const eventId = randomUUID();
     this.log.addEvent({
-      id: randomUUID(), type: 'broadcast', actorId: null, targetIds: p.participants,
+      id: eventId, type: 'broadcast', actorId: null, targetIds: p.participants,
       description: `小镇广播：${p.event.name}——${p.event.text}`, location: null, gameTime: now,
       payload: { kind: 'town_event', name: p.event.name, text: p.event.text, participants: p.participants },
     });
     // 参与者之间关系升温（渐进）
     for (let i = 0; i < p.participants.length; i++) {
       for (let j = i + 1; j < p.participants.length; j++) {
-        this.rels.update(p.participants[i], p.participants[j], { affectionDelta: 0.1 }, now);
-        this.rels.update(p.participants[j], p.participants[i], { affectionDelta: 0.1 }, now);
+        for (const [from, to] of [
+          [p.participants[i], p.participants[j]],
+          [p.participants[j], p.participants[i]],
+        ] as const) {
+          this.rels.update(from, to, {
+            affectionDelta: 0.1,
+            evidence: {
+              kind: 'shared_activity', eventId,
+              text: `共同参加${p.event.name}`,
+              metadata: { activity: p.event.name },
+            },
+          }, now);
+        }
       }
     }
   }

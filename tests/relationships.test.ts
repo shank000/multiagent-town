@@ -46,3 +46,101 @@ test('allFor 与 allPairs', () => {
   assert.equal(store.allFor('agent:a').length, 1); // 出边：A 对他人的看法
   assert.equal(store.allPairs().length, 2);
 });
+
+test('每次关系变化记录有向来源、时间、实际增量与事件证据', () => {
+  const { store } = setup();
+  const evidence = store.update('agent:a', 'agent:b', {
+    affectionDelta: 0.5,
+    respectDelta: 0.1,
+    evidence: {
+      kind: 'gift_received',
+      eventId: 'event:gift-1',
+      text: '收到一束鲜花',
+      trustDelta: 0.03,
+      supportDelta: 0.1,
+      metadata: { item: 'flower' },
+    },
+  }, 1_500.8);
+
+  assert.equal(evidence.affectionBefore, 0);
+  assert.equal(evidence.affectionDelta, 0.2); // 保存的是夹紧后的实际变化
+  assert.equal(evidence.affectionAfter, 0.2);
+  assert.equal(evidence.respectDelta, 0.1);
+  assert.equal(evidence.gameTime, 1_500);
+  assert.equal(evidence.sourceEventId, 'event:gift-1');
+  assert.equal(evidence.sourceKind, 'gift_received');
+  assert.equal(evidence.supportDelta, 0.1);
+  assert.deepEqual(evidence.metadata, { item: 'flower' });
+  assert.deepEqual(store.evidenceFor('agent:a', 'agent:b'), [evidence]);
+  assert.deepEqual(store.evidenceFor('agent:b'), []);
+});
+
+test('关系状态与证据写入保持原子一致', () => {
+  const { store } = setup();
+  store.update('agent:a', 'agent:b', { affectionDelta: 0.1 }, 10);
+  const before = store.getOrCreate('agent:a', 'agent:b');
+  assert.throws(() => store.update('agent:a', 'agent:b', {
+    affectionDelta: 0.1,
+    evidence: {
+      kind: 'other', text: '不可序列化证据', metadata: { invalid: 1n },
+    },
+  }, 20));
+  assert.deepEqual(store.getOrCreate('agent:a', 'agent:b'), before);
+  assert.equal(store.evidenceFor('agent:a', 'agent:b').length, 1);
+});
+
+test('关系证据按 gameTime 闭区间精确读取并用 SQL 计数', () => {
+  const { db, store } = setup();
+  store.update('agent:a', 'agent:b', { evidence: { kind: 'dialogue', text: '下界' } }, 100);
+  store.update('agent:a', 'agent:c', { evidence: { kind: 'dialogue', text: '区间内其他关系' } }, 150);
+  store.update('agent:b', 'agent:a', { evidence: { kind: 'dialogue', text: '反向上界' } }, 200);
+  store.update('agent:a', 'agent:b', { evidence: { kind: 'dialogue', text: '区间外' } }, 201);
+
+  assert.deepEqual(
+    store.evidenceInGameTimeRange(100, 200).map((item) => [item.gameTime, item.sourceText]),
+    [[200, '反向上界'], [150, '区间内其他关系'], [100, '下界']],
+  );
+  assert.equal(store.countEvidenceInGameTimeRange(100, 200), 3);
+  assert.deepEqual(
+    store.evidenceForDyadInGameTimeRange('agent:a', 'agent:b', 100, 200)
+      .map((item) => [item.gameTime, item.agentA, item.agentB]),
+    [[200, 'agent:b', 'agent:a'], [100, 'agent:a', 'agent:b']],
+  );
+  assert.equal(store.countEvidenceForDyadInGameTimeRange('agent:a', 'agent:b', 100, 200), 2);
+  assert.deepEqual(store.evidenceInGameTimeRange(200, 100), []);
+  assert.equal(store.countEvidenceInGameTimeRange(200, 100), 0);
+  db.raw.close();
+});
+
+test('正式时间区间读取完整返回超过 20,000 条证据', () => {
+  const { db, store } = setup();
+  const total = 20_005;
+  const insert = db.raw.prepare(
+    `INSERT INTO relationship_evidence(
+       id, agent_a, agent_b, source_kind, source_text, game_time,
+       affection_before, affection_delta, affection_after,
+       respect_before, respect_delta, respect_after, metadata_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  db.raw.exec('BEGIN');
+  try {
+    for (let index = 0; index < total; index++) {
+      insert.run(
+        `bulk:${index}`, 'agent:a', 'agent:b', 'dialogue', `证据 ${index}`, index,
+        0, 0, 0, 0, 0, 0, '{}',
+      );
+    }
+    db.raw.exec('COMMIT');
+  } catch (error) {
+    db.raw.exec('ROLLBACK');
+    throw error;
+  }
+
+  const evidence = store.evidenceInGameTimeRange(0, total - 1);
+  assert.equal(evidence.length, total);
+  assert.equal(evidence[0].gameTime, total - 1);
+  assert.equal(evidence.at(-1)?.gameTime, 0);
+  assert.equal(store.countEvidenceInGameTimeRange(0, total - 1), total);
+  assert.equal(store.countEvidenceForDyadInGameTimeRange('agent:a', 'agent:b', 0, total - 1), total);
+  db.raw.close();
+});

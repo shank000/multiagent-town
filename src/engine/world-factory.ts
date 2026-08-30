@@ -4,7 +4,7 @@
 import { TimeEngine } from '../core/time';
 import { WorldState } from '../core/world';
 import { buildTown, DEFAULT_SEED } from './seed';
-import { WorldLoop } from './loop';
+import { startLoopGroup, stopLoopGroup, WorldLoop } from './loop';
 import { AgentExecutor } from '../core/state-machine';
 import { LLMGateway } from '../llm/gateway';
 import { openDb, type DbHandle } from '../store/db';
@@ -95,9 +95,9 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
   const world = buildTown(DEFAULT_SEED);
   const time = new TimeEngine(options.gameMinutesPerTick ?? 30);
   const gateway = options.gateway ?? new LLMGateway({ provider: 'mock' });
-  const mind = new MindEngine({ db, llm: gateway, log });
+  const mind = new MindEngine({ db, llm: gateway, log, scopeId: id });
   const player = new PlayerDirector();
-  const executor = new AgentExecutor(gateway, world, log, mind, player);
+  const executor = new AgentExecutor(gateway, world, log, mind, player, id);
   const social = new SocialTicker(log, {}, mind.dialogue);
 
   let experiment: ExperimentRunner | null = null;
@@ -108,10 +108,10 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
       giftExchange: kind === 'mem-on' ? 'on' : 'off',
     }, { seed });
     // 隔离相邻闲聊，让全部对话来自伙伴选择（洁净对照）
-    const loop = new WorldLoop(time, world, executor, log, db, {}, undefined, mind, experiment);
+    const loop = new WorldLoop(time, world, executor, log, db, {}, undefined, mind, experiment, gateway);
     runnerHost = loop;
   } else {
-    runnerHost = new WorldLoop(time, world, executor, log, db, {}, social, mind);
+    runnerHost = new WorldLoop(time, world, executor, log, db, {}, social, mind, undefined, gateway);
   }
   const loop = runnerHost;
   const seedRumor = (text: string) => {
@@ -124,9 +124,9 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
 
 /** 启动全部世界的时钟（每世界独立循环） */
 export function startAllWorlds(worlds: ManagedWorld[]): void {
-  for (const w of worlds) w.loop.start();
+  startLoopGroup(worlds.map((world) => world.loop));
 }
 
 export function stopAllWorlds(worlds: ManagedWorld[]): void {
-  for (const w of worlds) w.loop.stop();
+  stopLoopGroup(worlds.map((world) => world.loop));
 }

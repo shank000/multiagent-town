@@ -31,8 +31,8 @@ test('world factory applies runtime clock settings while keeping paired experime
   try {
     assert.equal(fast.time.gameMinutesPerTick, 180);
     assert.equal(paired.time.gameMinutesPerTick, 30);
-    fast.mind.dialogue.start = () => {};
-    paired.mind.dialogue.start = () => {};
+    fast.mind.dialogue.start = () => true;
+    paired.mind.dialogue.start = () => true;
     for (const managed of [fast, paired]) {
       managed.experiment?.start(1, 0);
       managed.experiment?.tick(1170);

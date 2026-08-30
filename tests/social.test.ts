@@ -58,3 +58,18 @@ test('persona 台词池优先，冷却后轮换', () => {
   assert.equal(chats[0].payload?.line, '你好！');
   assert.equal(chats[1].payload?.line, '再见！');
 });
+
+test('完整对话引擎拒绝新会话时不生成缺少 conversationId 的散落 chat', () => {
+  const log = new EventLog(openDb(':memory:'));
+  const a = makeAgent({ id: 'agent:a', name: '甲', x: 0, y: 0 });
+  const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1 });
+  let attempts = 0;
+  const dialogue = {
+    isActive: () => false,
+    start: () => { attempts++; return false; },
+  } as unknown as import('../src/engine/dialogue').DialogueEngine;
+  const ticker = new SocialTicker(log, {}, dialogue);
+  ticker.tick([a, b], 3, 10);
+  assert.equal(attempts, 1);
+  assert.equal(log.count(), 0);
+});

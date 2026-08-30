@@ -21,11 +21,25 @@ test('未知目标 → 不通过且降级为 idle', () => {
   assert.equal(r.decision.action.target, null);
 });
 
-test('非法类型 / idle 带目标 / 非法时长 → 均不通过', () => {
+test('非法类型与非法时长不通过；idle 携带目标时安全规范化', () => {
   assert.equal(validateDecision({ action: { type: 'fly', target: 'obj:cafe' }, duration_minutes: 10 }, has).ok, false);
-  assert.equal(validateDecision({ action: { type: 'idle', target: 'obj:cafe' }, duration_minutes: 10 }, has).ok, false);
+  const normalized = validateDecision({
+    thought: '在公园休息',
+    action: { type: 'idle', target: 'obj:cafe', verb: '休息' },
+    duration_minutes: 10,
+  }, has);
+  assert.equal(normalized.ok, true);
+  assert.equal(normalized.decision.action.target, null);
+  assert.equal(normalized.decision.thought, '在公园休息');
+  assert.equal(normalized.normalization?.code, 'idle_target_cleared');
   assert.equal(validateDecision({ action: { type: 'interact', target: 'obj:cafe' }, duration_minutes: 0 }, has).ok, false);
   assert.equal(validateDecision({ action: { type: 'interact', target: 'obj:cafe' }, duration_minutes: 121 }, has).ok, false);
+});
+
+test('动作目标类型保持严格，非字符串目标不被静默转换', () => {
+  const result = validateDecision({ action: { type: 'idle', target: 42 }, duration_minutes: 10 }, has);
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /目标格式非法/);
 });
 
 test('时长边界 1 与 120 通过；非对象输出不通过', () => {

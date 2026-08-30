@@ -59,9 +59,17 @@ CREATE TABLE IF NOT EXISTS reflections (
   agent_id      TEXT NOT NULL,
   parent_id     TEXT,
   depth         INTEGER NOT NULL DEFAULT 0,
+  reflection_kind TEXT NOT NULL DEFAULT 'triggered',
+  day           INTEGER NOT NULL DEFAULT 1,
   questions_json TEXT NOT NULL,
   insights_json TEXT NOT NULL,
   evidence_ids_json TEXT NOT NULL,
+  diary_text    TEXT NOT NULL DEFAULT '',
+  mind_state_json TEXT NOT NULL DEFAULT '{}',
+  beliefs_json  TEXT NOT NULL DEFAULT '[]',
+  revisions_json TEXT NOT NULL DEFAULT '[]',
+  guidance_json TEXT NOT NULL DEFAULT '[]',
+  version       INTEGER NOT NULL DEFAULT 1,
   trigger_score REAL NOT NULL,
   created_game_time INTEGER NOT NULL
 );
@@ -80,7 +88,21 @@ CREATE TABLE IF NOT EXISTS messages (
   from_agent TEXT,
   to_agent  TEXT,
   content   TEXT,
-  game_time INTEGER NOT NULL
+  game_time INTEGER NOT NULL,
+  conversation_id TEXT,
+  turn_index INTEGER
+);
+CREATE TABLE IF NOT EXISTS conversations (
+  id                TEXT PRIMARY KEY,
+  agent_a           TEXT NOT NULL,
+  agent_b           TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('active','completed','error')),
+  started_game_time INTEGER NOT NULL,
+  ended_game_time   INTEGER,
+  turn_count        INTEGER NOT NULL DEFAULT 0,
+  summary           TEXT NOT NULL DEFAULT '',
+  error_text        TEXT NOT NULL DEFAULT '',
+  updated_game_time INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS relationships (
@@ -93,6 +115,32 @@ CREATE TABLE IF NOT EXISTS relationships (
   updated_game_time INTEGER NOT NULL,
   UNIQUE(agent_a, agent_b)
 );
+
+-- 有向关系的不可变证据账本。旧 relationships 表继续保存实验使用的
+-- affection/respect 当前值；本表只为审计、回放和只读社会投影服务。
+CREATE TABLE IF NOT EXISTS relationship_evidence (
+  id                TEXT PRIMARY KEY,
+  agent_a           TEXT NOT NULL,
+  agent_b           TEXT NOT NULL,
+  source_kind       TEXT NOT NULL,
+  source_event_id   TEXT,
+  source_text       TEXT NOT NULL,
+  game_time         INTEGER NOT NULL,
+  affection_before REAL NOT NULL,
+  affection_delta  REAL NOT NULL,
+  affection_after  REAL NOT NULL,
+  respect_before   REAL NOT NULL,
+  respect_delta    REAL NOT NULL,
+  respect_after    REAL NOT NULL,
+  trust_delta      REAL NOT NULL DEFAULT 0,
+  support_delta    REAL NOT NULL DEFAULT 0,
+  tension_delta    REAL NOT NULL DEFAULT 0,
+  metadata_json    TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_rel_evidence_pair_time
+  ON relationship_evidence(agent_a, agent_b, game_time DESC);
+CREATE INDEX IF NOT EXISTS idx_rel_evidence_event
+  ON relationship_evidence(source_event_id);
 
 CREATE TABLE IF NOT EXISTS rumors (
   id         TEXT PRIMARY KEY,
@@ -115,6 +163,21 @@ export function openDb(path: string): DbHandle {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const raw = new DatabaseSync(path);
   raw.exec(SCHEMA);
+  // 兼容既有实验库：反思结构采用幂等增量列，不要求重建或丢弃历史数据。
+  ensureColumn(raw, 'reflections', 'reflection_kind', "TEXT NOT NULL DEFAULT 'triggered'");
+  ensureColumn(raw, 'reflections', 'day', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(raw, 'reflections', 'diary_text', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(raw, 'reflections', 'mind_state_json', "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(raw, 'reflections', 'beliefs_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(raw, 'reflections', 'revisions_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(raw, 'reflections', 'guidance_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(raw, 'reflections', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(raw, 'messages', 'conversation_id', 'TEXT');
+  ensureColumn(raw, 'messages', 'turn_index', 'INTEGER');
+  raw.exec('CREATE INDEX IF NOT EXISTS idx_reflections_agent_day ON reflections(agent_id, day, created_game_time)');
+  raw.exec('CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(game_time)');
+  raw.exec('CREATE INDEX IF NOT EXISTS idx_messages_conversation_turn ON messages(conversation_id, turn_index)');
+  raw.exec('CREATE INDEX IF NOT EXISTS idx_conversations_agents_time ON conversations(agent_a, agent_b, updated_game_time DESC)');
   return {
     raw,
     setMeta(key, value) {
@@ -127,4 +190,11 @@ export function openDb(path: string): DbHandle {
       return row?.value ?? null;
     },
   };
+}
+
+function ensureColumn(raw: DatabaseSync, table: 'reflections' | 'messages', column: string, definition: string): void {
+  const columns = raw.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[];
+  if (!columns.some((item) => item.name === column)) {
+    raw.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }

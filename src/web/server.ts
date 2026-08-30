@@ -15,12 +15,19 @@ import type { RumorTracker } from '../engine/rumors';
 import type { GameEvent } from '../core/types';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
+import type { LLMGateway } from '../llm/gateway';
 import { computeStanding } from '../engine/status';
 import { analyzeTown } from '../engine/analyze';
+import {
+  DEFAULT_RELATION_WINDOW_DAYS,
+  projectSocialRelationships,
+  type PartnerChoiceObservation,
+} from '../engine/social-relations';
 import { createGuestAgent, hydrateWorld } from '../engine/seed';
 import { PerceptionEngine } from '../engine/perception';
 import { metricsOf, type Choice } from '../engine/metrics';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
+import { startLoopGroup, stopLoopGroup } from '../engine/loop';
 
 export interface TownWebOptions {
   world: WorldState;
@@ -38,6 +45,7 @@ export interface TownWebOptions {
   experiment?: { state(): unknown; setConfig(cfg: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number, now: number): void; stop(): void };
   worlds?: unknown[]; // ManagedWorld[]；结构由 hubWorlds 适配器按需取字段
   port?: number;        // 默认 0 = 系统随机端口
+  llm?: LLMGateway;     // 共享推理调度状态与背压观测
 }
 
 export interface TownWebServer {
@@ -69,6 +77,31 @@ interface HubAccess {
   mind: MindEngine;
   player: PlayerDirector | undefined;
   experiment: { state(): unknown; setConfig(c: { historyAccess: 'on' | 'off'; giftExchange: 'on' | 'off' }): void; start(days: number, now: number): void; stop(): void } | null | undefined;
+}
+
+function relationshipWindow(raw: string | null): { valid: true; days: number | null } | { valid: false } {
+  if (raw === null || raw === '') return { valid: true, days: DEFAULT_RELATION_WINDOW_DAYS };
+  if (raw === 'all') return { valid: true, days: null };
+  if (!/^\d+$/.test(raw)) return { valid: false };
+  const days = Number(raw);
+  return Number.isInteger(days) && days >= 1 && days <= 3650
+    ? { valid: true, days }
+    : { valid: false };
+}
+
+function partnerChoiceObservations(log: EventLog, endGameTimeInclusive: number): PartnerChoiceObservation[] {
+  const observations: PartnerChoiceObservation[] = [];
+  for (const event of log.eventsOfKind('experiment_pair_choice', 0, endGameTimeInclusive + 1)) {
+    const payload = event.payload as { kind?: string; fromId?: string; toId?: string } | null;
+    if (payload?.kind !== 'experiment_pair_choice' || !payload.fromId || !payload.toId) continue;
+    observations.push({
+      fromId: payload.fromId,
+      toId: payload.toId,
+      gameTime: event.gameTime,
+      eventId: event.id,
+    });
+  }
+  return observations;
 }
 
 export async function createTownServer(opts: TownWebOptions): Promise<TownWebServer> {
@@ -130,6 +163,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   function snapshotOf(selected: HubAccess): WorldSnapshot & { worldId: string } {
     return {
       ...buildSnapshot(selected.world, selected.time, paused, ++seq),
+      activeConversations: selected.mind?.dialogue.activeSessions() ?? [],
       worldId: selected.meta.id,
     };
   }
@@ -179,7 +213,13 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         if (!selected) { res.writeHead(404); res.end('未知世界'); return; }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
-          ...buildSnapshot(selected.world, selected.time, paused, ++seq),
+          ...buildSnapshot(
+            selected.world,
+            selected.time,
+            paused,
+            ++seq,
+            selected.mind?.dialogue.activeSessions() ?? []
+          ),
           worldId: selected.meta.id,
         }));
         return;
@@ -228,6 +268,207 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         res.end(JSON.stringify(list));
         return;
       }
+      if (url.pathname === '/api/llm/status' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(opts.llm?.schedulerSnapshot() ?? {
+          active: 0, queued: 0, maxConcurrent: 0, maxQueued: 0,
+          oldestWaitMs: 0, backpressured: false, byPriority: {}, byScope: {},
+          performance: {
+            provider: 'none', sampleCount: 0, generationTokensPerSecond: null,
+            effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,
+            recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 360, confidence: 'unavailable',
+          },
+        }));
+        return;
+      }
+      if (url.pathname === '/api/llm/calibrate' && req.method === 'POST') {
+        if (!opts.llm) { res.writeHead(404); res.end('LLM 网关未启用'); return; }
+        const performance = await opts.llm.calibrate();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, performance }));
+        return;
+      }
+      if (url.pathname === '/api/relationships' && req.method === 'GET') {
+        const selected = hubById(url.searchParams.get('worldId'));
+        if (!selected) {
+          res.writeHead(404);
+          res.end('未知世界');
+          return;
+        }
+        if (!selected.mind.rels) {
+          res.writeHead(404);
+          res.end('关系未启用');
+          return;
+        }
+        const window = relationshipWindow(url.searchParams.get('windowDays'));
+        if (!window.valid) {
+          res.writeHead(400);
+          res.end('windowDays 必须是 1..3650 或 all');
+          return;
+        }
+        const names = new Map(selected.world.allAgents().map((agent) => [agent.id, agent.name]));
+        const now = selected.time.state.totalMinutes;
+        const evidence = selected.mind.rels.evidenceInGameTimeRange(0, now);
+        const projection = projectSocialRelationships(
+          selected.mind.rels.allPairs(),
+          evidence,
+          names,
+          now,
+          {
+            windowDays: window.days,
+            choices: partnerChoiceObservations(selected.log, now),
+          },
+        );
+        const directions = projection.directions.map(({ evidence: _evidence, ...direction }) => direction);
+        const dyads = projection.dyads.map(({
+          aToB: _aToB,
+          bToA: _bToA,
+          aToBMeasures: _aToBMeasures,
+          bToAMeasures: _bToAMeasures,
+          ...dyad
+        }) => dyad);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ worldId: selected.meta.id, ...projection, directions, dyads }));
+        return;
+      }
+      if (url.pathname === '/api/relationships/dyad' && req.method === 'GET') {
+        const selected = hubById(url.searchParams.get('worldId'));
+        if (!selected) {
+          res.writeHead(404);
+          res.end('未知世界');
+          return;
+        }
+        if (!selected.mind.rels) {
+          res.writeHead(404);
+          res.end('关系未启用');
+          return;
+        }
+        const aId = url.searchParams.get('aId') ?? '';
+        const bId = url.searchParams.get('bId') ?? '';
+        const residents = new Map(selected.world.allAgents().map((agent) => [agent.id, agent.name]));
+        if (!aId || !bId || aId === bId) {
+          res.writeHead(400);
+          res.end('aId 与 bId 必须是两个不同居民');
+          return;
+        }
+        if (!residents.has(aId) || !residents.has(bId)) {
+          res.writeHead(404);
+          res.end('未知居民');
+          return;
+        }
+        const window = relationshipWindow(url.searchParams.get('windowDays'));
+        if (!window.valid) {
+          res.writeHead(400);
+          res.end('windowDays 必须是 1..3650 或 all');
+          return;
+        }
+        const now = selected.time.state.totalMinutes;
+        const evidence = selected.mind.rels.evidenceInGameTimeRange(0, now);
+        const choices = partnerChoiceObservations(selected.log, now);
+        const projection = projectSocialRelationships(
+          selected.mind.rels.allPairs(),
+          evidence,
+          residents,
+          now,
+          { windowDays: window.days, choices, evidencePerDirection: 100 },
+        );
+        const dyad = projection.dyads.find((item) => (
+          (item.aId === aId && item.bId === bId) || (item.aId === bId && item.bId === aId)
+        )) ?? null;
+        const aToB = projection.directions.find((item) => item.fromId === aId && item.toId === bId) ?? null;
+        const bToA = projection.directions.find((item) => item.fromId === bId && item.toId === aId) ?? null;
+        const directionSummary = (direction: typeof aToB) => {
+          if (!direction) return null;
+          const { evidence: _evidence, ...summary } = direction;
+          return summary;
+        };
+        const dyadSummary = (() => {
+          if (!dyad) return null;
+          const {
+            aToB: _aToB,
+            bToA: _bToA,
+            aToBMeasures: _aToBMeasures,
+            bToAMeasures: _bToAMeasures,
+            ...summary
+          } = dyad;
+          return summary;
+        })();
+        const dyadEvidence = selected.mind.rels.evidenceForDyadInGameTimeRange(
+          aId,
+          bId,
+          projection.window.startGameTime,
+          projection.window.endGameTime,
+        );
+        const evidenceTimeline = dyadEvidence.map((item) => ({
+          ...item,
+          direction: item.agentA === aId
+            ? `${residents.get(aId)} → ${residents.get(bId)}`
+            : `${residents.get(bId)} → ${residents.get(aId)}`,
+        }));
+        const choiceEvents = choices
+          .filter((item) => item.gameTime >= projection.window.startGameTime && (
+            (item.fromId === aId && item.toId === bId) || (item.fromId === bId && item.toId === aId)
+          ))
+          .sort((left, right) => right.gameTime - left.gameTime);
+        const runtimeConversations = new Map(selected.mind.dialogue.activeSessions()
+          .map((conversation) => [conversation.conversationId, conversation]));
+        const conversations = selected.mind.store.conversationsFor(aId, 100)
+          .filter((conversation) => conversation.participants.includes(bId)
+            && conversation.updatedGameTime >= projection.window.startGameTime
+            && conversation.startedGameTime <= projection.window.endGameTime)
+          .map((conversation) => ({
+            ...conversation,
+            runtime: runtimeConversations.get(conversation.id) ?? null,
+            participants: conversation.participants.map((id) => ({ id, name: residents.get(id) ?? id })),
+            messages: conversation.messages
+              .filter((message) => message.gameTime >= projection.window.startGameTime
+                && message.gameTime <= projection.window.endGameTime)
+              .map((message) => ({
+                ...message,
+                fromName: residents.get(message.fromAgent) ?? message.fromAgent,
+                toName: residents.get(message.toAgent) ?? message.toAgent,
+              })),
+          }))
+          .filter((conversation) => conversation.messages.length > 0)
+          .slice(0, 30);
+        const totalEvidence = selected.mind.rels.countEvidenceForDyadInGameTimeRange(
+          aId,
+          bId,
+          projection.window.startGameTime,
+          projection.window.endGameTime,
+        );
+        const earliestLoaded = dyadEvidence.at(-1)?.gameTime ?? null;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          schemaVersion: 'social-dyad.response/v2',
+          worldId: selected.meta.id,
+          modelVersion: projection.modelVersion,
+          generatedGameTime: projection.generatedGameTime,
+          window: projection.window,
+          proxyNotice: projection.proxyNotice,
+          measureSchema: projection.measureSchema,
+          dataQuality: projection.dataQuality,
+          scope: { source: 'local_event_log', validatedRun: null },
+          people: {
+            a: { id: aId, name: residents.get(aId) },
+            b: { id: bId, name: residents.get(bId) },
+          },
+          aToB: directionSummary(aToB),
+          bToA: directionSummary(bToA),
+          dyad: dyadSummary,
+          evidenceSummary: {
+            totalCount: totalEvidence,
+            loadedCount: dyadEvidence.length,
+            returnedCount: evidenceTimeline.length,
+            truncated: totalEvidence > dyadEvidence.length,
+            earliestLoaded,
+          },
+          evidenceTimeline,
+          choiceEvents,
+          conversations,
+        }));
+        return;
+      }
       if (url.pathname.startsWith('/api/relationships/') && req.method === 'GET') {
         let id: string;
         try {
@@ -248,18 +489,80 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           res.end('关系未启用');
           return;
         }
-        const relations = selected.mind.rels.allFor(id).map((r) => ({
-          otherId: r.agentB,
-          otherName: selected.world.allAgents().find((a) => a.id === r.agentB)?.name ?? r.agentB,
-          affection: r.affection,
-          respect: r.respect,
-          knowledgeCount: r.knowledge.length,
-        }));
+        const names = new Map(selected.world.allAgents().map((agent) => [agent.id, agent.name]));
+        if (!names.has(id)) {
+          res.writeHead(404);
+          res.end('未知居民');
+          return;
+        }
+        const window = relationshipWindow(url.searchParams.get('windowDays'));
+        if (!window.valid) {
+          res.writeHead(400);
+          res.end('windowDays 必须是 1..3650 或 all');
+          return;
+        }
+        const now = selected.time.state.totalMinutes;
+        const evidence = selected.mind.rels.evidenceInGameTimeRange(0, now);
+        const projection = projectSocialRelationships(
+          selected.mind.rels.allPairs(),
+          evidence,
+          names,
+          now,
+          {
+            windowDays: window.days,
+            choices: partnerChoiceObservations(selected.log, now),
+          },
+        );
+        const directionByOther = new Map(projection.directions
+          .filter((direction) => direction.fromId === id)
+          .map((direction) => [direction.toId, direction]));
+        const dyadByOther = new Map(projection.dyads
+          .filter((dyad) => dyad.aId === id || dyad.bId === id)
+          .map((dyad) => [dyad.aId === id ? dyad.bId : dyad.aId, dyad]));
+        const outgoingByOther = new Map(selected.mind.rels.allFor(id).map((relation) => [relation.agentB, relation]));
+        const otherIds = new Set([...outgoingByOther.keys(), ...dyadByOther.keys()]);
+        const relations = [...otherIds].map((otherId) => {
+          const legacy = outgoingByOther.get(otherId);
+          const direction = directionByOther.get(otherId);
+          const dyad = dyadByOther.get(otherId);
+          const reverseDirection = projection.directions.find((candidate) => (
+            candidate.fromId === otherId && candidate.toId === id
+          ));
+          return {
+            otherId,
+            otherName: names.get(otherId) ?? otherId,
+            affection: legacy?.affection ?? 0,
+            respect: legacy?.respect ?? 0,
+            knowledgeCount: legacy?.knowledge.length ?? 0,
+            direction: direction ?? null,
+            reverseDirection: reverseDirection ?? null,
+            reciprocity: dyad?.reciprocity ?? 0,
+            asymmetry: dyad?.asymmetry ?? 1,
+            measures: dyad?.measures ?? null,
+            aToBMeasures: dyad?.aId === id ? dyad.aToBMeasures : dyad?.bToAMeasures ?? null,
+            bToAMeasures: dyad?.aId === id ? dyad.bToAMeasures : dyad?.aToBMeasures ?? null,
+            dyadType: dyad?.tieType ?? 'asymmetric',
+            dyadLabel: dyad?.tieLabel ?? '证据稀疏画像',
+          };
+        }).sort((left, right) => (
+          Math.max(right.direction?.strength ?? 0, right.reverseDirection?.strength ?? 0)
+          - Math.max(left.direction?.strength ?? 0, left.reverseDirection?.strength ?? 0)
+        ) || left.otherId.localeCompare(right.otherId));
         const standings = [...computeStanding(selected.mind.rels.allPairs()).entries()]
           .map(([sid, score]) => ({ id: sid, name: selected.world.allAgents().find((a) => a.id === sid)?.name ?? sid, score }))
           .sort((a, b) => b.score - a.score);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ worldId: selected.meta.id, relations, standings }));
+        res.end(JSON.stringify({
+          worldId: selected.meta.id,
+          modelVersion: projection.modelVersion,
+          generatedGameTime: projection.generatedGameTime,
+          window: projection.window,
+          proxyNotice: projection.proxyNotice,
+          measureSchema: projection.measureSchema,
+          dataQuality: projection.dataQuality,
+          relations,
+          standings,
+        }));
         return;
       }
       if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/mind') && req.method === 'GET') {
@@ -282,12 +585,32 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           res.end('mind 未启用');
           return;
         }
-        const body: { worldId: string; memories: unknown[]; reflections: unknown[]; plans: unknown[]; dialogues: unknown[] } = {
+        const agentNames = new Map(selected.world.allAgents().map((agent) => [agent.id, agent.name]));
+        const runtimeConversations = new Map(selected.mind.dialogue.activeSessions()
+          .map((conversation) => [conversation.conversationId, conversation]));
+        const conversations = selected.mind.store.conversationsFor(id, 20).map((conversation) => ({
+          ...conversation,
+          runtime: runtimeConversations.get(conversation.id) ?? null,
+          participants: conversation.participants.map((participantId) => ({
+            id: participantId,
+            name: agentNames.get(participantId) ?? participantId,
+          })),
+          messages: conversation.messages.map((message) => ({
+            ...message,
+            fromName: agentNames.get(message.fromAgent) ?? message.fromAgent,
+            toName: agentNames.get(message.toAgent) ?? message.toAgent,
+          })),
+        }));
+        const body: {
+          worldId: string; memories: unknown[]; reflections: unknown[]; plans: unknown[];
+          dialogues: unknown[]; conversations: unknown[];
+        } = {
           worldId: selected.meta.id,
           memories: selected.mind.store.recentMemories(id, 50),
           reflections: selected.mind.store.reflectionsFor(id),
           plans: [], // 计划列表：取当天与前一天
           dialogues: selected.mind.store.messagesFor(id, 50),
+          conversations,
         };
         for (let day = Math.floor(selected.time.state.totalMinutes / 1440) + 1; day >= 1 && body.plans.length < 4; day--) {
           const p = selected.mind.store.planFor(id, day);
@@ -393,7 +716,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         const limit = Math.min(500, Math.max(10, Number(url.searchParams.get('limit')) || 200));
         const from = selected.world.allAgents();
         const nameOf = (id: string | null) => from.find((a) => a.id === id)?.name ?? id ?? '';
-        const recent = selected.log.recent(limit, selected.time.state.totalMinutes + 1);
+        const recent = selected.log.recent(limit, selected.time.state.totalMinutes + 1)
+          .filter((event) => event.payload?.kind !== 'action_decision_quality');
         const items = recent.map((e, i) => {
           const p = (e.payload ?? {}) as Record<string, unknown>;
           const kind = String(p.kind ?? '');
@@ -600,10 +924,21 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         const controlledWorlds = hubWorlds ?? [hub()];
         if (body.action === 'pause') {
           paused = true;
-          for (const world of controlledWorlds) world.loop.stop();
+          if (controlledWorlds.length > 1) stopLoopGroup(controlledWorlds.map((world) => world.loop));
+          else controlledWorlds[0].loop.stop();
         } else if (body.action === 'resume') {
           paused = false;
-          for (const world of controlledWorlds) world.loop.start();
+          if (controlledWorlds.length > 1) startLoopGroup(controlledWorlds.map((world) => world.loop));
+          else controlledWorlds[0].loop.start();
+        } else if (body.action === 'adaptive-speed' && opts.llm) {
+          const performance = opts.llm.throughputSnapshot().sampleCount >= 2
+            ? opts.llm.throughputSnapshot()
+            : await opts.llm.calibrate();
+          const speed = performance.recommendedMaxWorldSpeed ?? 1;
+          for (const world of controlledWorlds) world.time.gameMinutesPerTick = speed * 0.5;
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, speed, performance }));
+          return;
         } else if (
           body.action === 'speed' && typeof body.value === 'number'
           && Number.isFinite(body.value) && body.value > 0 && body.value <= 360

@@ -35,10 +35,12 @@ export interface StubItem { content: string; parsed?: unknown }
 export class StubProvider implements LLMProvider {
   name = 'stub';
   calls = 0;
+  requests: LLMRequest[] = [];
   constructor(private queue: (Error | StubItem)[]) {}
 
-  async complete(_req: LLMRequest): Promise<LLMResponse> {
+  async complete(req: LLMRequest): Promise<LLMResponse> {
     this.calls++;
+    this.requests.push(req);
     const next = this.queue.shift();
     if (next instanceof Error) throw next;
     const item = next ?? { content: '{}', parsed: {} };

@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentExecutor } from '../src/core/state-machine';
+import { actionDecisionJsonSchema, AgentExecutor } from '../src/core/state-machine';
 import { WorldState } from '../src/core/world';
 import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
 import { LLMGateway } from '../src/llm/gateway';
 import { MindEngine } from '../src/engine/mind';
 import type { ChatMessage, LLMProvider } from '../src/llm/types';
-import { makeAgent, flush, StubProvider } from './helpers';
+import { makeAgent, flush, persona, StubProvider } from './helpers';
 import type { WorldObject } from '../src/core/types';
 
 const TEST_OBJECTS: WorldObject[] = [
@@ -21,9 +21,10 @@ function setup(queue: (Error | { content: string; parsed?: unknown })[]) {
   const log = new EventLog(db);
   const agent = makeAgent({ id: 'agent:1', name: '甲', x: 0, y: 0, locationId: 'obj:home' });
   const world = new WorldState(TEST_OBJECTS, [agent]);
-  const gateway = new LLMGateway({ provider: new StubProvider(queue), retries: 0 });
+  const provider = new StubProvider(queue);
+  const gateway = new LLMGateway({ provider, retries: 0 });
   const executor = new AgentExecutor(gateway, world, log);
-  return { log, agent, executor, gateway };
+  return { log, agent, executor, gateway, provider };
 }
 
 test('全链路：思考 → 移动 → 行动 → 完成', async () => {
@@ -60,8 +61,38 @@ test('move_to 到达即完成并记录 move 事件', async () => {
   assert.ok(log.eventsForDay(1).some((e) => e.type === 'move' && e.description.includes('到达「工作地」')));
 });
 
-test('校验失败 → 重试一次 → 仍失败降级 idle', async () => {
-  const { agent, executor, gateway } = setup([
+test('睡眠作息保护阻止午夜模型决策改写为白天活动', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const objects: WorldObject[] = [
+    ...TEST_OBJECTS,
+    { id: 'obj:bed', name: '床', type: 'furniture', parentId: 'obj:home', x: 1, y: 0, w: 1, h: 1 },
+  ];
+  const agent = makeAgent({
+    id: 'agent:sleeper',
+    persona: persona({ routine: [{ from: 0, to: 420, type: 'interact', target: 'obj:bed', verb: '睡觉' }] }),
+  });
+  const world = new WorldState(objects, [agent]);
+  const gateway = new LLMGateway({
+    provider: new StubProvider([{
+      content: '',
+      parsed: { thought: '去白天工作', action: { type: 'move_to', target: 'obj:work', verb: '去工作' }, duration_minutes: 10 },
+    }]),
+    retries: 0,
+  });
+  const executor = new AgentExecutor(gateway, world, log);
+
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+
+  assert.equal(agent.state, 'moving');
+  assert.equal(agent.action?.action.target, 'obj:bed');
+  assert.match(agent.thought ?? '', /睡觉时段/);
+});
+
+test('校验失败会携带原因重试，仍失败时使用叙事安全的 idle', async () => {
+  const { log, agent, executor, gateway, provider } = setup([
     { content: '', parsed: { action: { type: 'interact', target: 'obj:mars' }, duration_minutes: 10 } },
     { content: '', parsed: { action: { type: 'interact', target: 'obj:mars' }, duration_minutes: 10 } },
   ]);
@@ -70,8 +101,66 @@ test('校验失败 → 重试一次 → 仍失败降级 idle', async () => {
   executor.progress(agent, 0, 10);
   assert.equal(agent.state, 'acting');
   assert.equal(agent.action?.action.type, 'idle');
+  assert.doesNotMatch(agent.thought ?? '', /动作目标不存在|不能带目标/);
+  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /动作目标不存在：obj:mars/);
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'safe_fallback');
+  assert.equal(diagnostic?.payload?.attempts, 2);
+  const thought = log.eventsForDay(1).find((event) => event.payload?.kind === 'thought');
+  assert.equal((thought?.payload?.decisionQuality as { status?: string } | undefined)?.status, 'safe_fallback');
   // 网关层两次调用都成功返回（校验失败发生在执行器），计量应记录 2 次
   assert.equal(gateway.metricSummary()[0]?.calls ?? 0, 2);
+});
+
+test('idle 携带目标会保留人物意图并规范化，不触发重复模型调用', async () => {
+  const { log, agent, executor, gateway } = setup([{
+    content: '',
+    parsed: {
+      thought: '忙完后想在家里歇一会儿',
+      action: { type: 'idle', target: 'obj:home', verb: '休息' },
+      duration_minutes: 10,
+    },
+  }]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  assert.equal(agent.action?.action.type, 'idle');
+  assert.equal(agent.action?.action.target, null);
+  assert.equal(agent.thought, '忙完后想在家里歇一会儿');
+  assert.equal(gateway.metricSummary()[0]?.calls, 1);
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'normalized');
+  assert.match(String((diagnostic?.payload?.reasons as string[] | undefined)?.[0]), /规范为 null/);
+  assert.ok(!log.eventsForDay(1).some((event) => event.description.includes('idle 不能带目标')));
+});
+
+test('首次无效、反馈重试有效时采用修正动作并记录 repaired', async () => {
+  const { log, agent, executor, provider } = setup([
+    { content: '', parsed: { action: { type: 'interact', target: 'obj:mars' }, duration_minutes: 10 } },
+    {
+      content: '',
+      parsed: { thought: '去工作地工作', action: { type: 'interact', target: 'obj:work', verb: '工作' }, duration_minutes: 10 },
+    },
+  ]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  assert.equal(agent.action?.action.target, 'obj:work');
+  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /只修正 JSON/);
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'repaired');
+  assert.equal(diagnostic?.payload?.attempts, 2);
+});
+
+test('动作 JSON Schema 用互斥分支约束 idle 与有目标动作', () => {
+  const schema = actionDecisionJsonSchema(['obj:home', 'obj:work']) as {
+    properties: { action: { oneOf: Array<{ properties: { type: { enum: string[] }; target: { type: string; enum?: string[] } } }> } };
+  };
+  const [idle, targeted] = schema.properties.action.oneOf;
+  assert.deepEqual(idle.properties.type.enum, ['idle']);
+  assert.equal(idle.properties.target.type, 'null');
+  assert.deepEqual(targeted.properties.type.enum, ['move_to', 'interact']);
+  assert.deepEqual(targeted.properties.target.enum, ['obj:home', 'obj:work']);
 });
 
 test('interact 目标即当前所在 → 原地执行', async () => {

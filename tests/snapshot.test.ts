@@ -42,7 +42,19 @@ test('快照包含时钟/速度/网格/对象/agent 全字段', () => {
   assert.equal(v.state, 'idle');
   assert.equal(v.verb, ''); // 无当前动作 → 空
   assert.equal(v.thought, null);
+  assert.equal(v.actionType, null);
+  assert.equal(v.targetId, null);
   assert.equal(v.targetName, null);
+  assert.deepEqual(v.path, []);
+  assert.deepEqual(snap.activeConversations, []);
+});
+
+test('快照携带活动会话 ID、参与者和当前说话者的只读投影', () => {
+  const { world, time } = setup();
+  const active = [{ conversationId: 'conversation:1', aId: 'agent:1', bId: 'agent:2', speakerId: 'agent:2' }];
+  const snap = buildSnapshot(world, time, false, 2, active);
+  assert.deepEqual(snap.activeConversations, active);
+  assert.notStrictEqual(snap.activeConversations[0], active[0]);
 });
 
 test('行动中快照携带 verb 与目标名；paused 透传', () => {
@@ -53,6 +65,8 @@ test('行动中快照携带 verb 与目标名；paused 透传', () => {
   const snap = buildSnapshot(world, time, true, 1);
   assert.equal(snap.paused, true);
   assert.equal(snap.agents[0].verb, '扫地');
+  assert.equal(snap.agents[0].actionType, 'interact');
+  assert.equal(snap.agents[0].targetId, 'obj:plaza');
   assert.equal(snap.agents[0].targetName, '中央广场');
   assert.equal(snap.agents[0].thought, '干活');
 });

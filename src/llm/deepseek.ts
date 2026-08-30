@@ -18,6 +18,10 @@ export class DeepSeekProvider implements LLMProvider {
   constructor(private cfg: DeepSeekConfig) {}
 
   async complete(req: LLMRequest): Promise<LLMResponse> {
+    const temperature = req.temperature ?? 0.7;
+    if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+      throw new Error('DeepSeek temperature 必须是 0..2 的有限数值');
+    }
     const res = await fetch(`${this.cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -27,11 +31,11 @@ export class DeepSeekProvider implements LLMProvider {
       body: JSON.stringify({
         model: this.cfg.model,
         messages: req.messages,
-        temperature: 0.7,
+        temperature,
         max_tokens: req.maxTokens,
         ...(req.jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
-      signal: AbortSignal.timeout(this.cfg.timeoutMs),
+      signal: AbortSignal.timeout(Math.min(this.cfg.timeoutMs, req.timeoutMs ?? this.cfg.timeoutMs)),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');

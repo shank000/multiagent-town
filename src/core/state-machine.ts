@@ -7,6 +7,7 @@ import { MINUTES_PER_DAY } from './time';
 import { validateDecision, type ValidationResult } from '../llm/action-validator';
 import { buildActionDecisionMessages, ACTION_DECISION_TEMPLATE } from '../llm/prompts';
 import type { MemoryBrief } from '../llm/prompts';
+import type { ReflectionMindState } from '../store/memory';
 import type { LLMGateway } from '../llm/gateway';
 import type { LLMRequest } from '../llm/types';
 import type { WorldState } from './world';
@@ -17,6 +18,56 @@ import type { PlayerDirector } from '../engine/player';
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
 
+const ACTION_DECISION_VALIDATOR = 'action-decision/v2';
+
+type ActionDecisionQualityStatus = 'valid' | 'normalized' | 'repaired' | 'safe_fallback';
+
+interface ActionDecisionQuality {
+  status: ActionDecisionQualityStatus;
+  attempts: number;
+  validator: typeof ACTION_DECISION_VALIDATOR;
+  model?: string;
+}
+
+/** 动作类型与目标使用互斥分支，结构化生成阶段即可遵守跨字段约束。 */
+export function actionDecisionJsonSchema(objectIds: readonly string[]): Record<string, unknown> {
+  const targets = [...new Set(objectIds)];
+  const actionBase = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['type', 'target', 'verb'],
+  } as const;
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['thought', 'action', 'duration_minutes'],
+    properties: {
+      thought: { type: 'string', maxLength: 240 },
+      action: {
+        oneOf: [
+          {
+            ...actionBase,
+            properties: {
+              type: { type: 'string', enum: ['idle'] },
+              target: { type: 'null' },
+              verb: { type: 'string', maxLength: 80 },
+            },
+          },
+          {
+            ...actionBase,
+            properties: {
+              type: { type: 'string', enum: ['move_to', 'interact'] },
+              target: { type: 'string', enum: targets },
+              verb: { type: 'string', maxLength: 80 },
+            },
+          },
+        ],
+      },
+      duration_minutes: { type: 'integer', minimum: 1, maximum: 120 },
+    },
+  };
+}
+
 interface PendingDecision {
   resolved: Decision | null;
   error: string | null;
@@ -25,6 +76,7 @@ interface PendingDecision {
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
   private blockCount = new Map<string, number>();
+  private fallbackStreak = new Map<string, number>();
   private activeDecisions = new Set<Promise<void>>();
 
   constructor(
@@ -32,11 +84,13 @@ export class AgentExecutor {
     private world: WorldState,
     private log: EventLog,
     private mind?: MindEngine,
-    private player?: PlayerDirector
+    private player?: PlayerDirector,
+    private scopeId = 'default',
   ) {}
 
   /** 每 tick 对每个 agent 调用一次；dt = 本次 tick 推进的游戏分钟数 */
-  progress(agent: Agent, dt: number, now: number): void {
+  progress(agent: Agent, dt: number, now: number, realtimeSampling = false): void {
+    // 已发出的思考始终先落定，避免会话在异步决策返回后留下无法结算的 thinking 状态。
     if (agent.state === 'thinking') {
       const entry = this.pending.get(agent.id);
       if (!entry) return;
@@ -52,6 +106,8 @@ export class AgentExecutor {
       }
       return;
     }
+    // 活动会话（含摘要落库阶段）冻结已排定的移动/动作，也不发起下一次决策；结束后继续。
+    if (this.mind?.dialogue.isParticipantActive(agent.id)) return;
     if (agent.state === 'moving') {
       this.stepMove(agent, dt, now);
       return;
@@ -60,7 +116,18 @@ export class AgentExecutor {
       if (now >= agent.actionEndsAt) this.finishAction(agent, now);
       return;
     }
-    if (now - agent.lastDecisionAt >= DECISION_INTERVAL_MIN) {
+    const scheduledSleep = this.sleepRoutineDecision(agent, now);
+    if (scheduledSleep) {
+      agent.lastDecisionAt = now;
+      this.log.addEvent(this.thoughtEvent(agent, scheduledSleep, now));
+      this.beginAction(agent, scheduledSleep, now);
+      return;
+    }
+    // 高速观察保持固定的墙钟认知节奏，避免虚拟分钟倍速线性放大真实模型请求。
+    const decisionInterval = realtimeSampling && dt > 5
+      ? Math.max(DECISION_INTERVAL_MIN, dt * 24)
+      : DECISION_INTERVAL_MIN;
+    if (now - agent.lastDecisionAt >= decisionInterval) {
       this.requestDecision(agent, now);
     }
   }
@@ -72,12 +139,16 @@ export class AgentExecutor {
     // 装配决策上下文：有 mind 时注入检索记忆 / 近期洞察 / 当前时段议程
     let memories: MemoryBrief[] = [];
     let insights: string[] = [];
+    let behaviorGuidance: string[] = [];
+    let mindState: ReflectionMindState | null = null;
     let agenda: string | null = null;
     if (this.mind) {
       const day = Math.floor(now / MINUTES_PER_DAY) + 1;
       const query = `${agent.persona.goals.join(' ')} ${agent.action?.action.verb ?? ''} ${this.world.getObject(agent.locationId)?.name ?? ''}`;
       memories = this.mind.store.retrieve(agent.id, query, now, 20).map((m) => ({ content: m.content, importance: m.importance }));
       insights = this.mind.store.recentInsights(agent.id, 3);
+      behaviorGuidance = this.mind.store.recentGuidance(agent.id, 3);
+      mindState = this.mind.store.latestMindState(agent.id);
       agenda = this.mind.planner.currentAgendaLine(agent, day, minuteOfDay);
     }
     const { messages } = buildActionDecisionMessages({
@@ -88,13 +159,16 @@ export class AgentExecutor {
       objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
       playerInstruction: this.player?.current(agent.id, now) ?? null,
       mockContext: {
-        persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights, agenda,
+        persona: agent.persona, minuteOfDay, routine: agent.persona.routine, memories, insights,
+        behaviorGuidance, mindState, agenda,
         playerInstruction: this.player?.current(agent.id, now) ?? null,
         objects: this.world.allObjects().map((o) => ({ id: o.id, name: o.name })),
       },
     });
     const req: LLMRequest = {
-      tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true, maxTokens: 512,
+      tier: 'small', template: ACTION_DECISION_TEMPLATE, messages, jsonMode: true,
+      jsonSchema: actionDecisionJsonSchema(this.world.allObjects().map((object) => object.id)), maxTokens: 256,
+      temperature: 0.45, agentId: agent.id, priority: 'action', scopeId: this.scopeId, timeoutMs: 60_000,
     };
     const entry: PendingDecision = { resolved: null, error: null };
     this.pending.set(agent.id, entry);
@@ -110,17 +184,103 @@ export class AgentExecutor {
 
   private async runDecision(agent: Agent, req: LLMRequest, entry: PendingDecision, now: number): Promise<void> {
     try {
-      let r = this.validate((await this.llm.complete(req)).parsed);
-      if (!r.ok) r = this.validate((await this.llm.complete(req)).parsed); // 校验失败重试一次
-      entry.resolved = r.decision; // !ok 时 decision 即 idle 降级
-      this.log.addEvent(this.thoughtEvent(agent, r.decision, now));
+      let attempts = 1;
+      const reasons: string[] = [];
+      let response = await this.llm.complete(req);
+      let model = response.performance?.model;
+      let validation = this.validate(response.parsed);
+      if (!validation.ok) {
+        reasons.push(validation.error ?? '动作决策未通过校验');
+        attempts = 2;
+        response = await this.llm.complete(this.repairRequest(req, response.parsed, reasons[0]));
+        model = response.performance?.model ?? model;
+        validation = this.validate(response.parsed);
+        if (!validation.ok) reasons.push(validation.error ?? '修正后的动作决策未通过校验');
+      }
+
+      let status: ActionDecisionQualityStatus;
+      let selected: Decision;
+      if (!validation.ok) {
+        status = 'safe_fallback';
+        selected = this.safeFallbackDecision(agent);
+      } else {
+        if (validation.normalization) reasons.push(validation.normalization.detail);
+        status = attempts > 1 ? 'repaired' : validation.normalization ? 'normalized' : 'valid';
+        selected = validation.decision;
+        this.fallbackStreak.delete(agent.id);
+      }
+
+      const quality: ActionDecisionQuality = {
+        status,
+        attempts,
+        validator: ACTION_DECISION_VALIDATOR,
+        ...(model ? { model } : {}),
+      };
+      if (status !== 'valid') this.log.addEvent(this.actionQualityEvent(agent, quality, reasons, now));
+      const decision = this.enforceSleepRoutine(agent, selected, now);
+      entry.resolved = decision;
+      this.log.addEvent(this.thoughtEvent(agent, decision, now, quality));
     } catch (e) {
       entry.error = e instanceof Error ? e.message : String(e);
     }
   }
 
+  private repairRequest(req: LLMRequest, invalid: unknown, reason: string): LLMRequest {
+    const previous = safeJson(invalid).slice(0, 1_200);
+    return {
+      ...req,
+      temperature: 0.1,
+      messages: [
+        ...req.messages,
+        { role: 'assistant', content: previous },
+        {
+          role: 'user',
+          content: `上一个动作 JSON 未通过校验：${reason}。请只修正 JSON，不要解释。idle 的 target 必须是 null；move_to/interact 的 target 必须是可用对象 id。`,
+        },
+      ],
+    };
+  }
+
   private validate(parsed: unknown): ValidationResult {
     return validateDecision(parsed, (id) => this.world.hasObject(id));
+  }
+
+  private safeFallbackDecision(agent: Agent): Decision {
+    const streak = (this.fallbackStreak.get(agent.id) ?? 0) + 1;
+    this.fallbackStreak.set(agent.id, streak);
+    const place = this.world.getObject(agent.locationId)?.name ?? '这里';
+    const thoughts = [
+      `眼下没有合适的行动条件，我先在「${place}」稍作整理，再决定下一步。`,
+      `我先在「${place}」放慢节奏，留意周围的变化。`,
+      `此刻适合在「${place}」短暂休息，稍后再继续今天的安排。`,
+    ];
+    return {
+      thought: thoughts[(streak - 1) % thoughts.length],
+      action: { type: 'idle', target: null, verb: '整理思绪' },
+      durationMinutes: Math.min(30, 10 + (streak - 1) * 5),
+    };
+  }
+
+  private enforceSleepRoutine(agent: Agent, decision: Decision, now: number): Decision {
+    const scheduled = this.sleepRoutineDecision(agent, now);
+    if (!scheduled || decision.action.target === scheduled.action.target) return decision;
+    return scheduled;
+  }
+
+  private sleepRoutineDecision(agent: Agent, now: number): Decision | null {
+    if (this.player?.current(agent.id, now)) return null;
+    const minuteOfDay = now % MINUTES_PER_DAY;
+    const slot = agent.persona.routine.find((item) => item.from <= minuteOfDay && minuteOfDay < item.to);
+    if (!slot || !/睡|就寝|休息|打盹/.test(slot.verb)) return null;
+    return {
+      thought: `当前是${slot.verb}时段，先按作息休息。`,
+      action: {
+        type: 'interact',
+        target: slot.target,
+        verb: slot.verb,
+      },
+      durationMinutes: Math.max(10, slot.to - minuteOfDay),
+    };
   }
 
   private beginAction(agent: Agent, d: Decision, now: number): void {
@@ -237,7 +397,7 @@ export class AgentExecutor {
     };
   }
 
-  private thoughtEvent(agent: Agent, d: Decision, now: number): GameEvent {
+  private thoughtEvent(agent: Agent, d: Decision, now: number, quality?: ActionDecisionQuality): GameEvent {
     return {
       id: randomUUID(),
       type: 'system',
@@ -246,7 +406,32 @@ export class AgentExecutor {
       description: `${agent.name} 心想：「${d.thought}」`,
       location: agent.locationId,
       gameTime: now,
-      payload: { kind: 'thought', thought: d.thought },
+      payload: {
+        kind: 'thought',
+        thought: d.thought,
+        ...(quality ? { source: 'llm', decisionQuality: quality } : { source: 'routine' }),
+      },
     };
+  }
+
+  private actionQualityEvent(agent: Agent, quality: ActionDecisionQuality, reasons: string[], now: number): GameEvent {
+    return {
+      id: randomUUID(),
+      type: 'system',
+      actorId: agent.id,
+      targetIds: [],
+      description: `${agent.name} 的动作决策完成了结构质量校正。`,
+      location: agent.locationId,
+      gameTime: now,
+      payload: { kind: 'action_decision_quality', ...quality, reasons },
+    };
+  }
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? '{}';
+  } catch {
+    return '{}';
   }
 }

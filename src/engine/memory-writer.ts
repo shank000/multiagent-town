@@ -10,8 +10,9 @@ import type { GameEvent } from '../core/types';
 export class MemoryWriter {
   private pending = new Set<Promise<void>>();
   private unsubscribe: (() => void) | null = null;
+  private modelScoresInFlight = 0;
 
-  constructor(private store: MemoryStore, private llm: LLMGateway) {}
+  constructor(private store: MemoryStore, private llm: LLMGateway, private scopeId = 'default') {}
 
   attach(log: EventLog): void {
     this.detach();
@@ -33,7 +34,7 @@ export class MemoryWriter {
   }
 
   async onEvent(e: GameEvent): Promise<void> {
-    if (e.payload?.kind === 'day_start' || e.payload?.kind === 'thought') return;
+    if (e.payload?.kind === 'day_start' || e.payload?.kind === 'thought' || e.payload?.kind === 'action_decision_quality') return;
     // 反思/对话摘要已由引擎直接写入（insight/dialogue_summary），事件不再重复入库
     if (e.payload?.kind === 'reflection' || e.payload?.kind === 'chat_summary') return;
     const day = Math.floor(e.gameTime / MINUTES_PER_DAY) + 1;
@@ -56,8 +57,28 @@ export class MemoryWriter {
   }
 
   private async score(text: string): Promise<number> {
-    const res = await this.llm.complete({ tier: 'small', template: IMPORTANCE_TEMPLATE, jsonMode: true, maxTokens: 64, messages: importanceMessages(text) });
-    const n = (res.parsed as { importance?: number } | null)?.importance;
-    return typeof n === 'number' && Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 5;
+    // 重要性评分属于后台标注，不允许挤占动作与对话；积压时采用一致的规则评分并继续保存客观事件。
+    if (this.modelScoresInFlight >= 8) return heuristicImportance(text);
+    this.modelScoresInFlight += 1;
+    try {
+      const res = await this.llm.complete({
+        tier: 'small', template: IMPORTANCE_TEMPLATE, jsonMode: true, maxTokens: 64,
+        temperature: 0.1, messages: importanceMessages(text), priority: 'background',
+        scopeId: this.scopeId, timeoutMs: 15_000,
+      });
+      const n = (res.parsed as { importance?: number } | null)?.importance;
+      return typeof n === 'number' && Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : heuristicImportance(text);
+    } catch {
+      return heuristicImportance(text);
+    } finally {
+      this.modelScoresInFlight -= 1;
+    }
   }
+}
+
+function heuristicImportance(text: string): number {
+  if (/秘密|冲突|拒绝|馈礼|选择|关系|约定|离开|失去/.test(text)) return 8;
+  if (/对话|说|共同|帮助|拜访|活动/.test(text)) return 6;
+  if (/到达|工作|散步|休息|吃饭|睡觉/.test(text)) return 4;
+  return 5;
 }
