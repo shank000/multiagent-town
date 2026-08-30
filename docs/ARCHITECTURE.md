@@ -70,14 +70,15 @@
 └───────────────┬────────────────────────────────────────────────────┘
 ┌───────────────▼────────────────────────────────────────────────────┐
 │ 认知/LLM 层 (src/llm + src/store)                                   │
-│   LLMGateway(重试/超时/计量/安全 drain) → Mock|DeepSeek|Ollama     │
+│   LLMGateway(优先级/有界队列/世界轮询/背压/超时/计量)             │
+│      → Mock | DeepSeek | Ollama                                  │
 │   Prompt 模板：决策/重要性/日计划/小时计划/反思/对话/访谈             │
 │   MemoryStore(记忆流+三因子检索) / RelationshipStore / RumorTracker   │
 └───────────────┬────────────────────────────────────────────────────┘
 ┌───────────────▼────────────────────────────────────────────────────┐
 │ 持久化层 (src/store/db.ts)                                          │
 │   world_meta / agents / objects / events / memories / reflections   │
-│   plans / messages / relationships / rumors                          │
+│   plans / conversations / messages / relationships / relationship_evidence / rumors │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -136,8 +137,10 @@ multiagent-town/
 │   │   ├── loop.ts            # WorldLoop：主循环、跨天事件、runUntil
 │   │   ├── mind.ts            # MindEngine：认知子系统门面
 │   │   ├── memory-writer.ts   # 事件→观察记忆、重要性打分
-│   │   ├── reflection.ts      # 反思引擎（importance 累计触发）
-│   │   ├── dialogue.ts        # 多轮对话 + 摘要写回记忆/关系
+│   │   ├── reflection.ts      # 证据约束日记 + importance 累计反思 + 行为指引
+│   │   ├── dialogue.ts        # 持久会话/逐轮消息 + 摘要写回记忆/关系
+│   │   ├── relational-measures.ts # 6+4 时间窗关系测量与缺失语义
+│   │   ├── social-relations.ts# 多维社会关系观察投影
 │   │   ├── social.ts          # SocialTicker：邻近闲聊触发
 │   │   ├── rumors.ts          # 谣言追踪（传播链）
 │   │   ├── status.ts          # Weighted PageRank 声望计算
@@ -149,7 +152,8 @@ multiagent-town/
 │   │   ├── types.ts           # Provider/Request/Response/Usage
 │   │   ├── gateway.ts         # 重试/超时/JSON 解析/计量
 │   │   ├── deepseek.ts        # DeepSeek OpenAI 兼容实现
-│   │   ├── ollama.ts          # Ollama 本地 /api/chat 实现（按 tier 选模型）
+│   │   ├── ollama.ts          # Ollama 本地 /api/chat 实现（按 tier/居民选模型）
+│   │   ├── model-profiles.ts  # Qwen3/DeepSeek-R1 本地推理 profile
 │   │   ├── provider-config.ts # 环境变量 → 网关配置（LLM_PROVIDER 等设置）
 │   │   ├── mock.ts            # 全模板确定性离线实现
 │   │   ├── prompts.ts         # 中文提示词模板库
@@ -158,8 +162,8 @@ multiagent-town/
 │   ├── store/                 # SQLite 持久化
 │   │   ├── db.ts              # schema + openDb
 │   │   ├── events.ts          # EventLog：事件表 + 订阅
-│   │   ├── memory.ts          # MemoryStore：记忆流/检索/反思/计划/消息
-│   │   └── relationships.ts   # 有向双维关系 + 知识叙事层
+│   │   ├── memory.ts          # MemoryStore：记忆/日记/计划/持久会话与消息
+│   │   └── relationships.ts   # 有向关系状态 + 多维证据账本
 │   ├── web/                   # Web 服务与客户端
 │   │   ├── server.ts          # node:http 服务 + SSE + REST API
 │   │   ├── snapshot.ts        # 世界快照序列化
@@ -212,7 +216,7 @@ multiagent-town/
 | `time.ts` | `TimeEngine` | 浮点累计游戏分钟；`day/minutesOfDay/totalMinutes`；格式化 |
 | `world.ts` | `WorldState` | 48×44 网格；对象树注册；**可走性计算**（建筑边界为墙、开房门、水域阻挡、房间/家具开口）；A* 查询、对象中心/定位 |
 | `pathfinding.ts` | `findPath()` | 4 方向 A*，曼哈顿启发，返回含起点终点路径 |
-| `state-machine.ts` | `AgentExecutor` | 4 态（idle/thinking/moving/acting）状态机；异步 LLM 决策不阻塞 tick；移动排队让行 + 死锁解除；动作校验失败自动降级 idle |
+| `state-machine.ts` | `AgentExecutor` | 4 态（idle/thinking/moving/acting）状态机；异步 LLM 决策不阻塞 tick；移动排队让行 + 死锁解除；动作互斥 Schema、反馈修正与叙事安全回退 |
 | `weather.ts` | `weatherForDay()` | 确定性天气，不参与行为决策 |
 
 **关键设计**：
@@ -228,10 +232,11 @@ multiagent-town/
 |---|---|---|
 | `seed.ts` | `buildTown()` / `createGuestAgent()` | 小镇对象树（约 50 个对象）+ 6 个居民 Persona；访客角色生成 |
 | `loop.ts` | `WorldLoop` | 主循环；`step()`/`runUntil()`/`start()`/`stop()`；跨天事件；依赖注入 Social/Mind |
-| `mind.ts` | `MindEngine` | 认知门面：组合 MemoryStore/Planner/Reflection/MemoryWriter/RelationshipStore/RumorTracker/Dialogue/TownModel；定时 5:00 日计划、整点小时分解、反思、对话、活动 |
+| `mind.ts` | `MindEngine` | 认知门面：组合 MemoryStore/Planner/Reflection/MemoryWriter/RelationshipStore/RumorTracker/Dialogue/TownModel；定时 5:00 日计划、整点小时分解、跨日证据日记、累计反思、对话与活动 |
 | `memory-writer.ts` | `MemoryWriter` | 订阅 EventLog；把事件转成观察记忆；调用 LLM 打重要性 1–10 |
-| `reflection.ts` | `ReflectionEngine` | 重要性累计 >150 触发；3 问题 → 检索证据 → 最多 5 条洞察 → 写反思树与 insight 记忆；每天每 agent ≤2 次控成本 |
-| `dialogue.ts` | `DialogueEngine` | 相邻居民多轮对话（≤12 轮、每 2 分钟一句）；结束摘要写回双方记忆/关系；顺带传播谣言（选择性披露：关系 ≥0.2） |
+| `reflection.ts` | `ReflectionEngine` | 每日生成职业视角日记、心境、信念/修订与明日指引；重要性累计 >150 时补充模式洞察；所有结论绑定事件证据，替代信念退出决策上下文 |
+| `dialogue.ts` | `DialogueEngine` | 多轮会话持久化 conversation/turn/speaker/listener；日常会话要求相邻，实验会面显式 arranged；活跃/收尾期间锁住移动，摘要写回双方记忆与关系证据 |
+| `relational-measures.ts` / `social-relations.ts` | 关系测量与投影 | 按时间窗生成原六项与新增四项连续测量、缺失状态、方向和 dyad 证据；旧六维状态画像仅作探索性兼容层；只读观察结果不进入实验决策 |
 | `social.ts` | `SocialTicker` | 邻近累计 3 游戏分钟触发打招呼；有 DialogueEngine 时转真对话，否则台词池单句 |
 | `rumors.ts` | `RumorTracker` | 谣言 seed/spread/传播链查询；会话中按关系门槛传播 |
 | `status.ts` | `computeStanding()` | Weighted PageRank + 互惠加成（Agentopia/Sociometer），输入全量关系输出声望分 |
@@ -245,11 +250,12 @@ multiagent-town/
 
 ```
 事件 → MemoryWriter → memories(importance)
-  记忆累计 >150 → ReflectionEngine → insights
+  跨日边界 → ReflectionEngine → diary + mind_state + beliefs/revisions + guidance
+  记忆累计 >150 → ReflectionEngine → evidence-bound insights
   5:00/整点 → Planner → daily_plan + hourly agenda
   决策时 → MemoryStore.retrieve(recency+importance+关键词Jaccard)
          + recentInsights + currentAgendaLine → AgentExecutor 决策上下文
-  对话 → DialogueEngine → dialogue_summary → 双方 memories + relationships
+  对话 → DialogueEngine → conversations/messages → dialogue_summary → 双方 memories + relationship evidence
 ```
 
 ### 5.3 `src/llm` —— LLM 网关与提示词
@@ -260,7 +266,7 @@ multiagent-town/
 - `MockProvider`：离线确定性输出，支持全部模板；适用于测试、CI、无 Key 演示。
 - `DeepSeekProvider`：OpenAI 兼容 `chat/completions`，价格按 ¥2/M 入、¥8/M 出估算。
 - `prompts.ts`：中文系统提示词 + 统一 `<M0_CONTEXT>` JSON 注入，模板常量（action_decision/importance/daily_plan/hour_plan/reflection_*/dialogue*/interview）。
-- `action-validator.ts`：对 LLM 输出的动作 JSON 做结构/对象存在性/时长校验，失败降级 `idle`。
+- `action-validator.ts`：对 LLM 输出的动作 JSON 做结构、对象存在性和时长校验；`idle` 的冗余目标安全规范为 `null`，其余无效结果进入携带原因的修正请求。
 - `planner.ts`：日计划（自然语言 3–5 句）+ 小时计划（HH:MM 动作清单）写入 `plans` 表；`currentAgendaLine()` 供决策注入。
 
 ### 5.4 `src/store` —— SQLite 持久化
@@ -274,10 +280,12 @@ multiagent-town/
 | `objects` | 世界对象树（启动时水合同步） |
 | `events` | 事件日志（回放源） |
 | `memories` | 记忆流（observation/reflection/dialogue_summary/plan/insight） |
-| `reflections` | 反思树 |
+| `reflections` | 反思树、结构化日记、心境、信念修订与行为指引 |
 | `plans` | 日/小时计划 |
-| `messages` | 对话消息 |
-| `relationships` | 有向双维关系 + knowledge 叙事层 |
+| `conversations` | 会话参与者、状态、起止时间、轮数与摘要 |
+| `messages` | 带会话 ID、轮次、说话者与听者的逐轮消息 |
+| `relationships` | 有向关系状态与 knowledge 叙事层 |
+| `relationship_evidence` | 关系维度变化的事件证据账本 |
 | `rumors` | 谣言传播链 |
 
 **MemoryStore 三因子检索**（不引向量库）：
@@ -287,7 +295,7 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
       + 0.40 * Jaccard(中文双字shingle)    # relevance
 ```
 
-**RelationshipStore**：有向（A→B 与 B→A 分存）；`affection`/`respect` 各 -1..1；单次变化量 ±0.2 封顶（自然关系推进）；`knowledge` 保留最近 20 条。
+**RelationshipStore**：有向（A→B 与 B→A 分存）；`affection`/`respect` 各 -1..1，单次变化量 ±0.2 封顶；证据账本记录 trust/support/tension/frequency 代理的事件来源，并提供闭区间全量读取、双人读取与 SQL 精确计数。只读测量层按时间窗生成 6+4 连续观察量与双人证据；有向、dyad、actor 层分别映射为箭头、无向线与节点外环，不把任何观察代理写回因果处理。
 
 ### 5.5 `src/web` —— Web 服务与浏览器
 
@@ -351,7 +359,7 @@ pnpm town-web --port 8787
 - 看小镇实时画面、事件流；
 - 滚轮缩放、双击复位、点击 NPC/建筑查看档案；
 - 点击“🎮 扮演”后输入自然语言指令指挥该 NPC；
-- 暂停/恢复/1x/60x/360x 变速；
+- 暂停/恢复/1x/60x/360x 变速；高速档采用认知采样并在模型积压时暂缓虚拟时钟；
 - 点顶栏「📊 数据统计」打开 `/stats.html` 数据统计与分析页。
 
 ### 6.3 用真机 LLM（DeepSeek / Ollama）
@@ -362,22 +370,32 @@ pnpm town-web --port 8787
 LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-xxx pnpm town-web --port 8787
 ```
 
-本地 Ollama（先 `ollama pull qwen2.5:7b` 并保持 `ollama serve` 运行，无需 API key）：
+本地 Ollama（先 `ollama pull qwen3:4b` 并保持 `ollama serve` 运行，无需 API key）：
 
 ```bash
-LLM_PROVIDER=ollama pnpm town-web --port 8787
+LLM_PROVIDER=ollama OLLAMA_PROFILE=qwen3-single pnpm town-web --port 8787
 ```
 
 支持的环境变量：
 - `LLM_PROVIDER=mock|deepseek|ollama`（默认 mock）；
 - `DEEPSEEK_API_KEY`（provider=deepseek 必填）；
 - `OLLAMA_BASE_URL`（默认 `http://127.0.0.1:11434`）；
-- `OLLAMA_MODEL`（大模型，默认 `qwen2.5:7b`）；
-- `OLLAMA_SMALL_MODEL`（可选：小模型，默认同 `OLLAMA_MODEL`）；
+- `OLLAMA_PROFILE=qwen3-single|qwen3-tiered|deepseek-tiered`（默认 `qwen3-single`）；
+- `OLLAMA_MODEL` / `OLLAMA_SMALL_MODEL`（可选，覆盖 profile 对应层）；
+- `OLLAMA_AGENT_MODELS`（可选，居民 ID 到模型名的 JSON 映射）；
+- `OLLAMA_KEEP_ALIVE`（默认 `10m`）；
 - `OLLAMA_TIMEOUT_MS`（默认 `120000`，只接受正整数毫秒）；
+- `LLM_MAX_CONCURRENCY`（Ollama 默认 `1`，共享 provider 最大并发）；
+- `LLM_MAX_QUEUE`（Ollama 默认 `96`，有界等待容量）；
 - `TOWN_URL`（仅 `town-agent` 使用，默认 `http://127.0.0.1:8787`）
 
-Ollama 按 `LLMRequest.tier` 路由模型：small 层（动作决策/重要性打分）用 `OLLAMA_SMALL_MODEL`，large 层（日/小时计划、反思、对话）用 `OLLAMA_MODEL`；`jsonMode` 时自动带 `format=json`。Ollama 是本地推理，网关按模板计量的 `costYuan` 恒为 0。
+Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为指定居民选模型；否则 small 层处理动作、对话、规划和后台评分，large 层处理深度日记反思。居民共享模型服务与权重，persona、记忆、关系、日记和心智状态在应用层独立。网关按“对话—动作—规划—反思—后台”调度，同级请求按世界轮询；等待队列默认在容量的 75% 进入背压、降到 50% 后恢复。三个世界按同一批次推进或等待，避免条件组时钟偏移。需要推理的请求带 `think=true`；动作、规划、对话与摘要通过请求级 JSON Schema 使用 Ollama structured outputs，本地推理的 `costYuan` 恒为 0。
+
+动作 Schema 将 `idle + target:null` 与 `move_to/interact + 已知对象 id` 建模为互斥分支。应用层仍执行第二道校验：安全清理 `idle` 的冗余目标；其他错误把校验原因加入低温修正请求；两次无效时生成不含技术文本的短时休息动作。异常状态以 `action_decision_quality` 结构化事件留存，并从人物记忆、叙事接口和现场气泡中隔离；人物 `thought` 的 `decisionQuality` 字段提供 `valid/normalized/repaired/safe_fallback`、尝试次数、校验器版本和模型信息，支持按世界与居民计算动作修复率。
+
+对话在持久化前经过 `dialogue-turn/v1`：用当前问题、会话前文、检索记忆、关系摘要和谣言载荷检查直接承接与事实边界；机械套话、近重复、无证据第三方人名、作品名和角色身份触发一次低温重写。第二个候选仍不合格时，台词由证据引用式保守回答生成，事件 payload 标记 `safe_fallback`。该门只控制叙事质量，不改写实验处理标签或伙伴选择。
+
+网关保留最近 120 个成功请求的 provider 原生生成时序与应用端到端延迟。吞吐快照给出生成 tok/s、有效 tok/s、p50/p90 延迟、样本置信度、建议持续世界倍速和 360× 短时观察上限；`POST /api/llm/calibrate` 提供冷启动探针，`adaptive-speed` 控制动作把全部平行世界设置到同一建议档位。
 
 ### 6.4 无界面观察/快跑
 

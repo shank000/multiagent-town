@@ -8,14 +8,14 @@
 
 - **平行世界**：`w1` 关系记忆开启、`w2` 关系记忆关闭、`w3` 谣言传播；世界状态、SQLite、日志、感知缓冲和实验状态彼此隔离。
 - **社会实验**：每日伙伴选择、等价候选集、关系记忆与馈礼 2×2 因子、确定性种子、候选快照、缺失与恢复审计。
-- **社会记录**：事件、对话、记忆、反思、计划、有向关系、馈礼、谣言、活动、声望与选择决策均可追溯。
+- **社会记录**：事件、持久会话与逐轮发言、记忆、日记反思、计划、有向关系证据、馈礼、谣言、活动、声望与选择决策均可追溯。
 - **结构指标**：同对重复率、互惠性、聚类系数、伙伴多样性、伙伴 HHI、窗口网络持久性与枢纽集中度。
-- **研究控制台**：小镇、人物关系、人物属性/对话/世界状态三个视窗，支持聚焦、整数像素缩放、网络节点选择与指标切换。
+- **研究控制台**：小镇、人物关系、人物属性/对话/世界状态三个视窗；6+4 测量按层级将有向量编码为箭头、双人共同量编码为无向线、行动者量编码为节点外环，并支持悬停、点击、键盘定位、时间窗/Ego/阈值筛选及双人互动—关系—结构证据检查器。
 - **深度统计**：`/stats.html` 按世界和日期查看运行统计；伙伴选择因果指标仍由实验测量引擎独立计算。
-- **认知系统**：三因子记忆检索、日/小时规划、反思、多轮对话与摘要、情感/尊重关系、选择性谣言披露、公开活动和 PageRank 声望。
+- **认知系统**：三因子记忆检索、日/小时规划、证据约束日记、可修订信念与行为指引、多轮对话与摘要、选择性谣言披露、公开活动和 PageRank 声望。
 - **外部智能体协议**：`town-agent` CLI 与 `/api/guest/*` 让外部 AI 以访客身份感知和行动。
 - **AgentSociety² 适配**：24 人正式实验矩阵、自定义 Agent/Environment、Replay schema、checkpoint 恢复、跨语言指标 parity 与数据质量门。
-- **LLM Provider**：确定性 `mock`、DeepSeek API 与本地 Ollama。
+- **LLM Provider**：确定性 `mock`、DeepSeek API 与本地 Ollama；共享网关提供优先级、有界队列、跨世界轮询与高速认知背压。
 - **工程约束**：TypeScript strict、Node.js 22、`node:http`、`node:sqlite`、零运行时依赖。
 
 ## 快速开始
@@ -49,19 +49,42 @@ LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=your-key pnpm town-web --port 8787
 本地 Ollama：
 
 ```bash
-ollama pull qwen2.5:7b
-LLM_PROVIDER=ollama pnpm town-web --port 8787
+ollama pull qwen3:4b
+ollama pull qwen3:4b-instruct
+LLM_PROVIDER=ollama OLLAMA_PROFILE=qwen3-balanced pnpm town-web --port 8787
+```
+
+PowerShell 可使用：
+
+```powershell
+$env:OLLAMA_NO_CLOUD = '1'
+$env:OLLAMA_HOST = '127.0.0.1:11434'
+ollama serve
+```
+
+在项目终端中连接本机服务：
+
+```powershell
+$env:LLM_PROVIDER = 'ollama'
+$env:OLLAMA_PROFILE = 'qwen3-balanced'
+$env:OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
+pnpm town-web --port 8787
 ```
 
 | 变量 | 含义 | 默认值 |
 |---|---|---|
 | `LLM_PROVIDER` | `mock`、`deepseek` 或 `ollama` | `mock` |
 | `OLLAMA_BASE_URL` | Ollama HTTP 服务 | `http://127.0.0.1:11434` |
-| `OLLAMA_MODEL` | large 层模型 | `qwen2.5:7b` |
-| `OLLAMA_SMALL_MODEL` | small 层模型；留空时复用 large 模型 | 留空 |
+| `OLLAMA_PROFILE` | `qwen3-single`、`qwen3-balanced`、`qwen3-tiered` 或 `deepseek-tiered` | `qwen3-single` |
+| `OLLAMA_MODEL` | 覆盖 profile 的 large 层模型 | profile 决定 |
+| `OLLAMA_SMALL_MODEL` | 覆盖 profile 的 small 层模型 | profile 决定 |
+| `OLLAMA_AGENT_MODELS` | 居民 ID 到模型名的 JSON 映射 | 未设置 |
+| `OLLAMA_KEEP_ALIVE` | 模型在内存中的驻留时间 | `10m` |
 | `OLLAMA_TIMEOUT_MS` | 单次请求超时 | `120000` |
+| `LLM_MAX_CONCURRENCY` | 共享模型最大并发；本地单卡建议保持 1 | Ollama 为 `1` |
+| `LLM_MAX_QUEUE` | 有界推理等待队列容量 | Ollama 为 `96` |
 
-Ollama 使用原生 `/api/chat`、非流式响应和 JSON 模式，按请求层级选择模型；本地推理成本计量为零。
+`qwen3-balanced` 使用 Qwen3 4B Thinking 处理日记反思，用同系 4B Instruct 处理行动、规划与对话，是当前 8GB 显存本机的推荐设置。`qwen3-single` 保留单模型路径；`qwen3-tiered` 使用 Qwen3 8B/1.7B；`deepseek-tiered` 使用 DeepSeek-R1 8B/Qwen3 1.7B。居民的 persona、记忆、关系和心智状态始终独立，模型权重由 Ollama 共享。对话、动作、规划、反思和后台标注依次进入共享优先级队列；同优先级按平行世界轮询。动作、规划、对话和摘要由请求级 JSON Schema 约束。每轮对话在入库前检查前文承接、会话内重复、机械套话以及无证据人名、作品和社会角色身份；不合格候选重写一次，最终使用证据引用式安全回答。60×/360× 模式采用规划合并、动作降采样、三世界同步批次与虚拟时钟背压，不再把游戏倍速直接放大为模型并发。顶栏“自适应”会实测 Ollama 生成速率与端到端延迟，并将三世界设为当前硬件的建议持续倍速。完整说明见 [本地推理模型配置](docs/local-reasoning-models.md)。
 
 ## 实验与验证
 
@@ -79,6 +102,8 @@ pnpm typecheck
 pnpm test
 pnpm build:web
 ```
+
+当前工程基线为 289 项 `node:test`；AgentSociety² 工作区另有 22 项 Python 协议测试，并通过 2.8.4 SDK/Replay/checkpoint 冒烟。
 
 AgentSociety² 适配验证：
 
