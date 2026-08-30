@@ -139,6 +139,8 @@ multiagent-town/
 │   │   ├── memory-writer.ts   # 事件→观察记忆、重要性打分
 │   │   ├── reflection.ts      # 证据约束日记 + importance 累计反思 + 行为指引
 │   │   ├── dialogue.ts        # 持久会话/逐轮消息 + 摘要写回记忆/关系
+│   │   ├── agent-profile.ts   # 稳定 ID 档案、像素头像、初始心态与指纹
+│   │   ├── social-interactions.ts # 观察/帮助/分享/邀请/协作事件与关系证据
 │   │   ├── relational-measures.ts # 6+4 时间窗关系测量与缺失语义
 │   │   ├── social-relations.ts# 多维社会关系观察投影
 │   │   ├── social.ts          # SocialTicker：邻近闲聊触发
@@ -163,7 +165,8 @@ multiagent-town/
 │   │   ├── db.ts              # schema + openDb
 │   │   ├── events.ts          # EventLog：事件表 + 订阅
 │   │   ├── memory.ts          # MemoryStore：记忆/日记/计划/持久会话与消息
-│   │   └── relationships.ts   # 有向关系状态 + 多维证据账本
+│   │   ├── relationships.ts   # 有向关系状态 + 多维证据账本
+│   │   └── agent-profile-config.ts # 桌面版/CLI 居民档案持久配置
 │   ├── web/                   # Web 服务与客户端
 │   │   ├── server.ts          # node:http 服务 + SSE + REST API
 │   │   ├── snapshot.ts        # 世界快照序列化
@@ -305,6 +308,8 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 - 世界控制：`POST /api/world/control`（pause/resume/speed）；
 - 数据统计：`GET /api/stats?worldId=w1[&day=N]`（按世界定址，日级口径一致）；
 - 声望/关系：`GET /api/status`、`GET /api/relationships/:id`；
+- 居民档案：`PUT /api/agents/:id/profile`，按稳定 ID 同步全部平行世界并记录 `profile_set_hash`；
+- 社会互动：`POST /api/social/interact`，作为当前世界的显式研究者干预写入事件、记忆范围与关系证据；
 - 心智面板：`GET /api/agents/:id/mind`（记忆/反思/计划/对话）；
 - 扮演：`POST/DELETE /api/player/:id/act`；
 - 广播/谣言：`POST /api/broadcast`、`POST /api/rumor`；
@@ -316,6 +321,7 @@ score = 0.25 * 0.995^(now-lastAccess)      # recency
 - `render.ts` + `tiles.ts` + `sprites.ts`：Canvas 像素世界（多图集回退链、程序化 fallback、屋顶剖切、昼夜、河光）；
 - `effects.ts`：粒子系统（Zzz/蒸汽/星光/信件/炊烟/萤火/雨丝/水花）；
 - `panel.ts`：侧边六标签面板（详情/档案/记忆/反思/对话/关系）；
+- `avatar.ts`：零外部素材的可编辑像素头像组件，供名册、档案、会话和时间线复用；
 - `hud.ts` + `camera.ts`：HUD/tooltip/气泡/缩放。
 
 ### 5.6 `src/cli` —— 命令行入口
@@ -359,7 +365,7 @@ pnpm town-web --port 8787
 - 看小镇实时画面、事件流；
 - 滚轮缩放、双击复位、点击 NPC/建筑查看档案；
 - 点击“🎮 扮演”后输入自然语言指令指挥该 NPC；
-- 暂停/恢复/1x/60x/360x 变速；高速档采用认知采样并在模型积压时暂缓虚拟时钟；
+- 暂停/恢复/1x/60x 变速；高速档采用认知采样并在模型积压时暂缓虚拟时钟；
 - 点顶栏「📊 数据统计」打开 `/stats.html` 数据统计与分析页。
 
 ### 6.3 用真机 LLM（DeepSeek / Ollama）
@@ -395,7 +401,7 @@ Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为
 
 对话在持久化前经过 `dialogue-turn/v1`：用当前问题、会话前文、检索记忆、关系摘要和谣言载荷检查直接承接与事实边界；机械套话、近重复、无证据第三方人名、作品名和角色身份触发一次低温重写。第二个候选仍不合格时，台词由证据引用式保守回答生成，事件 payload 标记 `safe_fallback`。该门只控制叙事质量，不改写实验处理标签或伙伴选择。
 
-网关保留最近 120 个成功请求的 provider 原生生成时序与应用端到端延迟。吞吐快照给出生成 tok/s、有效 tok/s、p50/p90 延迟、样本置信度、建议持续世界倍速和 360× 短时观察上限；`POST /api/llm/calibrate` 提供冷启动探针，`adaptive-speed` 控制动作把全部平行世界设置到同一建议档位。
+网关保留最近 120 个成功请求的 provider 原生生成时序与应用端到端延迟。吞吐快照给出生成 tok/s、有效 tok/s、p50/p90 延迟、样本置信度和不超过 60× 的建议持续世界倍速；`POST /api/llm/calibrate` 提供冷启动探针，`adaptive-speed` 控制动作把全部平行世界设置到同一建议档位。
 
 ### 6.4 无界面观察/快跑
 
@@ -479,6 +485,8 @@ pnpm build:web     # 重新打包 public/client.js（前端改动后需要）
 | GET | `/api/stats?worldId=w1[&day=N]` | 指定世界的数据统计报告 |
 | GET | `/api/status` | 声望榜（Weighted PageRank） |
 | GET | `/api/relationships/:id` | 某 agent 的关系 + 声望 |
+| PUT | `/api/agents/:id/profile` | 同步更新三世界居民档案、初始状态、头像与档案指纹 |
+| POST | `/api/social/interact` | 在指定世界记录观察/帮助/分享/邀请/协作干预 |
 | GET | `/api/agents/:id/mind` | 记忆/反思/计划/对话 |
 | POST | `/api/player/:id/act` | 扮演指令（`{instruction}`） |
 | DELETE | `/api/player/:id/act` | 退出扮演 |
