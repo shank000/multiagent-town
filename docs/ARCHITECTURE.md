@@ -148,7 +148,7 @@ multiagent-town/
 │   │   ├── social.ts          # SocialTicker：邻近闲聊触发
 │   │   ├── rumors.ts          # 谣言追踪（传播链）
 │   │   ├── status.ts          # Weighted PageRank 声望计算
-│   │   ├── town-model.ts      # 公开活动目录/报名/成行广播
+│   │   ├── town-model.ts      # 公开活动预告/前往/到场核验/现场状态
 │   │   ├── player.ts          # PlayerDirector：玩家指令覆盖
 │   │   ├── interview.ts       # 上帝视角访谈
 │   │   └── experiment.ts      # 伙伴选择预实验（研究模式）
@@ -246,7 +246,7 @@ multiagent-town/
 | `rumors.ts` | `RumorTracker` | 谣言 seed/spread/传播链查询；会话中按关系门槛传播 |
 | `status.ts` | `computeStanding()` | Weighted PageRank + 互惠加成（Agentopia/Sociometer），输入全量关系输出声望分 |
 | `analyze.ts` | `analyzeTown()` | 数据统计与分析核心：只读聚合 events/memories/reflections/plans/messages/relationships/rumors，产出 TownReport（`/api/stats` 数据源） |
-| `town-model.ts` | `TownModel` | 公开活动目录轮换（湖边派对/读书会/集市）；按性格报名；≥2 人成行广播；参与者关系升温 |
+| `town-model.ts` | `TownModel` | 公开活动目录轮换（湖边派对/读书会/集市）；按人格形成参与意向，居民沿 A* 路线前往对应场景；19:30 以实际位置核验到场，少于 2 人取消，达到 2 人才启动物件现场状态并为真实共同参与者写入关系证据 |
 | `town-life.ts` | `TownLifeEngine` | 每天四个时段轮换自然/商业/照料/邻里事件；更新物件短期状态，按距离生成居民观察记忆 |
 | `player.ts` | `PlayerDirector` | 玩家自然语言指令覆盖某个 agent 决策，60 游戏分钟内最高优先级 |
 | `interview.ts` | `interviewAgent()` | 上帝视角访谈：检索记忆+洞察 → 第一人称回答 |
@@ -454,7 +454,7 @@ pnpm town-web --port 8787       # 启动后浏览器打开 http://127.0.0.1:8787
 - **关系**：有向记录/双向对、affection/respect 均值与极值、最紧密/最疏远配对、knowledge 叙事层条目；
 - **声望榜**：Weighted PageRank 排序（复用 `engine/status.ts`）；
 - **谣言**：记录数、去重内容、最大传播链、传播链长度分布、源头排行；
-- **公开活动**：成行活动时间表与参与人数。
+- **公开活动**：预告、出发、现场到场核验、开始/取消时间表，真实参与人数与观察者范围。
 
 支持「全部天数 / 第 N 天」筛选；日级事件、消息、配对、会话和平均字数采用同一时间窗，关系与声望等结构状态明确标记为当前世界全时段口径。自动刷新不会改变服务端活跃世界。
 

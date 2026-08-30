@@ -474,7 +474,11 @@ interface NarrativeItem {
   mode: string | null; chosen: string | null;
   candidates: { id: string; name: string; affection: number; lastInteraction: number }[] | null;
   interactionType: string | null; interactionLabel: string | null; icon: string | null; source: string | null;
+  eventStatus: string | null;
   objectId: string | null; objectName: string | null; lifeCategory: string | null;
+  venueId: string | null; venueName: string | null; participantCount: number;
+  sourceObjectId: string | null; sourceObjectName: string | null;
+  deliveryLocationId: string | null; deliveryLocationName: string | null;
   sensoryCues: string[]; observerCount: number;
 }
 let lastNarrativeSignature = '';
@@ -525,6 +529,19 @@ function renderNarrative(items: NarrativeItem[]): void {
       const target = it.target ? snap?.agents.find((agent) => agent.id === it.target) : null;
       card.className = 'nar-card social-interaction';
       card.innerHTML = `<div class="interaction-people">${actor ? `<button type="button" data-agent-id="${encodeURIComponent(actor.id)}">${pixelAvatarMarkup(actor.name, actor.avatar, 'narrative-avatar')}<span>${escapeHtml(actor.name)}</span></button>` : ''}<i>${escapeHtml(it.icon ?? '◆')}</i>${target ? `<button type="button" data-agent-id="${encodeURIComponent(target.id)}">${pixelAvatarMarkup(target.name, target.avatar, 'narrative-avatar')}<span>${escapeHtml(target.name)}</span></button>` : ''}${meta}</div><div class="nar-prose"><span class="nar-title">${escapeHtml(it.interactionLabel ?? '社会互动')}</span><br>${escapeHtml(it.text)}</div>${it.source === 'researcher' ? '<span class="intervention-tag">研究者干预 · 当前世界</span>' : ''}`;
+    } else if (it.kind === 'town_event_announcement') {
+      card.className = 'nar-card scene-contract planned';
+      card.innerHTML = `${meta}<div class="scene-contract-head"><span>📣 活动预告</span><b>尚未发生</b></div><div class="nar-prose">${escapeHtml(it.text)}</div><button type="button" data-object-id="${encodeURIComponent(it.venueId ?? '')}">${escapeHtml(it.venueName ?? '计划场地')}</button><p>居民表达兴趣不等于实际参加；活动开始时将按现场位置核验。</p>`;
+    } else if (it.kind === 'town_event_departure') {
+      card.className = 'nar-card scene-contract en-route';
+      card.innerHTML = `${meta}<div class="scene-contract-head"><span>🚶 前往活动场地</span><b>途中</b></div><div class="nar-prose">${escapeHtml(it.text)}</div><button type="button" data-object-id="${encodeURIComponent(it.venueId ?? '')}">${escapeHtml(it.venueName ?? '活动场地')}</button>`;
+    } else if (it.kind === 'town_event') {
+      const cues = it.sensoryCues.map((cue) => `<span>${escapeHtml(cue)}</span>`).join('');
+      card.className = 'nar-card scene-contract verified';
+      card.innerHTML = `${meta}<div class="scene-contract-head"><span>🎪 活动现场</span><b>到场已核验</b></div><div class="nar-prose">${escapeHtml(it.text)}</div><button type="button" data-object-id="${encodeURIComponent(it.venueId ?? '')}">${escapeHtml(it.venueName ?? '活动场地')}</button><div class="scene-contract-stats"><span>${it.participantCount} 位实际参与者</span><span>${it.observerCount} 位现场观察者</span></div>${cues ? `<div class="ambient-senses">${cues}</div>` : ''}`;
+    } else if (it.kind === 'town_event_cancelled') {
+      card.className = 'nar-card scene-contract cancelled';
+      card.innerHTML = `${meta}<div class="scene-contract-head"><span>⊘ 活动核验</span><b>未成行</b></div><div class="nar-prose">${escapeHtml(it.text)}</div><button type="button" data-object-id="${encodeURIComponent(it.venueId ?? '')}">查看计划场地</button>`;
     } else if (it.kind === 'ambient_life') {
       const cues = it.sensoryCues.map((cue) => `<span>${escapeHtml(cue)}</span>`).join('');
       card.className = 'nar-card ambient-life';
@@ -555,7 +572,7 @@ function renderNarrative(items: NarrativeItem[]): void {
         <div class="cands">${cands}</div><div class="nar-reason">${reason}</div>`;
     } else if (it.kind === 'gift') {
       card.className = 'nar-card gift';
-      card.innerHTML = `${meta}<span class="nar-title">💐 馈礼</span><span class="nar-text">${escapeHtml(it.text)} <em class="nar-tag">💗 +0.10 关系升温</em></span>`;
+      card.innerHTML = `${meta}<div class="scene-contract-head"><span>💐 馈礼履约</span><b>${it.eventStatus === 'fulfilled' ? '订单已完成' : '状态待核验'}</b></div><span class="nar-text">${escapeHtml(it.text)} <em class="nar-tag">💗 +0.10 关系升温</em></span><div class="gift-route"><button type="button" data-object-id="${encodeURIComponent(it.sourceObjectId ?? '')}">${escapeHtml(it.sourceObjectName ?? '花店')}</button><span>配送至 ${escapeHtml(it.deliveryLocationName ?? '收礼地点')}</span></div>`;
     } else {
       const icon = it.kind.startsWith('town_event') ? '🎪' : it.kind === 'rumor' ? '🗣' : it.type === 'move' ? '🚶' : it.kind === 'experiment_pair_choice' ? '🤝' : '🛠';
       card.className = 'nar-card';

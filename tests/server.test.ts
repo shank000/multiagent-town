@@ -142,6 +142,43 @@ test('动作质量记录保留在事件库且不进入叙事接口', async () =>
   }
 });
 
+test('叙事接口投影活动现场与馈礼履约的场景证据', async () => {
+  const { server, base, log } = await setup();
+  try {
+    log.addEvent({
+      id: 'event-verified', type: 'broadcast', actorId: null, targetIds: ['agent:1', 'agent:2'],
+      description: '活动现场（已核验）：甲、乙在中央广场实际到场参加广场集市。',
+      location: 'obj:plaza', gameTime: 0,
+      payload: {
+        kind: 'town_event', status: 'active', venueId: 'obj:plaza', venueName: '中央广场',
+        participants: ['agent:1', 'agent:2'], observerIds: [], sensoryCues: ['摊位交谈声'],
+      },
+    });
+    log.addEvent({
+      id: 'gift-fulfilled', type: 'system', actorId: 'agent:1', targetIds: ['agent:2'],
+      description: '花店订单（已履约）：甲购买鲜花并交给乙。', location: 'obj:flower_counter', gameTime: 0,
+      payload: {
+        kind: 'gift', status: 'fulfilled', sourceObjectId: 'obj:flower_counter', sourceObjectName: '花店服务台',
+        deliveryLocationId: 'obj:plaza', deliveryLocationName: '中央广场',
+      },
+    });
+    const narrative = await (await fetch(`${base}/api/narrative?limit=100`)).json() as {
+      items: Array<Record<string, unknown>>;
+    };
+    const activity = narrative.items.find((item) => item.id === 'event-verified');
+    assert.equal(activity?.eventStatus, 'active');
+    assert.equal(activity?.venueId, 'obj:plaza');
+    assert.equal(activity?.participantCount, 2);
+    assert.deepEqual(activity?.sensoryCues, ['摊位交谈声']);
+    const gift = narrative.items.find((item) => item.id === 'gift-fulfilled');
+    assert.equal(gift?.eventStatus, 'fulfilled');
+    assert.equal(gift?.sourceObjectName, '花店服务台');
+    assert.equal(gift?.deliveryLocationName, '中央广场');
+  } finally {
+    await server.close();
+  }
+});
+
 test('SSE 客户端断开后服务不崩（写守卫）', async () => {
   const { server, base, log } = await setup();
   try {

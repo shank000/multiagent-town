@@ -686,7 +686,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             .filter((a) => a.id !== guest.id && Math.max(Math.abs(a.x - guest.x), Math.abs(a.y - guest.y)) <= 3)
             .sort((a, b) => (Math.abs(a.x - guest.x) + Math.abs(a.y - guest.y)) - (Math.abs(b.x - guest.x) + Math.abs(b.y - guest.y)))[0];
           if (other && hub().mind && !hub().mind.dialogue.isActive(guest.id, other.id)) {
-            hub().mind.dialogue.start(guest, other, now);
+            hub().mind.dialogue.start(guest, other, now, { world: hub().world });
             void other;
           }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -755,8 +755,16 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             interactionLabel: typeof p.interactionLabel === 'string' ? p.interactionLabel : null,
             icon: typeof p.icon === 'string' ? p.icon : null,
             source: typeof p.source === 'string' ? p.source : null,
+            eventStatus: typeof p.status === 'string' ? p.status : null,
             objectId: typeof p.objectId === 'string' ? p.objectId : null,
             objectName: typeof p.objectName === 'string' ? p.objectName : null,
+            venueId: typeof p.venueId === 'string' ? p.venueId : null,
+            venueName: typeof p.venueName === 'string' ? p.venueName : null,
+            participantCount: Array.isArray(p.participants) ? p.participants.filter((id): id is string => typeof id === 'string').length : 0,
+            sourceObjectId: typeof p.sourceObjectId === 'string' ? p.sourceObjectId : null,
+            sourceObjectName: typeof p.sourceObjectName === 'string' ? p.sourceObjectName : null,
+            deliveryLocationId: typeof p.deliveryLocationId === 'string' ? p.deliveryLocationId : null,
+            deliveryLocationName: typeof p.deliveryLocationName === 'string' ? p.deliveryLocationName : null,
             lifeCategory: typeof p.category === 'string' ? p.category : null,
             sensoryCues: Array.isArray(p.sensoryCues) ? p.sensoryCues.filter((cue): cue is string => typeof cue === 'string') : [],
             observerCount: Array.isArray(p.observerIds) ? p.observerIds.filter((id): id is string => typeof id === 'string').length : 0,

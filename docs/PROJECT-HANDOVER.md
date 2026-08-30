@@ -58,9 +58,15 @@ docs/          交接/研究文档（见下）
 ### 伙伴选择实验（`engine/experiment.ts`）
 - 每日 19:30 轮次（`CHOICE_MINUTE=1170`）：每位参与者从**等价伙伴集合**独立选 1 位开展一对一对话
 - 因子1 `historyAccess`：off=均匀随机；on=按 `亲密度 + 0.5×近因(40游戏小时衰减) + 0.3×扰动` 打分
-- 因子2 `giftExchange`：每日工资 10 → 买鲜花(5) → 赠所选伙伴（A→B 情感+0.1，B→A +0.05），事件 kind=`gift`
+- 因子2 `giftExchange`：每日工资 10 → 在花店服务台购买鲜花(5) → 订单配送至所选伙伴当前位置 → 收礼方库存入账（A→B 情感+0.1，B→A +0.05）；`gift` 事件保留来源、配送地点与 `fulfilled` 状态
 - 选择事件 payload 含 `mode/candidates[{id,name,affection,lastInteraction}]/chosen`——叙事「选择场景」卡依赖此数据（**删减会破坏前台**）
 - `experiment-runner.ts`：实时主循环挂载；运行天数按实际完成的 19:30 轮次结算，跨速、跨多日和 19:30 后启动均保证 N 天=N 轮
+
+### 世界事实契约（`engine/town-model.ts` / `engine/dialogue-quality.ts`）
+- 公开活动状态固定为 `planned → en_route → active | cancelled`；预告不构成参与，19:30 以居民相对场景物件的实际位置核验到场
+- `active` 事件、物件现场状态、居民动作与 `shared_activity` 关系证据共享同一参与者集合；少于 2 位实际到场者时只记录取消
+- 对话提示动态注入当前实际地点、附近可交互物件和小镇功能；功能存在只表示可执行条件
+- 对话入库质量门要求已完成的活动、馈礼及一般共同经历具有对应完成证据；两次修复仍不满足时使用不新增事实的保守回答
 
 ### 测量（`engine/metrics.ts`，CLI/服务端共用）
 `repeat / recip / clus / div / hhi / persistence / hub` 由 `metricsOf()` 统一汇总：有向边重复率、机会校正互惠性、无向聚类、7 日 sender 伙伴多样性/HHI、相邻非重叠双 7 日有向矩阵 Pearson 持续性、加权入度 Freeman 枢纽集中度。TypeScript/Python 由同一 16 日 fixture 校验完整序列。

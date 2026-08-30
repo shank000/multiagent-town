@@ -118,6 +118,18 @@ test('resident editor, pixel identity and multi-channel social interactions are 
   assert.match(server, /\/api\/social\/interact/);
 });
 
+test('narrative stream distinguishes planned, travelling, verified, cancelled and fulfilled world facts', () => {
+  for (const kind of ['town_event_announcement', 'town_event_departure', 'town_event', 'town_event_cancelled']) {
+    assert.match(client, new RegExp(`it\\.kind === ['"]${kind}['"]`));
+  }
+  for (const label of ['尚未发生', '途中', '到场已核验', '未成行', '订单已完成']) assert.match(client, new RegExp(label));
+  assert.match(client, /data-object-id/);
+  assert.match(server, /participantCount/);
+  assert.match(server, /sourceObjectId/);
+  assert.match(server, /deliveryLocationId/);
+  assert.match(css, /\.scene-contract\.verified/);
+});
+
 test('frequently used research controls meet the 40px target baseline', () => {
   assert.match(css, /button, select, input\[type="number"\]\s*\{[^}]*min-height:\s*40px/s);
   assert.match(css, /\.network-mode button\s*\{[^}]*min-height:\s*40px;[^}]*font-size:\s*13px/s);
