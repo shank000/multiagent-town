@@ -8,4 +8,9 @@ export interface ObjectView {
   y: number;
   w: number;
   h: number;
+  description?: string | null;
+  affordances?: { verb: string; outcome: string }[];
+  sensoryCues?: string[];
+  observationRadius?: number | null;
+  state?: { label: string; detail: string; updatedGameTime: number; expiresGameTime: number } | null;
 }

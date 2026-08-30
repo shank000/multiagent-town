@@ -484,6 +484,19 @@ canvas { display: block; }
 #panel-body .label { color: var(--ink-muted); font-weight: 650; }
 #play-toggle { min-height: 40px; margin-top: 11px; padding: 7px 12px; }
 .mem-item, .profile-card, .ref-item, .dl-item { margin: 8px 0; padding: 9px 10px; border: 1px solid rgba(255, 255, 255, .07); border-radius: 8px; background: rgba(255, 255, 255, .032); }
+.object-description { margin: 10px 0; padding: 10px 11px; border-left: 3px solid rgba(119,184,255,.62); border-radius: 0 8px 8px 0; background: rgba(119,184,255,.07); color: var(--ink); }
+.object-live-state { margin: 10px 0; padding: 10px 11px; border: 1px solid rgba(98,218,203,.24); border-radius: 10px; background: linear-gradient(135deg, rgba(98,218,203,.10), rgba(98,218,203,.03)); }
+.object-live-state > span { display: block; color: var(--mint); font-size: 10px; font-weight: 800; letter-spacing: 1.1px; text-transform: uppercase; }
+.object-live-state > strong { display: block; margin: 2px 0; color: #dffcf6; font-size: 15px; }
+.object-live-state > p { color: var(--ink-muted); line-height: 1.55; }
+.object-affordances, .object-senses { margin-top: 13px; }
+.object-affordances ul { display: grid; gap: 6px; margin-top: 6px; padding: 0; list-style: none; }
+.object-affordances li { display: grid; grid-template-columns: minmax(74px, auto) 1fr; gap: 9px; align-items: start; padding: 7px 8px; border-radius: 8px; background: rgba(255,255,255,.035); }
+.object-affordances li strong { color: #ffe0a3; }
+.object-affordances li span { color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
+.object-senses > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.sensory-chip { padding: 4px 7px; border: 1px solid rgba(180,151,255,.2); border-radius: 999px; background: rgba(180,151,255,.07); color: #d9cbff; font-size: 11px; }
+.object-observation-note { margin-top: 12px; color: var(--ink-muted); font-size: 11px; line-height: 1.55; }
 .ins + .ins { margin-top: 6px; }
 .reflection-card { margin: 9px 0; overflow: hidden; border: 1px solid var(--edge); border-radius: 10px; background: rgba(255, 255, 255, .026); }
 .reflection-card[open] { border-color: rgba(242, 198, 109, .38); box-shadow: inset 3px 0 rgba(242, 198, 109, .35); }
@@ -746,6 +759,19 @@ canvas { display: block; }
 .nar-speaker small { color: var(--ink-muted); font-size: 11px; }
 .nar-text, .nar-prose { font-size: 14px; line-height: 1.72; }
 .nar-card.social-interaction { width: 100%; max-width: 100%; border-color: rgba(98,218,203,.28); background: linear-gradient(135deg, rgba(98,218,203,.08), rgba(119,184,255,.035)); }
+.nar-card.ambient-life { width: 100%; max-width: 100%; border-color: rgba(139,194,111,.30); background: linear-gradient(135deg, rgba(98,142,76,.13), rgba(85,126,111,.045)); }
+.ambient-life-head { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center; }
+.ambient-life-head > i { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid rgba(174,221,137,.25); border-radius: 9px; background: rgba(139,194,111,.11); font-size: 18px; font-style: normal; }
+.ambient-life-head small { display: block; color: #9fbd93; font-size: 10px; font-weight: 750; letter-spacing: .7px; }
+.ambient-life-head button { min-height: 0; padding: 0; border: 0; background: transparent; color: #e4f0d7; font-size: 14px; font-weight: 750; text-align: left; }
+.ambient-life-head button:hover { color: #fff1b8; text-decoration: underline; }
+.ambient-life > p { margin: 9px 0 8px; color: var(--ink); line-height: 1.58; }
+.ambient-senses { display: flex; flex-wrap: wrap; gap: 5px; }
+.ambient-senses span { padding: 3px 7px; border-radius: 999px; background: rgba(183,214,162,.09); color: #bcd0ae; font-size: 10px; }
+.ambient-observers { margin-top: 8px; color: var(--ink-muted); font-size: 10px; }
+.nar-card.public-observation { border-color: rgba(255,203,112,.22); background: linear-gradient(135deg, rgba(255,203,112,.08), rgba(255,255,255,.025)); }
+.public-observation-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 8px; color: var(--ink-muted); font-size: 10px; }
+.public-observation-meta button { min-height: 0; padding: 2px 6px; border: 1px solid rgba(255,203,112,.2); border-radius: 999px; background: rgba(255,203,112,.06); color: #ffe0a3; font-size: 10px; }
 .interaction-people { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .interaction-people button { min-height: 42px; display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: var(--ink); font-weight: 750; }
 .interaction-people > i { color: var(--teal); font-style: normal; font-size: 18px; }

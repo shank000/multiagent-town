@@ -3,7 +3,7 @@
 import { TimeEngine, type ClockState } from '../core/time';
 import { weatherForDay } from '../core/weather';
 import { GRID_W, GRID_H, type WorldState } from '../core/world';
-import type { Agent, AgentInitialState, PixelAvatar, WorldObject } from '../core/types';
+import type { Agent, AgentInitialState, ObjectAffordance, PixelAvatar, WorldObject, WorldObjectState } from '../core/types';
 import type { ActiveConversation } from '../engine/dialogue';
 import { avatarOf, initialStateOf } from '../engine/agent-profile';
 
@@ -44,6 +44,11 @@ export interface ObjectView {
   name: string;
   type: WorldObject['type'];
   x: number; y: number; w: number; h: number;
+  description: string | null;
+  affordances: ObjectAffordance[];
+  sensoryCues: string[];
+  observationRadius: number | null;
+  state: WorldObjectState | null;
 }
 
 export interface WorldSnapshot {
@@ -109,6 +114,11 @@ export function buildSnapshot(
     gridH: GRID_H,
     objects: world.allObjects().map((o) => ({
       id: o.id, name: o.name, type: o.type, x: o.x, y: o.y, w: o.w, h: o.h,
+      description: o.description ?? null,
+      affordances: o.affordances?.map((affordance) => ({ ...affordance })) ?? [],
+      sensoryCues: o.sensoryCues ? [...o.sensoryCues] : [],
+      observationRadius: o.observationRadius ?? null,
+      state: o.state ? { ...o.state } : null,
     })),
     agents,
     seq,

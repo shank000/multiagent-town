@@ -24,6 +24,13 @@ export function actionIconFor(verb: string, targetName: string | null): string |
   if (/煮|咖啡|泡/.test(verb)) return '☕';
   if (/写生|画|速写/.test(verb)) return '🎨';
   if (targetName === '床') return '💤';
+  if (/公告|便笺|时刻表/.test(verb)) return '📌';
+  if (/浇水|灌溉|压水|接.*水|水泵/.test(verb)) return '💧';
+  if (/鸟|谷粒/.test(verb)) return '🐦';
+  if (/工具|修理|修补/.test(verb)) return '🧰';
+  if (/幼苗|菜园|除草|种植/.test(verb)) return '🌱';
+  if (/包裹|班车|候车/.test(verb)) return '📦';
+  if (/摊位|日用品|货物/.test(verb)) return '🧺';
   if (/书|读/.test(verb)) return '📖';
   if (/钓鱼|鱼/.test(verb)) return '🎣';
   return null;

@@ -68,5 +68,8 @@ test('actionIconFor：verb 关键词映射动作图标', () => {
   assert.equal(actionIconFor('睡觉', '床'), '💤');
   assert.equal(actionIconFor('坐在沙发上看书', null), '📖');
   assert.equal(actionIconFor('在码头钓鱼', null), '🎣');
+  assert.equal(actionIconFor('阅读公告', null), '📌');
+  assert.equal(actionIconFor('给共享菜园浇水', null), '💧');
+  assert.equal(actionIconFor('归还并整理工具', null), '🧰');
   assert.equal(actionIconFor('随便走走', null), null);
 });

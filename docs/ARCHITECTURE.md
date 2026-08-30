@@ -15,7 +15,7 @@
 
 一个以中文像素小镇为可观察环境的**多智能体社会涌现实验平台**：
 - 小镇上生活着 6 位居民（林晚晴、陈默、沈屿、周岚、白露、老周），每位都有自己的作息、记忆、目标、性格；
-- 居民会自主移动、工作、闲聊、经营关系、传播消息、参加公开活动、睡觉；
+- 居民会自主移动、工作、使用公共生活物件、感知日常环境、闲聊、经营关系、传播消息、参加公开活动、睡觉；
 - 浏览器可实时观察 48×44 小镇（Canvas 2D 像素渲染），也可“扮演”任意 NPC 下达指令；
 - 外部 AI（Claude Code / OpenClaw / 任意智能体）可通过 `town-agent` 协议以“访客”身份住进小镇。
 - 三个平行世界提供关系记忆开/关与谣言传播处理，支持伙伴选择因果实验和结构化社会网络测量。
@@ -65,7 +65,8 @@
 ┌───────────────▼────────────────────────────────────────────────────┐
 │ 模拟引擎层 (src/engine + src/core)                                  │
 │   WorldLoop 主循环 → AgentExecutor 状态机 → SocialTicker/Dialogue    │
-│   → TownModel 公开活动 → MindEngine(Planner/Reflection/MemoryWriter)│
+│   → TownLife 日常环境 / TownModel 公开活动                           │
+│   → MindEngine(Planner/Reflection/MemoryWriter)                     │
 │   → PartnerChoiceExperiment（预实验，可插拔）                       │
 └───────────────┬────────────────────────────────────────────────────┘
 ┌───────────────▼────────────────────────────────────────────────────┐
@@ -93,7 +94,7 @@ WorldLoop.step()
   │     ├─ move_to：A* 寻路 → 逐步移动
   │     └─ interact/idle：持续 actionEndsAt 游戏分钟
   ├─ SocialTicker.tick()                  # 相邻久坐触发对话/招呼
-  ├─ MindEngine.tick()                    # 5:00 日计划、整点小时分解、反思检查、对话推进、活动规划
+  ├─ MindEngine.tick()                    # 计划/反思/对话 + 距离约束日常事件 + 公开活动
   ├─ 跨天系统事件"第 N 天开始"
   └─ db.setMeta('game_time')              # 落库；通知订阅者（SSE/CLI/记忆写入）
 ```
@@ -137,6 +138,7 @@ multiagent-town/
 │   │   ├── loop.ts            # WorldLoop：主循环、跨天事件、runUntil
 │   │   ├── mind.ts            # MindEngine：认知子系统门面
 │   │   ├── memory-writer.ts   # 事件→观察记忆、重要性打分
+│   │   ├── town-life.ts       # 公共物件状态、日常感官事件与附近观察者
 │   │   ├── reflection.ts      # 证据约束日记 + importance 累计反思 + 行为指引
 │   │   ├── dialogue.ts        # 持久会话/逐轮消息 + 摘要写回记忆/关系
 │   │   ├── agent-profile.ts   # 稳定 ID 档案、像素头像、初始心态与指纹
@@ -237,7 +239,7 @@ multiagent-town/
 | `loop.ts` | `WorldLoop` | 主循环；`step()`/`runUntil()`/`start()`/`stop()`；跨天事件；依赖注入 Social/Mind |
 | `mind.ts` | `MindEngine` | 认知门面：组合 MemoryStore/Planner/Reflection/MemoryWriter/RelationshipStore/RumorTracker/Dialogue/TownModel；定时 5:00 日计划、整点小时分解、跨日证据日记、累计反思、对话与活动 |
 | `memory-writer.ts` | `MemoryWriter` | 订阅 EventLog；把事件转成观察记忆；调用 LLM 打重要性 1–10 |
-| `reflection.ts` | `ReflectionEngine` | 每日生成职业视角日记、心境、信念/修订与明日指引；重要性累计 >150 时补充模式洞察；所有结论绑定事件证据，替代信念退出决策上下文 |
+| `reflection.ts` | `ReflectionEngine` | 每日生成职业视角日记、心境、信念/修订与明日指引；重要性累计 >150 时补充模式洞察；日记由事件原文、模型心态和人物价值分层投影，替代信念退出决策上下文 |
 | `dialogue.ts` | `DialogueEngine` | 多轮会话持久化 conversation/turn/speaker/listener；日常会话要求相邻，实验会面显式 arranged；活跃/收尾期间锁住移动，摘要写回双方记忆与关系证据 |
 | `relational-measures.ts` / `social-relations.ts` | 关系测量与投影 | 按时间窗生成原六项与新增四项连续测量、缺失状态、方向和 dyad 证据；旧六维状态画像仅作探索性兼容层；只读观察结果不进入实验决策 |
 | `social.ts` | `SocialTicker` | 邻近累计 3 游戏分钟触发打招呼；有 DialogueEngine 时转真对话，否则台词池单句 |
@@ -245,6 +247,7 @@ multiagent-town/
 | `status.ts` | `computeStanding()` | Weighted PageRank + 互惠加成（Agentopia/Sociometer），输入全量关系输出声望分 |
 | `analyze.ts` | `analyzeTown()` | 数据统计与分析核心：只读聚合 events/memories/reflections/plans/messages/relationships/rumors，产出 TownReport（`/api/stats` 数据源） |
 | `town-model.ts` | `TownModel` | 公开活动目录轮换（湖边派对/读书会/集市）；按性格报名；≥2 人成行广播；参与者关系升温 |
+| `town-life.ts` | `TownLifeEngine` | 每天四个时段轮换自然/商业/照料/邻里事件；更新物件短期状态，按距离生成居民观察记忆 |
 | `player.ts` | `PlayerDirector` | 玩家自然语言指令覆盖某个 agent 决策，60 游戏分钟内最高优先级 |
 | `interview.ts` | `interviewAgent()` | 上帝视角访谈：检索记忆+洞察 → 第一人称回答 |
 | `experiment.ts` | `PartnerChoiceExperiment` | 每晚 19:30 伙伴选择预实验；historyAccess on/off 对照；用于研究分析 |
@@ -395,7 +398,7 @@ LLM_PROVIDER=ollama OLLAMA_PROFILE=qwen3-single pnpm town-web --port 8787
 - `LLM_MAX_QUEUE`（Ollama 默认 `96`，有界等待容量）；
 - `TOWN_URL`（仅 `town-agent` 使用，默认 `http://127.0.0.1:8787`）
 
-Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为指定居民选模型；否则 small 层处理动作、对话、规划和后台评分，large 层处理深度日记反思。居民共享模型服务与权重，persona、记忆、关系、日记和心智状态在应用层独立。网关按“对话—动作—规划—反思—后台”调度，同级请求按世界轮询；等待队列默认在容量的 75% 进入背压、降到 50% 后恢复。三个世界按同一批次推进或等待，避免条件组时钟偏移。需要推理的请求带 `think=true`；动作、规划、对话与摘要通过请求级 JSON Schema 使用 Ollama structured outputs，本地推理的 `costYuan` 恒为 0。
+Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为指定居民选模型；否则 small 层处理动作、对话、规划和后台评分，large 层处理深度日记反思。居民共享模型服务与权重，persona、记忆、关系、日记和心智状态在应用层独立。网关按“对话—动作—规划—反思—后台”调度，同级请求按世界轮询；等待队列默认在容量的 75% 进入背压、降到 50% 后恢复。三个世界按同一批次推进或等待，避免条件组时钟偏移。动作、规划、对话、摘要与日记使用请求级 JSON Schema；反思以有界结构化输出配合证据投影，在保留心态和信念更新的同时避免长思考阻塞与新增事实。本地推理的 `costYuan` 恒为 0。
 
 动作 Schema 将 `idle + target:null` 与 `move_to/interact + 已知对象 id` 建模为互斥分支。应用层仍执行第二道校验：安全清理 `idle` 的冗余目标；其他错误把校验原因加入低温修正请求；两次无效时生成不含技术文本的短时休息动作。异常状态以 `action_decision_quality` 结构化事件留存，并从人物记忆、叙事接口和现场气泡中隔离；人物 `thought` 的 `decisionQuality` 字段提供 `valid/normalized/repaired/safe_fallback`、尝试次数、校验器版本和模型信息，支持按世界与居民计算动作修复率。
 

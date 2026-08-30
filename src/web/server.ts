@@ -755,6 +755,11 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             interactionLabel: typeof p.interactionLabel === 'string' ? p.interactionLabel : null,
             icon: typeof p.icon === 'string' ? p.icon : null,
             source: typeof p.source === 'string' ? p.source : null,
+            objectId: typeof p.objectId === 'string' ? p.objectId : null,
+            objectName: typeof p.objectName === 'string' ? p.objectName : null,
+            lifeCategory: typeof p.category === 'string' ? p.category : null,
+            sensoryCues: Array.isArray(p.sensoryCues) ? p.sensoryCues.filter((cue): cue is string => typeof cue === 'string') : [],
+            observerCount: Array.isArray(p.observerIds) ? p.observerIds.filter((id): id is string => typeof id === 'string').length : 0,
           };
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

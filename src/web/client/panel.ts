@@ -142,10 +142,19 @@ export function renderProfile(body: HTMLElement, a: AgentView): void {
 
 export function renderObjectCard(body: HTMLElement, o: ObjectView): void {
   renderVersion++;
+  const affordances = (o.affordances ?? []).map((item) => (
+    `<li><strong>${escapeHtml(item.verb)}</strong><span>${escapeHtml(item.outcome)}</span></li>`
+  )).join('');
+  const cues = (o.sensoryCues ?? []).map((cue) => `<span class="sensory-chip">${escapeHtml(cue)}</span>`).join('');
   body.innerHTML = `
     <h3>${escapeHtml(o.name)}</h3>
     <p><span class="label">类型</span> ${escapeHtml(TYPE_NAME[o.type] ?? o.type)}</p>
-    <p><span class="label">尺寸</span> ${o.w}×${o.h}</p>`;
+    <p><span class="label">尺寸</span> ${o.w}×${o.h}</p>
+    ${o.description ? `<div class="object-description">${escapeHtml(o.description)}</div>` : ''}
+    ${o.state ? `<div class="object-live-state"><span>现场状态</span><strong>${escapeHtml(o.state.label)}</strong><p>${escapeHtml(o.state.detail)}</p></div>` : ''}
+    ${affordances ? `<section class="object-affordances"><p class="label">居民可以在这里</p><ul>${affordances}</ul></section>` : ''}
+    ${cues ? `<section class="object-senses"><p class="label">可以感到</p><div>${cues}</div></section>` : ''}
+    ${o.observationRadius ? `<p class="object-observation-note">附近 ${o.observationRadius} 格内的居民可以见证这里发生的公共行动。</p>` : ''}`;
 }
 
 const signed = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}`;

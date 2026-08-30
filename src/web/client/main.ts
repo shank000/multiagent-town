@@ -42,6 +42,7 @@ interface TownEvent { id: string;
     kind?: string; line?: string; thought?: string; fromId?: string; toId?: string;
     conversationId?: string;
     interactionType?: string; interactionLabel?: string; icon?: string; source?: string;
+    objectId?: string; objectName?: string; category?: string; sensoryCues?: string[];
   } | null;
 }
 
@@ -51,6 +52,14 @@ interface WorldListItem {
   desc: string;
   badges?: { label: string; value: string; tone: 'on' | 'off' | 'neutral' }[];
 }
+
+const LIFE_CATEGORY_NAME: Record<string, string> = {
+  nature: '自然环境',
+  commerce: '日常交换',
+  care: '公共照料',
+  infrastructure: '基础设施',
+  neighborhood: '邻里线索',
+};
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -399,9 +408,9 @@ function onEvent(e: TownEvent & { worldId?: string }): void {
   if (feed.length > 200) feed.pop();
   renderFeed();
   // 广播事件 → 顶部横幅（6 秒后淡出）
-  if (kind === 'broadcast') {
+  if (kind === 'broadcast' || kind === 'ambient_life') {
     banner = { text: e.description, until: performance.now() + 6000 };
-    return;
+    if (kind === 'broadcast') return;
   }
   const fromId = e.payload?.fromId ?? e.actorId;
   const toId = e.payload?.toId;
@@ -465,6 +474,8 @@ interface NarrativeItem {
   mode: string | null; chosen: string | null;
   candidates: { id: string; name: string; affection: number; lastInteraction: number }[] | null;
   interactionType: string | null; interactionLabel: string | null; icon: string | null; source: string | null;
+  objectId: string | null; objectName: string | null; lifeCategory: string | null;
+  sensoryCues: string[]; observerCount: number;
 }
 let lastNarrativeSignature = '';
 let lastNarrativeAt = 0;
@@ -514,6 +525,14 @@ function renderNarrative(items: NarrativeItem[]): void {
       const target = it.target ? snap?.agents.find((agent) => agent.id === it.target) : null;
       card.className = 'nar-card social-interaction';
       card.innerHTML = `<div class="interaction-people">${actor ? `<button type="button" data-agent-id="${encodeURIComponent(actor.id)}">${pixelAvatarMarkup(actor.name, actor.avatar, 'narrative-avatar')}<span>${escapeHtml(actor.name)}</span></button>` : ''}<i>${escapeHtml(it.icon ?? '◆')}</i>${target ? `<button type="button" data-agent-id="${encodeURIComponent(target.id)}">${pixelAvatarMarkup(target.name, target.avatar, 'narrative-avatar')}<span>${escapeHtml(target.name)}</span></button>` : ''}${meta}</div><div class="nar-prose"><span class="nar-title">${escapeHtml(it.interactionLabel ?? '社会互动')}</span><br>${escapeHtml(it.text)}</div>${it.source === 'researcher' ? '<span class="intervention-tag">研究者干预 · 当前世界</span>' : ''}`;
+    } else if (it.kind === 'ambient_life') {
+      const cues = it.sensoryCues.map((cue) => `<span>${escapeHtml(cue)}</span>`).join('');
+      card.className = 'nar-card ambient-life';
+      const lifeCategory = LIFE_CATEGORY_NAME[it.lifeCategory ?? ''] ?? '生活现场';
+      card.innerHTML = `<div class="ambient-life-head"><i>${escapeHtml(it.icon ?? '🌿')}</i><div><small>日常环境 · ${escapeHtml(lifeCategory)}</small><button type="button" data-object-id="${encodeURIComponent(it.objectId ?? '')}">${escapeHtml(it.objectName ?? '小镇现场')}</button></div>${meta}</div><p>${escapeHtml(it.text)}</p>${cues ? `<div class="ambient-senses">${cues}</div>` : ''}<div class="ambient-observers">${it.observerCount > 0 ? `${it.observerCount} 位附近居民形成了现场观察` : '现场暂时没有居民直接注意到'}</div>`;
+    } else if (it.kind === 'public_object_interaction') {
+      card.className = 'nar-card public-observation';
+      card.innerHTML = `${meta}<span class="nar-title">👁 可见的公共行动</span><div class="nar-prose">${escapeHtml(it.text)}</div><div class="public-observation-meta"><button type="button" data-object-id="${encodeURIComponent(it.objectId ?? '')}">${escapeHtml(it.objectName ?? '公共空间')}</button><span>${it.observerCount} 位居民在附近见证</span></div>`;
     } else if (it.kind === 'thought' || ((it.kind.startsWith('thought')) && it.thought)) {
       card.className = 'nar-card thought';
       card.innerHTML = `${meta}<span class="nar-title">💭 ${escapeHtml(it.actorName)} 的内心独白</span><div class="nar-italic">${escapeHtml(it.thought ?? it.text)}</div>`;
@@ -552,6 +571,17 @@ function renderNarrative(items: NarrativeItem[]): void {
       if (encoded) selectAgent(decodeURIComponent(encoded));
     });
   });
+  box.querySelectorAll<HTMLElement>('[data-object-id]').forEach((element) => {
+    element.addEventListener('click', () => {
+      const encoded = element.dataset.objectId;
+      if (!encoded) return;
+      const id = decodeURIComponent(encoded);
+      const object = snap?.objects.find((item) => item.id === id);
+      if (!object) return;
+      selectObject(id);
+      centerCameraAt((object.x + object.w / 2) * TILE, (object.y + object.h / 2) * TILE);
+    });
+  });
   if (focusEventId && focusActionIndex >= 0) {
     const restoredCard = Array.from(box.querySelectorAll<HTMLElement>('[data-event-id]'))
       .find((element) => element.dataset.eventId === focusEventId);
@@ -587,7 +617,7 @@ async function pollNarrative(): Promise<void> {
 }
 const FEED_KINDS: [string, string][] = [
   ['chat', '💬 对话'], ['chat_summary', '📜 小结'], ['gift', '💐 馈礼'], ['rumor', '🗣 谣言'],
-  ['town_event', '🎪 活动'], ['broadcast', '📢 广播'], ['social_interaction', '◆ 社会互动'], ['interact', '🛠 互动'], ['move', '🚶 移动'],
+  ['town_event', '🎪 活动'], ['ambient_life', '🌿 日常环境'], ['broadcast', '📢 广播'], ['social_interaction', '◆ 社会互动'], ['public_object_interaction', '👁 公共行动'], ['interact', '🛠 互动'], ['move', '🚶 移动'],
 ];
 let activeFilter = '全部';
 function renderCharacterCard(id: string | null): void {

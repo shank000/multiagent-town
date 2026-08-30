@@ -261,6 +261,62 @@ function drawUndergrowth(ctx: CanvasRenderingContext2D, px: number, py: number, 
   }
 }
 
+const LIFE_OBJECT_IDS = new Set([
+  'obj:notice_board', 'obj:market_stall', 'obj:plaza_fountain', 'obj:park_bench',
+  'obj:bird_feeder', 'obj:water_pump', 'obj:community_garden', 'obj:tool_rack', 'obj:bus_stop',
+]);
+
+/** 公共生活物件使用独立像素轮廓，保证缩放后仍能一眼辨认其功能。 */
+function drawLifeObject(ctx: CanvasRenderingContext2D, o: ObjectView, nowMs: number): void {
+  const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
+  ctx.fillStyle = 'rgba(25,35,29,.22)';
+  ctx.fillRect(px + 3, py + ph - 5, Math.max(8, pw - 6), 5);
+  if (o.id === 'obj:notice_board') {
+    ctx.fillStyle = '#6f4930'; ctx.fillRect(px + 5, py + 5, 22, 17); ctx.fillRect(px + 8, py + 22, 4, 10); ctx.fillRect(px + 21, py + 22, 4, 10);
+    ctx.fillStyle = '#d7b77e'; ctx.fillRect(px + 8, py + 8, 16, 11);
+    ctx.fillStyle = '#f3e7c7'; ctx.fillRect(px + 10, py + 10, 6, 7); ctx.fillRect(px + 18, py + 9, 4, 5);
+    ctx.fillStyle = '#b44942'; ctx.fillRect(px + 12, py + 9, 2, 2); ctx.fillRect(px + 19, py + 8, 2, 2);
+  } else if (o.id === 'obj:market_stall') {
+    ctx.fillStyle = '#765039'; ctx.fillRect(px + 5, py + 15, pw - 10, 11); ctx.fillRect(px + 8, py + 26, 4, 6); ctx.fillRect(px + pw - 12, py + 26, 4, 6);
+    for (let x = px + 3, i = 0; x < px + pw - 3; x += 10, i++) { ctx.fillStyle = i % 2 ? '#f1d38a' : '#b9544d'; ctx.fillRect(x, py + 4, 10, 9); }
+    for (let x = px + 10, i = 0; x < px + pw - 7; x += 9, i++) { ctx.fillStyle = ['#d2684f', '#efb447', '#76a655'][i % 3]; ctx.fillRect(x, py + 18, 5, 5); }
+  } else if (o.id === 'obj:plaza_fountain') {
+    ctx.fillStyle = '#8d948f'; ctx.fillRect(px + 4, py + 20, 24, 8); ctx.fillRect(px + 8, py + 16, 16, 5); ctx.fillRect(px + 14, py + 7, 4, 10);
+    ctx.fillStyle = '#5fb7d8'; ctx.fillRect(px + 7, py + 20, 18, 3);
+    const drop = Math.floor(nowMs / 260) % 5; ctx.fillRect(px + 12, py + 8 + drop, 2, 5); ctx.fillRect(px + 19, py + 10 + (4 - drop), 2, 4);
+  } else if (o.id === 'obj:park_bench') {
+    ctx.fillStyle = '#60432f'; ctx.fillRect(px + 5, py + 7, pw - 10, 5); ctx.fillRect(px + 5, py + 15, pw - 10, 6); ctx.fillRect(px + 10, py + 21, 4, 8); ctx.fillRect(px + pw - 14, py + 21, 4, 8);
+    ctx.fillStyle = '#947050'; ctx.fillRect(px + 7, py + 8, pw - 14, 2); ctx.fillRect(px + 7, py + 16, pw - 14, 2);
+  } else if (o.id === 'obj:bird_feeder') {
+    ctx.fillStyle = '#65472e'; ctx.fillRect(px + 14, py + 15, 4, 16); ctx.fillRect(px + 7, py + 14, 18, 4);
+    ctx.fillStyle = '#9b6c42'; ctx.fillRect(px + 9, py + 7, 14, 9); ctx.fillStyle = '#5c3c29'; ctx.fillRect(px + 7, py + 5, 18, 4);
+    ctx.fillStyle = '#e2c674'; ctx.fillRect(px + 10, py + 20, 2, 2); ctx.fillRect(px + 21, py + 19, 2, 2);
+  } else if (o.id === 'obj:water_pump') {
+    ctx.fillStyle = '#63747b'; ctx.fillRect(px + 10, py + 8, 10, 21); ctx.fillRect(px + 18, py + 12, 8, 5); ctx.fillRect(px + 23, py + 15, 4, 7);
+    ctx.fillStyle = '#87979b'; ctx.fillRect(px + 7, py + 5, 15, 4); ctx.fillRect(px + 5, py + 3, 4, 9);
+    if (o.state) { ctx.fillStyle = '#55b9d8'; ctx.fillRect(px + 26, py + 21, 2, 5 + Math.floor(nowMs / 220) % 3); }
+  } else if (o.id === 'obj:community_garden') {
+    ctx.fillStyle = '#765239'; ctx.fillRect(px + 2, py + 2, pw - 4, ph - 4);
+    for (let y = py + 8; y < py + ph - 3; y += 14) { ctx.fillStyle = '#9b7049'; ctx.fillRect(px + 4, y, pw - 8, 5); }
+    for (let y = py + 7; y < py + ph - 4; y += 14) for (let x = px + 10; x < px + pw - 4; x += 15) {
+      ctx.fillStyle = '#4f913f'; ctx.fillRect(x, y, 3, 8); ctx.fillRect(x - 3, y + 2, 3, 4); ctx.fillRect(x + 3, y + 1, 3, 4);
+    }
+  } else if (o.id === 'obj:tool_rack') {
+    ctx.fillStyle = '#6d4a32'; ctx.fillRect(px + 4, py + 5, 24, 22); ctx.fillStyle = '#9a704b'; ctx.fillRect(px + 7, py + 8, 18, 3); ctx.fillRect(px + 7, py + 20, 18, 3);
+    ctx.fillStyle = '#b4b8b3'; ctx.fillRect(px + 10, py + 10, 3, 12); ctx.fillRect(px + 19, py + 10, 3, 11); ctx.fillStyle = '#5a3927'; ctx.fillRect(px + 9, py + 18, 5, 8); ctx.fillRect(px + 18, py + 17, 5, 9);
+  } else if (o.id === 'obj:bus_stop') {
+    ctx.fillStyle = '#53666d'; ctx.fillRect(px + 3, py + 5, 26, 5); ctx.fillRect(px + 5, py + 10, 4, 48); ctx.fillRect(px + 25, py + 10, 4, 48);
+    ctx.fillStyle = 'rgba(141,196,205,.34)'; ctx.fillRect(px + 9, py + 11, 16, 24);
+    ctx.fillStyle = '#a66d45'; ctx.fillRect(px + 9, py + 39, 16, 5); ctx.fillRect(px + 11, py + 44, 3, 7); ctx.fillRect(px + 21, py + 44, 3, 7);
+    ctx.fillStyle = '#f1d278'; ctx.fillRect(px + 10, py + 15, 10, 12); ctx.fillStyle = '#6b5a48'; ctx.fillRect(px + 12, py + 18, 6, 2); ctx.fillRect(px + 12, py + 22, 4, 2);
+  }
+  if (o.state) {
+    const pulse = Math.floor(nowMs / 360) % 2;
+    ctx.fillStyle = pulse ? '#ffe29a' : '#66dec9';
+    ctx.fillRect(px + pw - 6, py + 3, 3, 3);
+  }
+}
+
 export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, nowMs: number, minuteOfDay = -1): void {
   const px = o.x * TILE, py = o.y * TILE, pw = o.w * TILE, ph = o.h * TILE;
   if (o.type === 'zone') {
@@ -444,6 +500,8 @@ export function drawObjectDetail(ctx: CanvasRenderingContext2D, o: ObjectView, n
   } else if (o.type === 'water') {
     // 种子中 obj:river 为 type 'water'（非 zone），故需单独分支渲染水波
     drawRiver(ctx, px, py, pw, ph, nowMs);
+  } else if (o.type === 'furniture' && LIFE_OBJECT_IDS.has(o.id)) {
+    drawLifeObject(ctx, o, nowMs);
   } else if (o.type === 'furniture' && o.id === 'obj:boat') {
     // 小船（码头南缘）：船身 + 舱内水面 + 底沿
     ctx.fillStyle = '#8a5a3a';
