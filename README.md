@@ -20,6 +20,8 @@
 
 ## 快速开始
 
+不使用命令行的 Windows 协作者可直接运行发布包中的 `MultiagentTown.exe`。程序内置 Node.js 与研究控制台，自动连接本机 Ollama、准备所需 Qwen3 模型并在浏览器打开三视窗界面。使用与构建说明见 [Windows 单文件版](docs/windows-executable.md)。
+
 ```bash
 pnpm install
 pnpm town-web --port 8787

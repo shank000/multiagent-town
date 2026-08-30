@@ -1,0 +1,26 @@
+MultiAgent Town · Windows x64 使用说明
+
+运行要求
+1. Windows 10 或 Windows 11（64 位）
+2. 已安装本地版 Ollama：https://ollama.com/download/windows
+3. 首次准备模型约需 5 GB 磁盘空间
+
+快速开始
+1. 双击 MultiagentTown.exe。
+2. 首次运行会检查并准备 qwen3:4b 与 qwen3:4b-instruct，控制台显示下载进度。
+3. 浏览器会自动打开研究控制台。
+4. 保持黑色启动窗口运行；关闭该窗口即可结束本次实验。
+
+数据位置
+每次运行创建独立的三世界 SQLite 实验数据库，保存在：
+%LOCALAPPDATA%\MultiagentTown\runs
+
+界面端口
+默认从 8898 开始自动选择空闲端口。启动窗口会显示实际地址。
+
+隐私与模型
+程序固定使用 127.0.0.1 上的本机 Ollama 服务。人物对话、反思和实验数据均在本机处理，不需要在线模型账号。
+
+文件校验
+MultiagentTown.exe.sha256 记录发布文件的 SHA-256。PowerShell 校验命令：
+Get-FileHash .\MultiagentTown.exe -Algorithm SHA256
