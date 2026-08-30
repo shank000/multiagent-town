@@ -2,7 +2,7 @@
 // 支持：LLM_PROVIDER=mock|deepseek|ollama（默认 mock）
 //   deepseek：DEEPSEEK_API_KEY（必填）
 //   ollama：OLLAMA_PROFILE / OLLAMA_MODEL / OLLAMA_SMALL_MODEL / OLLAMA_AGENT_MODELS /
-//           OLLAMA_KEEP_ALIVE / OLLAMA_TIMEOUT_MS / LLM_MAX_CONCURRENCY / LLM_MAX_QUEUE
+//           OLLAMA_KEEP_ALIVE / OLLAMA_NUM_CTX / OLLAMA_TIMEOUT_MS / LLM_MAX_CONCURRENCY / LLM_MAX_QUEUE
 
 import type { GatewayConfig } from './gateway';
 import { resolveOllamaProfile } from './model-profiles';
@@ -35,6 +35,7 @@ export function gatewayConfigFromEnv(): GatewayConfig {
       model: process.env.OLLAMA_MODEL ?? profile.model,
       smallModel: process.env.OLLAMA_SMALL_MODEL ?? profile.smallModel,
       keepAlive: process.env.OLLAMA_KEEP_ALIVE ?? '10m',
+      numCtx: boundedIntegerFromEnv('OLLAMA_NUM_CTX', 8192, 2048, 262_144),
       ...(agentModels ? { agentModels } : {}),
       timeoutMs: positiveIntegerFromEnv('OLLAMA_TIMEOUT_MS', 120_000),
     };

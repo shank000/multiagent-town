@@ -219,10 +219,10 @@ export function dialogueMessages(ctx: {
     )).join('\n')}`
     : '\n本次会话尚无前文，请自然开启话题。';
   const identity = ctx.speakerPersona
-    ? personaText(ctx.speakerPersona)
+    ? dialoguePersonaText(ctx.speakerPersona, true)
     : `小镇居民「${ctx.speakerName}」`;
   const otherProfile = ctx.otherPersona
-    ? `\n对话对象背景（只用于理解对方，不要替对方发言）：${personaText(ctx.otherPersona)}`
+    ? `\n对话对象背景（只用于理解对方，不要替对方发言）：${dialoguePersonaText(ctx.otherPersona, false)}`
     : '';
   const relationshipHistory = ctx.relationshipHistory?.length
     ? `\n你们过去互动的已知摘要：\n${ctx.relationshipHistory.slice(-2).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
@@ -235,7 +235,7 @@ export function dialogueMessages(ctx: {
     : '\n没有额外的现场功能信息。';
   const location = ctx.locationId ? `\n当前会话地点：${ctx.locationId}。` : '';
   return simpleMessages(
-    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${ctx.goal}${otherProfile}${location}${worldFacts}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
+    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${compactDialogueText(ctx.goal)}${otherProfile}${location}${worldFacts}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
     '规则：\n' +
     '1. 直接回应对方最后一句的信息、问题或情绪，然后再推进一个紧密相关的话题。对方提出明确问题时，第一句必须先给出答案；不知道或没有相关经历也要直说，回答之前不得转向别的话题。\n' +
     '2. 不要用「你刚才提到」「围绕我们的话题」「我认真想了想」等套话复述前文，也不要回避一个明确问题。\n' +
@@ -260,8 +260,42 @@ export function dialogueMessages(ctx: {
   );
 }
 
+/**
+ * 对话只携带形成口吻、知识边界与行动倾向所需的人设切片。
+ * 完整可编辑档案仍保存在世界状态；这里的长度边界保证长期实验不会因档案增长挤占会话窗口。
+ */
+function dialoguePersonaText(persona: Persona, speaker: boolean): string {
+  const list = (values: readonly string[], count: number, itemLength: number) => values
+    .slice(0, count)
+    .map((value) => boundedDialogueText(value, itemLength))
+    .filter(Boolean)
+    .join('、');
+  const common = [
+    `${boundedDialogueText(persona.name, 16)}，${persona.age} 岁，${persona.gender}，${boundedDialogueText(persona.occupation, 32)}`,
+    `背景：${boundedDialogueText(persona.background, speaker ? 280 : 180)}`,
+    `性格：${list(persona.traits, 4, 24) || '未注明'}`,
+    `价值观：${list(persona.values, 3, 40) || '未注明'}`,
+    `说话风格：${boundedDialogueText(persona.speechStyle, 100)}`,
+  ];
+  if (!speaker) return `${common.join('。')}。`;
+  const skills = Object.entries(persona.skills).slice(0, 4)
+    .map(([name, value]) => `${boundedDialogueText(name, 24)}(${value}/10)`)
+    .join('、');
+  return `${[
+    ...common,
+    `爱好：${list(persona.hobbies, 3, 24) || '未注明'}`,
+    `主要技能：${skills || '未注明'}`,
+    `动机：${boundedDialogueText(persona.motivation, 120)}`,
+    `近期目标：${list(persona.goals, 2, 80) || '未注明'}`,
+  ].join('。')}。`;
+}
+
 function compactDialogueText(value: string): string {
-  return value.replace(/\s+/gu, ' ').trim().slice(0, 120);
+  return boundedDialogueText(value, 120);
+}
+
+function boundedDialogueText(value: string, maxLength: number): string {
+  return value.replace(/\s+/gu, ' ').trim().slice(0, maxLength);
 }
 
 export function dialogueSummaryMessages(lines: string[]): ChatMessage[] {

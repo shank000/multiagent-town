@@ -15,6 +15,7 @@ export interface GatewayConfig {
     smallModel?: string;
     timeoutMs?: number;
     keepAlive?: string;
+    numCtx?: number;
     agentModels?: Readonly<Record<string, string>>;
   };
   retries?: number;   // 默认 2（共 3 次尝试）
@@ -170,6 +171,7 @@ export class LLMGateway {
         model: cfg.ollama?.model ?? 'qwen3:4b',
         ...(cfg.ollama?.smallModel ? { smallModel: cfg.ollama.smallModel } : {}),
         ...(cfg.ollama?.keepAlive ? { keepAlive: cfg.ollama.keepAlive } : {}),
+        ...(cfg.ollama?.numCtx !== undefined ? { numCtx: cfg.ollama.numCtx } : {}),
         ...(cfg.ollama?.agentModels ? { agentModels: cfg.ollama.agentModels } : {}),
         timeoutMs: cfg.ollama?.timeoutMs ?? 120_000,
       });

@@ -28,6 +28,8 @@ $env:OLLAMA_CONTEXT_LENGTH = '8192'
 ollama serve
 ```
 
+应用还会为每次聊天请求显式发送 `num_ctx=8192`，因此通过桌面版或既有 Ollama 服务启动时也保持同一上下文条件。需要更长窗口时，可在启动小镇前设置 `$env:OLLAMA_NUM_CTX = '16384'`；该值会增加显存/内存占用，应在同一批实验中固定不变。
+
 项目终端使用同一台机器上的服务：
 
 ```powershell

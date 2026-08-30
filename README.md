@@ -84,6 +84,7 @@ pnpm town-web --port 8787
 | `OLLAMA_SMALL_MODEL` | 覆盖 profile 的 small 层模型 | profile 决定 |
 | `OLLAMA_AGENT_MODELS` | 居民 ID 到模型名的 JSON 映射 | 未设置 |
 | `OLLAMA_KEEP_ALIVE` | 模型在内存中的驻留时间 | `10m` |
+| `OLLAMA_NUM_CTX` | 每次模型请求的上下文窗口（token） | `8192` |
 | `OLLAMA_TIMEOUT_MS` | 单次请求超时 | `120000` |
 | `LLM_MAX_CONCURRENCY` | 共享模型最大并发；本地单卡建议保持 1 | Ollama 为 `1` |
 | `LLM_MAX_QUEUE` | 有界推理等待队列容量 | Ollama 为 `96` |

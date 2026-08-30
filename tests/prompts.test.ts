@@ -146,6 +146,36 @@ test('对话提示仅携带有限会话窗口且 M0 上下文保持紧凑', () =
   assert.ok(messages[1].content.length < 1600);
 });
 
+test('可编辑长档案进入对话时保持有界且保留身份与说话风格', () => {
+  const longPersona = persona({
+    name: '甲', occupation: '社区工作者',
+    background: '长期社区经历'.repeat(400),
+    motivation: '希望理解邻里需求'.repeat(40),
+    goals: Array.from({ length: 8 }, (_, index) => `目标${index}${'细节'.repeat(80)}`),
+    values: Array.from({ length: 8 }, (_, index) => `价值${index}${'原则'.repeat(40)}`),
+    speechStyle: `先回应问题，再谨慎说明依据，${'保持克制'.repeat(40)}`,
+  });
+  const messages = dialogueMessages({
+    speakerName: '甲', speakerPool: [], otherName: '乙', goal: '了解对方今天的近况', turns: 6,
+    rumors: Array.from({ length: 5 }, (_, index) => ({ id: `r${index}`, content: '传闻'.repeat(100) })),
+    affection: 0.2, honesty: 0.8,
+    speakerPersona: longPersona,
+    otherPersona: { ...longPersona, name: '乙', background: '另一段社区经历'.repeat(400) },
+    relationshipHistory: Array.from({ length: 6 }, () => '关系记忆'.repeat(100)),
+    speakerMemories: Array.from({ length: 12 }, () => '个人记忆'.repeat(100)),
+    worldFacts: Array.from({ length: 12 }, () => '现场事实'.repeat(100)),
+    history: Array.from({ length: 12 }, (_, index) => ({
+      turnIndex: index, speakerName: index % 2 ? '甲' : '乙', listenerName: index % 2 ? '乙' : '甲',
+      content: '连续对话'.repeat(100),
+    })),
+  });
+  const totalCharacters = messages.reduce((sum, message) => sum + message.content.length, 0);
+  assert.ok(totalCharacters < 7_000, `对话提示共 ${totalCharacters} 字符，超过有界窗口`);
+  assert.ok(messages[0].content.includes('社区工作者'));
+  assert.ok(messages[0].content.includes('先回应问题'));
+  assert.ok(!messages[0].content.includes('长期社区经历'.repeat(100)));
+});
+
 test('反思日记提示规定紧凑且完整的证据约束 JSON', () => {
   const agent = makeAgent({ persona: persona({ name: '甲', occupation: '木匠' }) });
   const messages = reflectionJournalMessages({

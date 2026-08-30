@@ -393,6 +393,7 @@ LLM_PROVIDER=ollama OLLAMA_PROFILE=qwen3-single pnpm town-web --port 8787
 - `OLLAMA_MODEL` / `OLLAMA_SMALL_MODEL`（可选，覆盖 profile 对应层）；
 - `OLLAMA_AGENT_MODELS`（可选，居民 ID 到模型名的 JSON 映射）；
 - `OLLAMA_KEEP_ALIVE`（默认 `10m`）；
+- `OLLAMA_NUM_CTX`（默认 `8192`，作为每次请求的上下文窗口，保证不同启动方式下条件一致）；
 - `OLLAMA_TIMEOUT_MS`（默认 `120000`，只接受正整数毫秒）；
 - `LLM_MAX_CONCURRENCY`（Ollama 默认 `1`，共享 provider 最大并发）；
 - `LLM_MAX_QUEUE`（Ollama 默认 `96`，有界等待容量）；

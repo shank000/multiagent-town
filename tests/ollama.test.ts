@@ -17,7 +17,7 @@ interface ChatPayload {
   format?: string | Record<string, unknown>;
   think?: boolean;
   keep_alive?: string;
-  options: { temperature: number; num_predict: number };
+  options: { temperature: number; num_predict: number; num_ctx: number };
 }
 
 interface Capture {
@@ -29,6 +29,7 @@ async function startFakeOllama(opts: {
   onRequest?: (c: Capture) => void;
   responder?: (b: ChatPayload) => { content: string };
   status?: number;
+  errorBody?: unknown;
 }): Promise<{ url: string; close: () => Promise<void> }> {
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -43,7 +44,7 @@ async function startFakeOllama(opts: {
       opts.onRequest?.({ url: req.url, body });
       if (opts.status !== undefined && opts.status >= 400) {
         res.writeHead(opts.status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'boom' }));
+        res.end(JSON.stringify(opts.errorBody ?? { error: 'boom' }));
         return;
       }
       const content = body ? opts.responder?.(body)?.content ?? '{}' : '{}';
@@ -104,7 +105,7 @@ test('OllamaProvider 走本地 /api/chat 并解析 content/usage（成本为 0�
   assert.equal(sent.body?.format, 'json');      // jsonMode → format=json
   assert.equal(sent.body?.stream, false);
   assert.equal(sent.body?.think, false);        // 快速任务显式禁用 Thinking 预算
-  assert.deepEqual(sent.body?.options, { temperature: 0.7, num_predict: 512 });
+  assert.deepEqual(sent.body?.options, { temperature: 0.7, num_predict: 512, num_ctx: 8192 });
 });
 
 test('small tier 使用 smallModel；jsonMode=false 不带 format', async (t) => {
@@ -207,9 +208,27 @@ test('Ollama 非 200 响应抛出可读错误（网关可重试）', async (t) =
   await assert.rejects(() => p.complete(req('large', true)), /Ollama 503/);
 });
 
+test('Ollama 嵌套上下文错误展开为完整可操作诊断', async (t) => {
+  const upstream = JSON.stringify({
+    error: {
+      code: 400,
+      message: 'request (4149 tokens) exceeds the available context size (4096 tokens), try increasing it',
+      type: 'exceed_context_size_error',
+      n_prompt_tokens: 4149,
+    },
+  });
+  const fake = await startFakeOllama({ status: 400, errorBody: { error: upstream } });
+  t.after(() => fake.close());
+  const provider = new OllamaProvider({ baseUrl: fake.url, model: 'qwen3:4b-instruct', numCtx: 8192, timeoutMs: 5000 });
+  await assert.rejects(
+    () => provider.complete(req('small', true)),
+    /提示词需要 4149 token，模型当前仅提供 4096 token 上下文；本次请求 num_ctx=8192.*OLLAMA_NUM_CTX/,
+  );
+});
+
 test('gatewayConfigFromEnv 解析 ollama 环境变量设置', () => {
   const prev: Record<string, string | undefined> = {};
-  const keys = ['LLM_PROVIDER', 'OLLAMA_PROFILE', 'OLLAMA_BASE_URL', 'OLLAMA_MODEL', 'OLLAMA_SMALL_MODEL', 'OLLAMA_KEEP_ALIVE', 'OLLAMA_AGENT_MODELS', 'OLLAMA_TIMEOUT_MS', 'LLM_MAX_CONCURRENCY', 'LLM_MAX_QUEUE'];
+  const keys = ['LLM_PROVIDER', 'OLLAMA_PROFILE', 'OLLAMA_BASE_URL', 'OLLAMA_MODEL', 'OLLAMA_SMALL_MODEL', 'OLLAMA_KEEP_ALIVE', 'OLLAMA_NUM_CTX', 'OLLAMA_AGENT_MODELS', 'OLLAMA_TIMEOUT_MS', 'LLM_MAX_CONCURRENCY', 'LLM_MAX_QUEUE'];
   for (const k of keys) prev[k] = process.env[k];
   process.env.LLM_PROVIDER = 'ollama';
   process.env.OLLAMA_PROFILE = 'qwen3-single';
@@ -217,6 +236,7 @@ test('gatewayConfigFromEnv 解析 ollama 环境变量设置', () => {
   process.env.OLLAMA_MODEL = 'llama3.1';
   process.env.OLLAMA_SMALL_MODEL = 'qwen2.5:1.5b';
   process.env.OLLAMA_KEEP_ALIVE = '12m';
+  process.env.OLLAMA_NUM_CTX = '16384';
   process.env.OLLAMA_AGENT_MODELS = '{"agent:lin":"deepseek-r1:8b"}';
   process.env.OLLAMA_TIMEOUT_MS = '7000';
   process.env.LLM_MAX_CONCURRENCY = '2';
@@ -232,6 +252,7 @@ test('gatewayConfigFromEnv 解析 ollama 环境变量设置', () => {
       model: 'llama3.1',
       smallModel: 'qwen2.5:1.5b',
       keepAlive: '12m',
+      numCtx: 16384,
       agentModels: { 'agent:lin': 'deepseek-r1:8b' },
       timeoutMs: 7000,
     });
@@ -245,7 +266,7 @@ test('gatewayConfigFromEnv 解析 ollama 环境变量设置', () => {
 });
 
 test('Ollama 免费推理预设默认单模型共享，并支持分层选择', () => {
-  const keys = ['LLM_PROVIDER', 'OLLAMA_PROFILE', 'OLLAMA_MODEL', 'OLLAMA_SMALL_MODEL', 'OLLAMA_KEEP_ALIVE', 'OLLAMA_AGENT_MODELS', 'LLM_MAX_CONCURRENCY', 'LLM_MAX_QUEUE'];
+  const keys = ['LLM_PROVIDER', 'OLLAMA_PROFILE', 'OLLAMA_MODEL', 'OLLAMA_SMALL_MODEL', 'OLLAMA_KEEP_ALIVE', 'OLLAMA_NUM_CTX', 'OLLAMA_AGENT_MODELS', 'LLM_MAX_CONCURRENCY', 'LLM_MAX_QUEUE'];
   const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.env.LLM_PROVIDER = 'ollama';
   for (const key of keys.slice(1)) delete process.env[key];
@@ -255,6 +276,7 @@ test('Ollama 免费推理预设默认单模型共享，并支持分层选择', (
       model: 'qwen3:4b',
       smallModel: 'qwen3:4b',
       keepAlive: '10m',
+      numCtx: 8192,
       timeoutMs: 120000,
     });
     assert.equal(gatewayConfigFromEnv().maxConcurrent, 1);
@@ -344,6 +366,7 @@ test('Ollama 配置拒绝无效 URL、模型和超时', () => {
   assert.throws(() => new OllamaProvider({ baseUrl: 'http://localhost:11434', model: 'qwen', timeoutMs: 0 }), /timeoutMs/);
   assert.throws(() => new OllamaProvider({ baseUrl: 'http://localhost:11434', model: 'qwen', keepAlive: 'forever', timeoutMs: 5000 }), /keepAlive/);
   assert.throws(() => new OllamaProvider({ baseUrl: 'http://localhost:11434', model: 'qwen', agentModels: { 'agent:a': ' ' }, timeoutMs: 5000 }), /agentModels/);
+  assert.throws(() => new OllamaProvider({ baseUrl: 'http://localhost:11434', model: 'qwen', numCtx: 1024, timeoutMs: 5000 }), /numCtx/);
 });
 
 test('Ollama 请求拒绝越界采样温度', async () => {
@@ -386,5 +409,22 @@ test('OLLAMA_TIMEOUT_MS 只接受正安全整数', () => {
     else process.env.LLM_PROVIDER = previousProvider;
     if (previousTimeout === undefined) delete process.env.OLLAMA_TIMEOUT_MS;
     else process.env.OLLAMA_TIMEOUT_MS = previousTimeout;
+  }
+});
+
+test('OLLAMA_NUM_CTX 只接受安全上下文窗口', () => {
+  const previousProvider = process.env.LLM_PROVIDER;
+  const previousNumCtx = process.env.OLLAMA_NUM_CTX;
+  process.env.LLM_PROVIDER = 'ollama';
+  try {
+    for (const value of ['1024', '8192.5', '262145']) {
+      process.env.OLLAMA_NUM_CTX = value;
+      assert.throws(() => gatewayConfigFromEnv(), /OLLAMA_NUM_CTX/);
+    }
+  } finally {
+    if (previousProvider === undefined) delete process.env.LLM_PROVIDER;
+    else process.env.LLM_PROVIDER = previousProvider;
+    if (previousNumCtx === undefined) delete process.env.OLLAMA_NUM_CTX;
+    else process.env.OLLAMA_NUM_CTX = previousNumCtx;
   }
 });

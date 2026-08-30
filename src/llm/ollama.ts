@@ -37,6 +37,7 @@ export interface OllamaConfig {
   model: string;       // large 层推理模型
   smallModel?: string; // 可选：small 层用小模型，默认同 model
   keepAlive?: string;  // Ollama 模型驻留时长，如 10m
+  numCtx?: number;     // 每次请求的上下文窗口，默认 8192
   agentModels?: Readonly<Record<string, string>>; // 可选居民级覆盖，不复制模型服务
   timeoutMs: number;   // 默认 120000（本地推理慢，需给足时间）
 }
@@ -50,6 +51,7 @@ export class OllamaProvider implements LLMProvider {
     const model = cfg.model.trim();
     const smallModel = cfg.smallModel?.trim();
     const keepAlive = cfg.keepAlive?.trim();
+    const numCtx = cfg.numCtx ?? 8192;
     if (!/^https?:\/\/[^\s]+$/i.test(baseUrl)) throw new Error('Ollama baseUrl 必须是有效的 HTTP(S) URL');
     if (!model) throw new Error('Ollama model 不能为空');
     if (cfg.smallModel !== undefined && !smallModel) throw new Error('Ollama smallModel 不能为空');
@@ -58,6 +60,9 @@ export class OllamaProvider implements LLMProvider {
     }
     if (!Number.isSafeInteger(cfg.timeoutMs) || cfg.timeoutMs <= 0 || cfg.timeoutMs > 2_147_483_647) {
       throw new Error('Ollama timeoutMs 必须是 1..2147483647 的整数毫秒值');
+    }
+    if (!Number.isSafeInteger(numCtx) || numCtx < 2048 || numCtx > 262_144) {
+      throw new Error('Ollama numCtx 必须是 2048..262144 的整数 token 数');
     }
     const agentModels = Object.fromEntries(Object.entries(cfg.agentModels ?? {}).map(([agentId, value]) => {
       const normalizedId = agentId.trim();
@@ -71,6 +76,7 @@ export class OllamaProvider implements LLMProvider {
       model,
       ...(smallModel ? { smallModel } : {}),
       ...(keepAlive ? { keepAlive } : {}),
+      numCtx,
       ...(Object.keys(agentModels).length ? { agentModels } : {}),
     };
   }
@@ -101,13 +107,16 @@ export class OllamaProvider implements LLMProvider {
         options: {
           temperature,
           num_predict: req.maxTokens,
+          // 服务端的 OLLAMA_CONTEXT_LENGTH 只提供默认值；请求级设置保证
+          // 桌面版、命令行和外部启动的 Ollama 都使用相同研究条件。
+          num_ctx: this.cfg.numCtx,
         },
       }),
       signal: AbortSignal.timeout(Math.min(this.cfg.timeoutMs, req.timeoutMs ?? this.cfg.timeoutMs)),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Ollama ${res.status}: ${body.slice(0, 200)}`);
+      throw new Error(ollamaHttpError(res.status, body, this.cfg.numCtx ?? 8192));
     }
     const data = (await res.json()) as {
       message?: { role?: string; content?: string };
@@ -134,6 +143,40 @@ export class OllamaProvider implements LLMProvider {
       performance: ollamaPerformance(data),
     };
   }
+}
+
+function ollamaHttpError(status: number, body: string, numCtx: number): string {
+  const detail = unwrapOllamaError(body);
+  const context = /request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)/i.exec(detail);
+  if (context) {
+    return `Ollama ${status}: 提示词需要 ${context[1]} token，模型当前仅提供 ${context[2]} token 上下文；本次请求 num_ctx=${numCtx}。请确认 Ollama 支持该窗口，或提高 OLLAMA_NUM_CTX。`;
+  }
+  return `Ollama ${status}: ${detail.slice(0, 500) || '请求失败且服务未返回错误详情'}`;
+}
+
+function unwrapOllamaError(body: string): string {
+  let value: unknown = body.trim();
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (typeof value === 'string') {
+      const textValue = value;
+      try {
+        value = JSON.parse(textValue) as unknown;
+        continue;
+      } catch {
+        return textValue;
+      }
+    }
+    if (value && typeof value === 'object' && 'error' in value) {
+      value = (value as { error: unknown }).error;
+      continue;
+    }
+    if (value && typeof value === 'object' && 'message' in value) {
+      const message = (value as { message: unknown }).message;
+      if (typeof message === 'string') return message;
+    }
+    break;
+  }
+  return typeof value === 'string' ? value : body.trim();
 }
 
 function ollamaPerformance(data: {
