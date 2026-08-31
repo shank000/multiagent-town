@@ -413,7 +413,7 @@ Ollama 按居民覆盖和任务层级路由模型：`OLLAMA_AGENT_MODELS` 可为
 
 Web 研究台通过同一个 `LLMGateway` 运行时切换 `MockProvider`、`OllamaProvider` 与 API provider。切换是共享网关上的原子操作，不重建居民、记忆库、关系库或已加载世界。服务端仅在人物对话完整结束、世界暂停、正式实验停止、居民思考已结算且活动请求与等待队列均为空时接受变更，并同步重设 provider 对应的并发、队列与吞吐样本。候选配置先执行独立 structured-output 探针；探针不进入世界状态。每次生效配置以 `llm_runtime_config_changed` 事件写入当前工作空间的全部世界，payload 记录模式、模型、上下文窗口和配置修订号，不记录 API Key。API Key 仅保存在当前服务进程内存，GET 状态只返回 `hasCredential`。
 
-动作 Schema 将 `idle + target:null` 与 `move_to/interact + 已知对象 id` 建模为互斥分支。`action-decision/v3` 在应用层继续执行可执行性校验：安全清理 `idle` 的冗余目标；`interact` 动词必须逐字来自目标 affordance、居民针对同一目标的明确作息或当前玩家指令；其他错误把校验原因与允许动词加入低温修正请求；两次无效时生成不含技术文本的短时休息动作。请求同时记录游戏时间、日期、地点、作息槽与玩家指令；返回时任一上下文变化或请求年龄超过 15 游戏分钟，结果标记为 `stale_rejected` 并在当前上下文重取。重取期间的局部时间屏障保证即使没有外层时间治理器，粗粒度 tick 也不会使替代响应连续过期。异常状态以 `action_decision_quality` 结构化事件留存，并从人物记忆、叙事接口和现场气泡中隔离；人物 `thought` 的 `decisionQuality` 字段提供 `valid/normalized/repaired/safe_fallback`、尝试次数、校验器版本和模型信息，支持按世界与居民计算动作修复率。
+动作 Schema 将 `idle + target:null` 与 `move_to/interact + 已知对象 id` 建模为互斥分支。`action-decision/v3` 在应用层继续执行可执行性校验：安全清理 `idle` 的冗余目标；`interact` 动词必须逐字来自目标 affordance、居民针对同一目标的明确作息或当前玩家指令；其他错误把校验原因与允许动词加入低温修正请求；两次无效时生成不含技术文本的短时休息动作。真实本地/API 请求同时记录运行模式、游戏时间、日期、地点、作息槽与玩家指令；返回时任一上下文变化或请求年龄超过 15 游戏分钟，结果标记为 `stale_rejected` 并在当前上下文重取。重取期间的局部时间屏障保证即使没有外层时间治理器，粗粒度 tick 也不会使替代响应连续过期。确定性 Mock 采用既有的下一 tick 离散结算轨迹，不以模拟 tick 间隔判定墙钟过期；真实异步模型的快速响应则在请求时刻同刻结算。异常状态以 `action_decision_quality` 结构化事件留存，并从人物记忆、叙事接口和现场气泡中隔离；人物 `thought` 的 `decisionQuality` 字段提供 `valid/normalized/repaired/safe_fallback`、尝试次数、校验器版本和模型信息，支持按世界与居民计算动作修复率。
 
 对话在持久化前经过 `dialogue-turn/v1`：用当前问题、会话前文、检索记忆、关系摘要和谣言载荷检查直接承接与事实边界；机械套话、近重复、无证据第三方人名、作品名和角色身份触发一次低温重写。第二个候选仍不合格时，台词由证据引用式保守回答生成，事件 payload 标记 `safe_fallback`。该门只控制叙事质量，不改写实验处理标签或伙伴选择。
 

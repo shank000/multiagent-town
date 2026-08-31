@@ -66,7 +66,7 @@ export class WorldLoop {
       await new Promise((r) => setTimeout(r, 0));
       // 快速响应在请求时刻直接结算；只有真正跨越时间/地点/作息上下文的响应才进入过期重取。
       for (const agent of this.world.allAgents()) {
-        if (agent.state === 'thinking') {
+        if (agent.state === 'thinking' && this.executor.shouldSettleDecisionSameTick(agent.id)) {
           this.executor.progress(agent, 0, clock.totalMinutes, options.realtimeSampling === true);
         }
       }

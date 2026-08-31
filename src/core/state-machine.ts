@@ -8,7 +8,7 @@ import { validateDecision, type ValidationResult } from '../llm/action-validator
 import { buildActionDecisionMessages, ACTION_DECISION_TEMPLATE } from '../llm/prompts';
 import type { MemoryBrief } from '../llm/prompts';
 import type { ReflectionMindState } from '../store/memory';
-import type { LLMGateway } from '../llm/gateway';
+import type { LLMGateway, LLMRuntimeMode } from '../llm/gateway';
 import type { LLMRequest } from '../llm/types';
 import type { WorldState } from './world';
 import type { EventLog } from '../store/events';
@@ -88,6 +88,7 @@ interface DecisionRequestContext {
   locationId: string;
   routineSlotKey: string | null;
   playerInstruction: string | null;
+  runtimeMode: LLMRuntimeMode;
 }
 
 export class AgentExecutor {
@@ -208,7 +209,7 @@ export class AgentExecutor {
     }
     const runtimeMode = this.llm.runtimeSnapshot().mode;
     const playerInstruction = this.player?.current(agent.id, now) ?? null;
-    const context = this.decisionRequestContext(agent, now, playerInstruction);
+    const context = this.decisionRequestContext(agent, now, playerInstruction, runtimeMode);
     const detailedObjectIds = new Set<string>([
       agent.locationId,
       agent.homeObjectId,
@@ -266,6 +267,12 @@ export class AgentExecutor {
   /** 过期响应的替代决策尚未落定时，世界循环不得继续推进虚拟时间。 */
   hasTemporalDecisionBarrier(): boolean {
     return this.temporalDecisionBarriers.size > 0;
+  }
+
+  /** 真实异步模型的快速响应在请求时刻结算；确定性 Mock 保留离线基线的下一 tick 轨迹。 */
+  shouldSettleDecisionSameTick(agentId: string): boolean {
+    const pending = this.pending.get(agentId);
+    return !!pending && pending.context.runtimeMode !== 'mock';
   }
 
   private async runDecision(
@@ -370,6 +377,7 @@ export class AgentExecutor {
     agent: Agent,
     now: number,
     playerInstruction: string | null,
+    runtimeMode: LLMRuntimeMode,
   ): DecisionRequestContext {
     return {
       requestedAt: now,
@@ -377,10 +385,13 @@ export class AgentExecutor {
       locationId: agent.locationId,
       routineSlotKey: this.routineSlotKey(agent, now),
       playerInstruction,
+      runtimeMode,
     };
   }
 
   private staleDecisionReasons(agent: Agent, context: DecisionRequestContext, now: number): string[] {
+    // Mock 是同步、确定性的离线模拟器；下一 tick 消费是既有离散时间语义，不代表模型响应过期。
+    if (context.runtimeMode === 'mock') return [];
     const reasons: string[] = [];
     const age = now - context.requestedAt;
     if (age < 0 || age > MAX_DECISION_AGE_MIN) {
