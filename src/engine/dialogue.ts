@@ -531,6 +531,7 @@ export class DialogueEngine {
             ...this.store.recentMemories(speaker.id, 8)
               .filter((item) => item.kind === 'observation')
               .map((item) => item.content),
+            ...s.openingEvidence,
           ], {
             priorTurns: s.turns.map((turn) => turn.content),
             speakerName: speaker.name,

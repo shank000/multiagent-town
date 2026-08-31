@@ -447,7 +447,15 @@ test('模型连续超过墙钟期限时以证据约束台词完成四轮并释�
     scopeId: 'w1', turnTimeoutMs: 20, summaryTimeoutMs: 20,
   });
   try {
-    assert.equal(dialogue.start(a, b, 10), true);
+    assert.equal(dialogue.start(a, b, 10, {
+      source: 'proximity',
+      trigger: {
+        initiatorId: a.id,
+        reason: 'observed_event',
+        evidence: ['甲刚看见乙在咖啡馆门口整理雨伞'],
+        evidenceEventIds: ['event:rain-umbrella'],
+      },
+    }), true);
     const waiting = dialogue.activeSessions()[0];
     assert.equal(waiting.phase, 'generating_model');
     assert.equal(waiting.speakerId, null);
@@ -462,6 +470,10 @@ test('模型连续超过墙钟期限时以证据约束台词完成四轮并释�
     assert.equal(stored.status, 'completed');
     assert.equal(stored.messages.length, 4);
     assert.ok(stored.messages.every((message) => message.content.length > 0));
+    assert.match(stored.messages[0].content, /咖啡馆门口整理雨伞/);
+    const started = log.eventsForDay(1).find((event) => event.payload?.kind === 'chat_start');
+    assert.deepEqual(started?.payload?.evidenceEventIds, ['event:rain-umbrella']);
+    assert.deepEqual(started?.payload?.openingEvidence, ['甲刚看见乙在咖啡馆门口整理雨伞']);
     const turns = log.eventsForDay(1).filter((event) => event.payload?.kind === 'chat');
     assert.equal(turns.length, 4);
     assert.ok(turns.every((event) => (
