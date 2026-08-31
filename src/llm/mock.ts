@@ -88,7 +88,7 @@ function extract(messages: ChatMessage[]): Record<string, unknown> {
 function decideAction(ctx: Record<string, unknown>): Decision {
   const instruction = ctx.playerInstruction as string | null | undefined;
   if (instruction) {
-    const objects = (ctx.objects ?? []) as { id: string; name: string }[];
+    const objects = (ctx.objects ?? []) as { id: string; name: string; affordances?: { verb: string }[] }[];
     const hit = objects.find((o) => instruction.includes(o.name));
     if (hit) {
       return { thought: `按玩家的指令：${instruction}`, action: { type: 'interact', target: hit.id, verb: instruction.slice(0, 20) }, durationMinutes: 15 };
@@ -99,7 +99,7 @@ function decideAction(ctx: Record<string, unknown>): Decision {
   const routine = (ctx.routine as RoutineSlot[]) ?? [];
   const guidance = Array.isArray(ctx.behaviorGuidance) ? (ctx.behaviorGuidance as string[]).filter(Boolean) : [];
   const mindState = (ctx.mindState ?? null) as { stress?: number; socialNeed?: number } | null;
-  const objects = (ctx.objects ?? []) as { id: string; name: string }[];
+  const objects = (ctx.objects ?? []) as { id: string; name: string; affordances?: { verb: string }[] }[];
   const hh = String(Math.floor(t / 60)).padStart(2, '0');
   const mm = String(t % 60).padStart(2, '0');
   const slot = routine.find((s) => t >= s.from && t < s.to);
@@ -121,9 +121,12 @@ function decideAction(ctx: Record<string, unknown>): Decision {
     ? objects.find((object) => guidance.some((item) => item.includes(object.name) || item.includes(object.id)))
     : undefined;
   if (guidedTarget) {
+    const groundedVerb = guidedTarget.affordances?.[0]?.verb;
     return {
       thought: `根据最近的反思，我准备落实「${guidance[0]}」。`,
-      action: { type: 'interact', target: guidedTarget.id, verb: '落实反思后的安排' },
+      action: groundedVerb
+        ? { type: 'interact', target: guidedTarget.id, verb: groundedVerb }
+        : { type: 'move_to', target: guidedTarget.id, verb: '前往落实反思安排' },
       durationMinutes: 10,
     };
   }

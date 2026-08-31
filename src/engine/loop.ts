@@ -45,6 +45,11 @@ export class WorldLoop {
 
   /** 推进一步（虚拟时钟下可连续调用）；默认 flush 一个宏任务让进行中的决策落定 */
   async step(options: { awaitDecisions?: boolean; realtimeSampling?: boolean } = {}): Promise<void> {
+    // 过期响应重取期间仅结算当前认知，不依赖外层实时调度器也不会形成“每 tick 再过期”的活锁。
+    if (this.executor.hasTemporalDecisionBarrier()) {
+      await this.settleCurrent();
+      return;
+    }
     const dt = this.time.tick();
     const clock = this.time.state;
     for (const agent of this.world.allAgents()) {
@@ -59,6 +64,12 @@ export class WorldLoop {
     }
     if (options.awaitDecisions !== false) {
       await new Promise((r) => setTimeout(r, 0));
+      // 快速响应在请求时刻直接结算；只有真正跨越时间/地点/作息上下文的响应才进入过期重取。
+      for (const agent of this.world.allAgents()) {
+        if (agent.state === 'thinking') {
+          this.executor.progress(agent, 0, clock.totalMinutes, options.realtimeSampling === true);
+        }
+      }
     }
     this.db.setMeta('game_time', String(clock.totalMinutes));
     this.hooks.onTick?.(clock);
@@ -103,15 +114,21 @@ export class WorldLoop {
   }
 
   isCognitivelyBackpressured(): boolean {
-    return !!(this.backpressure?.isBackpressured() || this.mind?.isBackpressured());
+    return !!(
+      this.executor.hasTemporalDecisionBarrier()
+      || this.backpressure?.isBackpressured()
+      || this.mind?.isBackpressured()
+    );
   }
 
   /** 认知队列拥塞时不推进游戏时间，只结算已完成的动作决策与对话。 */
   private async settleCurrent(): Promise<void> {
-    const now = this.time.state.totalMinutes;
-    for (const agent of this.world.allAgents()) this.executor.progress(agent, 0, now, true);
-    this.mind?.tick(this.world, 0, now, true);
     await new Promise((resolve) => setTimeout(resolve, 0));
+    const now = this.time.state.totalMinutes;
+    for (const agent of this.world.allAgents()) {
+      if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
+    }
+    this.mind?.tick(this.world, 0, now, true);
     this.hooks.onTick?.(this.time.state);
   }
 
@@ -130,11 +147,11 @@ export class WorldLoop {
 
   /** 暂停期间只结算已经生成完毕的居民决策，不为其他空闲居民创建新请求。 */
   async settlePendingDecisions(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const now = this.time.state.totalMinutes;
     for (const agent of this.world.allAgents()) {
       if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
     }
-    await new Promise((resolve) => setTimeout(resolve, 0));
     this.hooks.onTick?.(this.time.state);
   }
 }

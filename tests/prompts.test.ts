@@ -42,9 +42,29 @@ test('buildActionDecisionMessages 含 persona/时钟/JSON 指令/M0_CONTEXT', ()
   assert.ok(sys.includes('只输出 JSON'));
   assert.ok(sys.includes('近期记忆'));
   assert.ok(sys.includes('自我认知'));
+  assert.ok(sys.includes('"type":"move_to","target":"obj:cafe_counter"'));
+  assert.ok(!sys.includes('整理物品'));
   const user = messages.find((m) => m.role === 'user')!.content;
   assert.ok(user.includes('obj:cafe_counter'));
   assert.ok(user.includes('<M0_CONTEXT>'));
+});
+
+test('动作提示的 interact 示例逐字采用对象声明的 affordance', () => {
+  const agent = makeAgent({ persona: persona({ name: '甲', routine: [] }) });
+  const { messages } = buildActionDecisionMessages({
+    agent, day: 1, minuteOfDay: 600, locationName: '公园', playerInstruction: null,
+    objects: [{
+      id: 'obj:easel', name: '公园画架',
+      affordances: [{ verb: '在公园写生', outcome: '完成一幅街景速写' }],
+    }],
+    mockContext: {
+      persona: agent.persona, minuteOfDay: 600, routine: [], memories: [], insights: [], agenda: null,
+      playerInstruction: null, objects: [],
+    },
+  });
+  const system = messages[0].content;
+  assert.ok(system.includes('"target":"obj:easel","verb":"在公园写生"'));
+  assert.ok(!system.includes('整理物品'));
 });
 
 test('day 字段透传：第 2 天时钟正确', () => {

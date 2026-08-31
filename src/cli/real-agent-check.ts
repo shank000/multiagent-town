@@ -109,7 +109,11 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
   const minuteOfDay = 600;
   const activeRoutine = agent.persona.routine.find((slot) => slot.from <= minuteOfDay && minuteOfDay < slot.to);
   const world = buildTown();
-  const objects = world.allObjects().map((object) => ({ id: object.id, name: object.name }));
+  const objects = world.allObjects().map((object) => ({
+    id: object.id,
+    name: object.name,
+    ...(object.affordances?.length ? { affordances: object.affordances.map((item) => ({ ...item })) } : {}),
+  }));
   const locationName = world.getObject(agent.locationId)?.name ?? agent.locationId;
   const { messages } = buildActionDecisionMessages({
     agent,
@@ -137,7 +141,15 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
     jsonSchema: actionDecisionJsonSchema(objects.map((object) => object.id)),
     maxTokens: 512, temperature: 0.45, agentId: agent.id, reasoning: false,
   }));
-  const validated = validateDecision(response.parsed, (id) => world.hasObject(id));
+  const validated = validateDecision(response.parsed, (id) => world.hasObject(id), {
+    interactionVerbs: (targetId) => {
+      const declared = world.getObject(targetId)?.affordances?.map((item) => item.verb) ?? [];
+      const routine = agent.persona.routine
+        .filter((slot) => slot.type === 'interact' && slot.target === targetId)
+        .map((slot) => slot.verb);
+      return [...new Set([...declared, ...routine])];
+    },
+  });
   const expectedTarget = activeRoutine?.target ?? null;
   const followsRoutine = !expectedTarget || validated.decision.action.target === expectedTarget;
   const ok = validated.ok && followsRoutine;

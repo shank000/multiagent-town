@@ -12,8 +12,14 @@ import type { WorldObject } from '../src/core/types';
 
 const TEST_OBJECTS: WorldObject[] = [
   { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
-  { id: 'obj:home', name: '家', type: 'building', parentId: 'obj:town', x: 0, y: 0, w: 1, h: 1 },
-  { id: 'obj:work', name: '工作地', type: 'building', parentId: 'obj:town', x: 5, y: 0, w: 1, h: 1 },
+  {
+    id: 'obj:home', name: '家', type: 'building', parentId: 'obj:town', x: 0, y: 0, w: 1, h: 1,
+    affordances: [{ verb: '打扫', outcome: '保持住处整洁' }],
+  },
+  {
+    id: 'obj:work', name: '工作地', type: 'building', parentId: 'obj:town', x: 5, y: 0, w: 1, h: 1,
+    affordances: [{ verb: '工作', outcome: '完成当前职责' }],
+  },
 ];
 
 function setup(queue: (Error | { content: string; parsed?: unknown })[]) {
@@ -150,6 +156,87 @@ test('首次无效、反馈重试有效时采用修正动作并记录 repaired',
   const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
   assert.equal(diagnostic?.payload?.status, 'repaired');
   assert.equal(diagnostic?.payload?.attempts, 2);
+});
+
+test('公园画架的幻觉动词被拒绝，修复提示只允许作息声明动词', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const objects: WorldObject[] = [
+    { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 12, h: 8 },
+    { id: 'obj:easel', name: '公园画架', type: 'furniture', parentId: 'obj:town', x: 2, y: 2, w: 1, h: 1 },
+  ];
+  const agent = makeAgent({
+    id: 'agent:painter', name: '画家', x: 2, y: 2, locationId: 'obj:easel',
+    persona: persona({
+      name: '画家', occupation: '画家',
+      routine: [{ from: 480, to: 720, type: 'interact', target: 'obj:easel', verb: '在公园写生' }],
+    }),
+  });
+  const provider = new StubProvider([
+    {
+      content: '',
+      parsed: { thought: '修理画架', action: { type: 'interact', target: 'obj:easel', verb: '修理电器' }, duration_minutes: 10 },
+    },
+    {
+      content: '',
+      parsed: { thought: '按作息写生', action: { type: 'interact', target: 'obj:easel', verb: '在公园写生' }, duration_minutes: 10 },
+    },
+  ]);
+  const executor = new AgentExecutor(new LLMGateway({ provider, retries: 0 }), new WorldState(objects, [agent]), log);
+
+  executor.progress(agent, 0, 500);
+  await flush();
+  executor.progress(agent, 0, 500);
+
+  assert.equal(provider.calls, 2);
+  assert.equal(agent.action?.action.verb, '在公园写生');
+  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /verb 必须逐字选择.*在公园写生/);
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'repaired');
+  assert.deepEqual(diagnostic?.payload?.rejectionCodes, ['ungrounded_interaction']);
+  assert.ok(!log.eventsForDay(1).some((event) => event.payload?.kind === 'thought' && event.description.includes('修理电器')));
+});
+
+test('当前上下文中的 affordance 动词无需修复即可执行', async () => {
+  const { log, agent, executor, provider } = setup([{
+    content: '',
+    parsed: { thought: '整理工作', action: { type: 'interact', target: 'obj:home', verb: '打扫' }, duration_minutes: 10 },
+  }]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 25);
+
+  assert.equal(provider.calls, 1);
+  assert.equal(agent.action?.action.verb, '打扫');
+  assert.ok(!log.eventsForDay(1).some((event) => event.payload?.status === 'stale_rejected'));
+});
+
+test('跨过有效期的快速 tick 响应被丢弃，并在当前时刻重新决策', async () => {
+  const { log, agent, executor, provider } = setup([
+    {
+      content: '',
+      parsed: { thought: '旧安排', action: { type: 'interact', target: 'obj:home', verb: '打扫' }, duration_minutes: 10 },
+    },
+    {
+      content: '',
+      parsed: { thought: '当前安排', action: { type: 'interact', target: 'obj:home', verb: '打扫' }, duration_minutes: 10 },
+    },
+  ]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 30);
+  await flush();
+  executor.progress(agent, 0, 30);
+
+  assert.equal(provider.calls, 2);
+  assert.equal(agent.thought, '当前安排');
+  const diagnostics = log.eventsForDay(1).filter((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].payload?.status, 'stale_rejected');
+  assert.deepEqual(diagnostics[0].payload?.rejectionCodes, ['stale_context']);
+  const thoughts = log.eventsForDay(1).filter((event) => event.payload?.kind === 'thought');
+  assert.equal(thoughts.length, 1);
+  assert.match(thoughts[0].description, /当前安排/);
 });
 
 test('动作 JSON Schema 用互斥分支约束 idle 与有目标动作', () => {

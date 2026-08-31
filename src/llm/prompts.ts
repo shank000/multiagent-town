@@ -128,9 +128,25 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
   const guidanceText = input.mockContext.behaviorGuidance?.join('；') || '（暂无）';
   const mindState = input.mockContext.mindState;
   const agendaText = input.mockContext.agenda ?? '（暂无，自由安排）';
-  const actionTargetExample = input.objects.find((object) => object.id !== input.agent.locationId)?.id
-    ?? input.objects[0]?.id
-    ?? 'obj:available';
+  const affordedExample = input.objects.find((object) => object.affordances?.length);
+  const travelExample = input.objects.find((object) => object.id !== input.agent.locationId) ?? input.objects[0];
+  const actionExample = affordedExample
+    ? {
+        thought: `使用${affordedExample.name}已声明的功能`,
+        action: { type: 'interact', target: affordedExample.id, verb: affordedExample.affordances![0].verb },
+        duration_minutes: 10,
+      }
+    : travelExample
+      ? {
+          thought: '先前往可用地点观察',
+          action: { type: 'move_to', target: travelExample.id, verb: '前往目标地点' },
+          duration_minutes: 10,
+        }
+      : {
+          thought: '当前没有可用目标，稍作休息',
+          action: { type: 'idle', target: null, verb: '休息' },
+          duration_minutes: 10,
+        };
   const system = [
     `你是 ${personaText(p)}`,
     `当前时间：${TimeEngine.format(clock)}。你现在在「${input.locationName}」。`,
@@ -150,10 +166,10 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
     `决定接下来 5~15 分钟做什么。地点必须从给定对象里选。`,
     'thought 只解释这一个即时行动，事实只能来自以上上下文；未来意图要写成“准备/打算”，不得把未观察到的事件写成已经发生，也不得描述 action 未编码的额外行动。',
     '动作字段必须匹配：idle 只能使用 JSON null 作为 target；move_to/interact 必须使用可用对象的 id 作为 target。',
-    '带有 affordances 的公共物件可以被观察和使用；选择 interact 时优先采用与人物背景、当前记忆和现场状态相符的 affordance verb，不要机械轮换物件。',
+    'interact 是可执行动作：verb 必须逐字选用目标对象 affordances 中的 verb，或人物作息里同一 target 已明确声明的 verb；明确玩家指令中的动作短语也可作为授权。目标没有这些声明时，只能 move_to 前往观察或 idle，不得发明交互动词。',
     '对象中的 state 只会在你处于可感知范围内时出现，可把它当作当前亲眼看到、听到或闻到的现场线索。',
     'idle 示例：{"thought":"稍作休息","action":{"type":"idle","target":null,"verb":"休息"},"duration_minutes":10}',
-    `非 idle 示例：{"thought":"去目标地点整理物品","action":{"type":"interact","target":${JSON.stringify(actionTargetExample)},"verb":"整理物品"},"duration_minutes":10}`,
+    `动作示例：${JSON.stringify(actionExample)}`,
     `只输出 JSON：一个符合上述约束的对象。`,
   ].join('\n');
   const user = input.includeMockContext === false

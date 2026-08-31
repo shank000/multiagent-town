@@ -14,6 +14,34 @@ test('合法 interact 通过并保持字段', () => {
   assert.equal(r.decision.durationMinutes, 10);
 });
 
+test('interact 动词必须由目标 affordance、作息或明确玩家指令落地', () => {
+  const context = {
+    interactionVerbs: (targetId: string) => targetId === 'obj:park' ? ['在公园写生'] : ['煮咖啡'],
+  };
+  const hallucinated = validateDecision(
+    { thought: '检查画架', action: { type: 'interact', target: 'obj:park', verb: '修理电器' }, duration_minutes: 10 },
+    has,
+    context,
+  );
+  assert.equal(hallucinated.ok, false);
+  assert.equal(hallucinated.errorCode, 'ungrounded_interaction');
+  assert.match(hallucinated.error ?? '', /允许动词：在公园写生/);
+
+  const routineVerb = validateDecision(
+    { thought: '开始写生', action: { type: 'interact', target: 'obj:park', verb: '在公园写生' }, duration_minutes: 10 },
+    has,
+    context,
+  );
+  assert.equal(routineVerb.ok, true);
+
+  const playerVerb = validateDecision(
+    { thought: '服从指令', action: { type: 'interact', target: 'obj:park', verb: '给画架系红丝带' }, duration_minutes: 10 },
+    has,
+    { ...context, playerInstruction: '请去公园给画架系红丝带' },
+  );
+  assert.equal(playerVerb.ok, true);
+});
+
 test('未知目标 → 不通过且降级为 idle', () => {
   const r = validateDecision({ action: { type: 'interact', target: 'obj:mars' }, duration_minutes: 10 }, has);
   assert.equal(r.ok, false);

@@ -19,15 +19,18 @@ import { initialMindStateOf } from '../engine/agent-profile';
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
 
-const ACTION_DECISION_VALIDATOR = 'action-decision/v2';
+const ACTION_DECISION_VALIDATOR = 'action-decision/v3';
+const MAX_DECISION_AGE_MIN = 15;
 
-type ActionDecisionQualityStatus = 'valid' | 'normalized' | 'repaired' | 'safe_fallback';
+type ActionDecisionQualityStatus = 'valid' | 'normalized' | 'repaired' | 'safe_fallback' | 'stale_rejected';
+type ActionDecisionRejectionCode = 'ungrounded_interaction' | 'stale_context';
 
 interface ActionDecisionQuality {
   status: ActionDecisionQualityStatus;
   attempts: number;
   validator: typeof ACTION_DECISION_VALIDATOR;
   model?: string;
+  rejectionCodes?: ActionDecisionRejectionCode[];
 }
 
 /** 动作类型与目标使用互斥分支，结构化生成阶段即可遵守跨字段约束。 */
@@ -70,12 +73,27 @@ export function actionDecisionJsonSchema(objectIds: readonly string[]): Record<s
 }
 
 interface PendingDecision {
-  resolved: Decision | null;
+  resolved: {
+    decision: Decision;
+    quality: ActionDecisionQuality;
+    reasons: string[];
+  } | null;
   error: string | null;
+  context: DecisionRequestContext;
+}
+
+interface DecisionRequestContext {
+  requestedAt: number;
+  day: number;
+  locationId: string;
+  routineSlotKey: string | null;
+  playerInstruction: string | null;
 }
 
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
+  /** 过期响应触发重取后冻结虚拟时间，直到新上下文中的响应落定或失败。 */
+  private temporalDecisionBarriers = new Set<string>();
   private blockCount = new Map<string, number>();
   private fallbackStreak = new Map<string, number>();
   private activeDecisions = new Set<Promise<void>>();
@@ -97,13 +115,49 @@ export class AgentExecutor {
       if (!entry) return;
       if (entry.error) {
         this.pending.delete(agent.id);
+        this.temporalDecisionBarriers.delete(agent.id);
         agent.state = 'idle';
         agent.lastDecisionAt = now;
         return;
       }
       if (entry.resolved) {
         this.pending.delete(agent.id);
-        this.beginAction(agent, entry.resolved, now);
+        const staleReasons = this.staleDecisionReasons(agent, entry.context, now);
+        if (staleReasons.length > 0) {
+          agent.state = 'idle';
+          agent.lastDecisionAt = now;
+          const rejectionCodes = [...new Set([
+            ...(entry.resolved.quality.rejectionCodes ?? []),
+            'stale_context' as const,
+          ])];
+          this.log.addEvent(this.actionQualityEvent(agent, {
+            ...entry.resolved.quality,
+            status: 'stale_rejected',
+            rejectionCodes,
+          }, [...entry.resolved.reasons, ...staleReasons], now));
+          const scheduledSleep = this.sleepRoutineDecision(agent, now);
+          if (scheduledSleep) {
+            this.temporalDecisionBarriers.delete(agent.id);
+            this.log.addEvent(this.thoughtEvent(agent, scheduledSleep, now));
+            this.beginAction(agent, scheduledSleep, now);
+          } else {
+            // 新请求期间冻结虚拟时间，避免粗粒度 tick 令每次重取都再次过期。
+            this.temporalDecisionBarriers.add(agent.id);
+            this.requestDecision(agent, now);
+          }
+          return;
+        }
+        this.temporalDecisionBarriers.delete(agent.id);
+        if (entry.resolved.quality.status !== 'valid') {
+          this.log.addEvent(this.actionQualityEvent(
+            agent,
+            entry.resolved.quality,
+            entry.resolved.reasons,
+            now,
+          ));
+        }
+        this.log.addEvent(this.thoughtEvent(agent, entry.resolved.decision, now, entry.resolved.quality));
+        this.beginAction(agent, entry.resolved.decision, now);
       }
       return;
     }
@@ -154,6 +208,7 @@ export class AgentExecutor {
     }
     const runtimeMode = this.llm.runtimeSnapshot().mode;
     const playerInstruction = this.player?.current(agent.id, now) ?? null;
+    const context = this.decisionRequestContext(agent, now, playerInstruction);
     const detailedObjectIds = new Set<string>([
       agent.locationId,
       agent.homeObjectId,
@@ -196,9 +251,9 @@ export class AgentExecutor {
       jsonSchema: actionDecisionJsonSchema(this.world.allObjects().map((object) => object.id)), maxTokens: 256,
       temperature: 0.45, reasoning: false, agentId: agent.id, priority: 'action', scopeId: this.scopeId, timeoutMs: 60_000,
     };
-    const entry: PendingDecision = { resolved: null, error: null };
+    const entry: PendingDecision = { resolved: null, error: null, context };
     this.pending.set(agent.id, entry);
-    const task = this.runDecision(agent, req, entry, now);
+    const task = this.runDecision(agent, req, entry, now, playerInstruction);
     this.activeDecisions.add(task);
     void task.finally(() => this.activeDecisions.delete(task));
   }
@@ -208,20 +263,36 @@ export class AgentExecutor {
     while (this.activeDecisions.size > 0) await Promise.allSettled(this.activeDecisions);
   }
 
-  private async runDecision(agent: Agent, req: LLMRequest, entry: PendingDecision, now: number): Promise<void> {
+  /** 过期响应的替代决策尚未落定时，世界循环不得继续推进虚拟时间。 */
+  hasTemporalDecisionBarrier(): boolean {
+    return this.temporalDecisionBarriers.size > 0;
+  }
+
+  private async runDecision(
+    agent: Agent,
+    req: LLMRequest,
+    entry: PendingDecision,
+    now: number,
+    playerInstruction: string | null,
+  ): Promise<void> {
     try {
       let attempts = 1;
       const reasons: string[] = [];
+      const rejectionCodes = new Set<ActionDecisionRejectionCode>();
       let response = await this.llm.complete(req);
       let model = response.performance?.model;
-      let validation = this.validate(response.parsed);
+      let validation = this.validate(agent, response.parsed, playerInstruction);
       if (!validation.ok) {
         reasons.push(validation.error ?? '动作决策未通过校验');
+        if (validation.errorCode === 'ungrounded_interaction') rejectionCodes.add('ungrounded_interaction');
         attempts = 2;
-        response = await this.llm.complete(this.repairRequest(req, response.parsed, reasons[0]));
+        response = await this.llm.complete(this.repairRequest(agent, req, response.parsed, reasons[0], playerInstruction));
         model = response.performance?.model ?? model;
-        validation = this.validate(response.parsed);
-        if (!validation.ok) reasons.push(validation.error ?? '修正后的动作决策未通过校验');
+        validation = this.validate(agent, response.parsed, playerInstruction);
+        if (!validation.ok) {
+          reasons.push(validation.error ?? '修正后的动作决策未通过校验');
+          if (validation.errorCode === 'ungrounded_interaction') rejectionCodes.add('ungrounded_interaction');
+        }
       }
 
       let status: ActionDecisionQualityStatus;
@@ -241,19 +312,31 @@ export class AgentExecutor {
         attempts,
         validator: ACTION_DECISION_VALIDATOR,
         ...(model ? { model } : {}),
+        ...(rejectionCodes.size ? { rejectionCodes: [...rejectionCodes] } : {}),
       };
-      if (status !== 'valid') this.log.addEvent(this.actionQualityEvent(agent, quality, reasons, now));
       const decision = this.enforceSleepRoutine(agent, selected, now);
-      entry.resolved = decision;
-      this.log.addEvent(this.thoughtEvent(agent, decision, now, quality));
+      entry.resolved = { decision, quality, reasons };
     } catch (e) {
       entry.error = e instanceof Error ? e.message : String(e);
       console.warn(`[agent-decision] agent=${agent.id} template=${req.template} failed: ${entry.error}`);
     }
   }
 
-  private repairRequest(req: LLMRequest, invalid: unknown, reason: string): LLMRequest {
+  private repairRequest(
+    agent: Agent,
+    req: LLMRequest,
+    invalid: unknown,
+    reason: string,
+    playerInstruction: string | null,
+  ): LLMRequest {
     const previous = safeJson(invalid).slice(0, 1_200);
+    const target = targetFromDecision(invalid);
+    const allowed = target ? this.interactionVerbs(agent, target) : [];
+    const groundingRule = allowed.length
+      ? `若使用 interact，verb 必须逐字选择目标已声明动词之一：${allowed.join('、')}。`
+      : playerInstruction
+        ? `若使用 interact，verb 必须来自明确玩家指令「${playerInstruction}」中的动作短语。`
+        : '若目标没有已声明交互动词，请改用 move_to 或 idle，不得发明 interact 动词。';
     return {
       ...req,
       temperature: 0.1,
@@ -262,14 +345,64 @@ export class AgentExecutor {
         { role: 'assistant', content: previous },
         {
           role: 'user',
-          content: `上一个动作 JSON 未通过校验：${reason}。请只修正 JSON，不要解释。idle 的 target 必须是 null；move_to/interact 的 target 必须是可用对象 id。`,
+          content: `上一个动作 JSON 未通过校验：${reason}。请只修正 JSON，不要解释。idle 的 target 必须是 null；move_to/interact 的 target 必须是可用对象 id。${groundingRule}`,
         },
       ],
     };
   }
 
-  private validate(parsed: unknown): ValidationResult {
-    return validateDecision(parsed, (id) => this.world.hasObject(id));
+  private validate(agent: Agent, parsed: unknown, playerInstruction: string | null): ValidationResult {
+    return validateDecision(parsed, (id) => this.world.hasObject(id), {
+      interactionVerbs: (targetId) => this.interactionVerbs(agent, targetId),
+      playerInstruction,
+    });
+  }
+
+  private interactionVerbs(agent: Agent, targetId: string): string[] {
+    const declared = this.world.getObject(targetId)?.affordances?.map((item) => item.verb) ?? [];
+    const routine = agent.persona.routine
+      .filter((slot) => slot.type === 'interact' && slot.target === targetId)
+      .map((slot) => slot.verb);
+    return [...new Set([...declared, ...routine].map((item) => item.trim()).filter(Boolean))];
+  }
+
+  private decisionRequestContext(
+    agent: Agent,
+    now: number,
+    playerInstruction: string | null,
+  ): DecisionRequestContext {
+    return {
+      requestedAt: now,
+      day: Math.floor(now / MINUTES_PER_DAY) + 1,
+      locationId: agent.locationId,
+      routineSlotKey: this.routineSlotKey(agent, now),
+      playerInstruction,
+    };
+  }
+
+  private staleDecisionReasons(agent: Agent, context: DecisionRequestContext, now: number): string[] {
+    const reasons: string[] = [];
+    const age = now - context.requestedAt;
+    if (age < 0 || age > MAX_DECISION_AGE_MIN) {
+      reasons.push(`决策上下文已过期：请求于 ${context.requestedAt}，当前为 ${now}，有效期 ${MAX_DECISION_AGE_MIN} 分钟`);
+    }
+    const day = Math.floor(now / MINUTES_PER_DAY) + 1;
+    if (day !== context.day) reasons.push(`决策日期已从第 ${context.day} 天变为第 ${day} 天`);
+    if (agent.locationId !== context.locationId) {
+      reasons.push(`居民位置已从「${context.locationId}」变为「${agent.locationId}」`);
+    }
+    if (this.routineSlotKey(agent, now) !== context.routineSlotKey) {
+      reasons.push('居民当前作息槽已变化');
+    }
+    const playerInstruction = this.player?.current(agent.id, now) ?? null;
+    if (playerInstruction !== context.playerInstruction) reasons.push('玩家指令上下文已变化');
+    return reasons;
+  }
+
+  private routineSlotKey(agent: Agent, now: number): string | null {
+    const minuteOfDay = now % MINUTES_PER_DAY;
+    const slot = agent.persona.routine.find((item) => item.from <= minuteOfDay && minuteOfDay < item.to);
+    return slot ? JSON.stringify([slot.from, slot.to, slot.type, slot.target, slot.verb]) : null;
   }
 
   private safeFallbackDecision(agent: Agent): Decision {
@@ -485,12 +618,15 @@ export class AgentExecutor {
   }
 
   private actionQualityEvent(agent: Agent, quality: ActionDecisionQuality, reasons: string[], now: number): GameEvent {
+    const description = quality.status === 'stale_rejected'
+      ? `${agent.name} 的动作决策因上下文变化进入重新决策。`
+      : `${agent.name} 的动作决策完成了可执行性校验。`;
     return {
       id: randomUUID(),
       type: 'system',
       actorId: agent.id,
       targetIds: [],
-      description: `${agent.name} 的动作决策完成了结构质量校正。`,
+      description,
       location: agent.locationId,
       gameTime: now,
       payload: { kind: 'action_decision_quality', ...quality, reasons },
@@ -504,4 +640,12 @@ function safeJson(value: unknown): string {
   } catch {
     return '{}';
   }
+}
+
+function targetFromDecision(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const action = (value as { action?: unknown }).action;
+  if (!action || typeof action !== 'object') return null;
+  const target = (action as { target?: unknown }).target;
+  return typeof target === 'string' ? target : null;
 }
