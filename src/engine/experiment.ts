@@ -103,6 +103,11 @@ export class PartnerChoiceExperiment {
 
     for (const { agent, partner, snapshot } of decisions) {
       if (partner === null) continue;
+      const reservation = this.mind.dialogue.reserve(agent, partner, now, {
+        requireAdjacent: false,
+        source: 'experiment',
+        world: this.world,
+      });
       this.log.addEvent({
         id: randomUUID(),
         type: 'chat',
@@ -116,13 +121,13 @@ export class PartnerChoiceExperiment {
           mode: this.cfg.historyAccess,
           candidates: snapshot,
           chosen: partner.id,
+          conversationId: reservation.conversationId,
+          conversationStatus: reservation.status,
         },
       });
       if (this.cfg.giftExchange === 'on') this.gift(agent, partner, now);
-      if (!this.mind.dialogue.isActive(agent.id, partner.id)) {
-        this.mind.dialogue.start(agent, partner, now, { requireAdjacent: false, source: 'experiment', world: this.world });
-      }
     }
+    this.mind.dialogue.dispatchReservations(this.world, now);
   }
 
   /** 馈礼：工资购买 → 花店订单履约 → 收礼方库存入账 → 关系证据同步。 */

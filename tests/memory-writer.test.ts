@@ -46,12 +46,15 @@ test('importance 经 mock 打分（派对→9）', async () => {
   assert.equal(store.recentMemories('agent:林晚晴', 1)[0].importance, 9);
 });
 
-test('reflection、动作质量记录与非 agent 事件不写库', async () => {
+test('reflection、动作质量、对话生命周期与非 agent 事件不写库', async () => {
   const { log, store } = setup();
   // 反思已由引擎直接写入 insight，事件不再重复入库
   log.addEvent(ev('e1', 900, '林晚晴 反思自己。', 'system', 'agent:林晚晴', { kind: 'reflection', insights: ['我最近常去咖啡馆。'] }));
   log.addEvent(ev('e-quality', 900, '林晚晴 的动作决策完成了结构质量校正。', 'system', 'agent:林晚晴', {
     kind: 'action_decision_quality', status: 'normalized', validator: 'action-decision/v2', attempts: 1,
+  }));
+  log.addEvent(ev('e-lifecycle', 900, '林晚晴与陈默的安排会话已排队。', 'system', 'agent:林晚晴', {
+    kind: 'dialogue_lifecycle', conversationId: 'conversation:1', status: 'queued', toId: 'agent:陈默',
   }));
   // 非 agent：obj:cafe 无 agent 参与，不打分不写库
   log.addEvent(ev('e2', 901, '咖啡馆 开始营业。', 'system', 'obj:cafe'));

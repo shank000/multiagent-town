@@ -34,7 +34,12 @@ export class MemoryWriter {
   }
 
   async onEvent(e: GameEvent): Promise<void> {
-    if (e.payload?.kind === 'day_start' || e.payload?.kind === 'thought' || e.payload?.kind === 'action_decision_quality') return;
+    if (
+      e.payload?.kind === 'day_start'
+      || e.payload?.kind === 'thought'
+      || e.payload?.kind === 'action_decision_quality'
+      || e.payload?.kind === 'dialogue_lifecycle'
+    ) return;
     // 反思/对话摘要已由引擎直接写入（insight/dialogue_summary），事件不再重复入库
     if (e.payload?.kind === 'reflection' || e.payload?.kind === 'chat_summary') return;
     const day = Math.floor(e.gameTime / MINUTES_PER_DAY) + 1;

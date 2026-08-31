@@ -39,6 +39,21 @@ interface Session {
   lastUtterAt: number;
   phase: 'active' | 'finishing' | 'completed';
   conversationId: string;
+  lifecycle: boolean;
+  source: NonNullable<DialogueStartOptions['source']>;
+  locationId: string | null;
+  requestedGameTime: number;
+}
+
+interface Reservation {
+  conversationId: string;
+  aId: string;
+  aName: string;
+  bId: string;
+  bName: string;
+  requestedGameTime: number;
+  locationId: string | null;
+  options: DialogueStartOptions;
 }
 
 interface Pending {
@@ -75,6 +90,11 @@ export interface DialogueStartOptions {
   world?: WorldState;
 }
 
+export interface DialogueReservation {
+  conversationId: string;
+  status: 'queued';
+}
+
 export interface DialogueEngineOptions {
   scopeId?: string;
   turnTimeoutMs?: number;
@@ -89,6 +109,7 @@ function pairKey(a: string, b: string): string {
 
 export class DialogueEngine {
   private sessions = new Map<string, Session>();
+  private reservations: Reservation[] = [];
   private pending = new Map<string, Pending>();
   private activeTasks = new Set<Promise<void>>();
   private knownResidentNames = new Set<string>();
@@ -125,6 +146,12 @@ export class DialogueEngine {
     ));
   }
 
+  private isParticipantReserved(agentId: string): boolean {
+    return this.reservations.some((reservation) => (
+      reservation.aId === agentId || reservation.bId === agentId
+    ));
+  }
+
   /** 快照用只读投影；不暴露可变 turns/session 引用。 */
   activeSessions(): ActiveConversation[] {
     return [...this.sessions.values()]
@@ -158,12 +185,63 @@ export class DialogueEngine {
     this.knownResidentNames.add(b.name);
     const requireAdjacent = options.requireAdjacent ?? true;
     if (a.id === b.id || (requireAdjacent && Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) > 1)) return false;
+    if (this.isParticipantReserved(a.id) || this.isParticipantReserved(b.id)) return false;
     if (this.isParticipantActive(a.id) || this.isParticipantActive(b.id)) return false;
     const key = pairKey(a.id, b.id);
     if (this.sessions.has(key)) return false;
+    this.startSession(a, b, now, options, randomUUID(), false);
+    return true;
+  }
+
+  /**
+   * 为一次必须履行的安排会话取得稳定 ID 并进入有序队列。
+   * 排队本身不占用参与者锁；实际启动仍复用 start 的会话锁和生成流程。
+   */
+  reserve(a: Agent, b: Agent, now: number, options: DialogueStartOptions = {}): DialogueReservation {
+    if (a.id === b.id) throw new Error('不能为同一居民预留自我对话');
+    const requireAdjacent = options.requireAdjacent ?? true;
+    if (requireAdjacent && Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) > 1) {
+      throw new Error('相邻会话只能为当前相邻的居民预留');
+    }
+    this.knownResidentNames.add(a.name);
+    this.knownResidentNames.add(b.name);
+    const conversationId = randomUUID();
+    const reservation: Reservation = {
+      conversationId,
+      aId: a.id,
+      aName: a.name,
+      bId: b.id,
+      bName: b.name,
+      requestedGameTime: now,
+      locationId: a.locationId,
+      options: { ...options },
+    };
+    this.reservations.push(reservation);
+    this.emitLifecycle(reservation, 'queued', now);
+    return { conversationId, status: 'queued' };
+  }
+
+  /** 尝试启动所有参与者已空闲的预留；返回本次实际启动数。 */
+  dispatchReservations(world: WorldState, now: number): number {
+    return this.startReservations(world, now);
+  }
+
+  private startSession(
+    a: Agent,
+    b: Agent,
+    now: number,
+    options: DialogueStartOptions,
+    conversationId: string,
+    lifecycle: boolean,
+    requestedGameTime = now,
+  ): void {
+    const key = pairKey(a.id, b.id);
+    const requireAdjacent = options.requireAdjacent ?? true;
     const s: Session = {
       a: a.id, aName: a.name, b: b.id, bName: b.name,
-      turns: [], lastUtterAt: now, phase: 'active', conversationId: randomUUID(),
+      turns: [], lastUtterAt: now, phase: 'active', conversationId, lifecycle,
+      source: options.source ?? 'manual', locationId: a.locationId,
+      requestedGameTime,
     };
     this.store.startConversation({ id: s.conversationId, agentA: s.a, agentB: s.b, startedGameTime: now });
     this.sessions.set(key, s);
@@ -177,8 +255,8 @@ export class DialogueEngine {
         arranged: !requireAdjacent,
       },
     });
+    if (lifecycle) this.emitLifecycle(s, 'started', now);
     this.speak(a, b, s, now, options.world);
-    return true;
   }
 
   /** 等待已发出的说话与摘要任务落定，保证安全关闭后不再访问数据库。 */
@@ -198,6 +276,7 @@ export class DialogueEngine {
       if (p?.error) {
         try {
           this.store.finishConversation(s.conversationId, 'error', now, { errorText: p.error });
+          if (s.lifecycle) this.emitLifecycle(s, 'failed', now, p.error);
         } finally {
           s.phase = 'completed';
           this.sessions.delete(key);
@@ -216,6 +295,53 @@ export class DialogueEngine {
         this.speak(speaker, other, s, now, world);
       }
     }
+    this.dispatchReservations(world, now);
+  }
+
+  private startReservations(world: WorldState, now: number): number {
+    if (!this.reservations.length) return 0;
+    const remaining: Reservation[] = [];
+    const deferredParticipants = new Set<string>();
+    let started = 0;
+    for (const reservation of this.reservations) {
+      if (
+        deferredParticipants.has(reservation.aId)
+        || deferredParticipants.has(reservation.bId)
+        || this.isParticipantActive(reservation.aId)
+        || this.isParticipantActive(reservation.bId)
+      ) {
+        remaining.push(reservation);
+        deferredParticipants.add(reservation.aId);
+        deferredParticipants.add(reservation.bId);
+        continue;
+      }
+      try {
+        const a = world.getAgent(reservation.aId);
+        const b = world.getAgent(reservation.bId);
+        const requireAdjacent = reservation.options.requireAdjacent ?? true;
+        if (requireAdjacent && Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) > 1) {
+          remaining.push(reservation);
+          deferredParticipants.add(reservation.aId);
+          deferredParticipants.add(reservation.bId);
+          continue;
+        }
+        this.startSession(
+          a,
+          b,
+          now,
+          reservation.options,
+          reservation.conversationId,
+          true,
+          reservation.requestedGameTime,
+        );
+        started += 1;
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        this.emitLifecycle(reservation, 'failed', now, errorText);
+      }
+    }
+    this.reservations = remaining;
+    return started;
   }
 
   private speak(speaker: Agent, other: Agent, s: Session, now: number, world?: WorldState): void {
@@ -426,11 +552,13 @@ export class DialogueEngine {
         this.store.addMemory({ agentId: id, kind: 'dialogue_summary', content: `第${Math.floor(now / 1440) + 1}天 对话摘要：${summary}`, importance: 7, createdGameTime: now });
       }
       this.store.finishConversation(s.conversationId, 'completed', now, { summary });
+      if (s.lifecycle) this.emitLifecycle(s, 'completed', now);
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
       console.warn(`[dialogue-summary] conversation=${s.conversationId} failed: ${errorText}`);
       try {
         this.store.finishConversation(s.conversationId, 'error', now, { errorText });
+        if (s.lifecycle) this.emitLifecycle(s, 'failed', now, errorText);
       } catch {
         /* 会话锁仍须在最终阶段释放，持久层错误由调用方健康检查捕获。 */
       }
@@ -439,6 +567,54 @@ export class DialogueEngine {
       s.phase = 'completed';
     }
   }
+
+  private emitLifecycle(
+    conversation: Pick<Reservation, 'conversationId' | 'aId' | 'aName' | 'bId' | 'bName' | 'locationId' | 'options' | 'requestedGameTime'>
+      | Session,
+    status: 'queued' | 'started' | 'completed' | 'failed',
+    now: number,
+    errorText?: string,
+  ): void {
+    const reservation = 'aId' in conversation
+      ? conversation
+      : {
+          conversationId: conversation.conversationId,
+          aId: conversation.a,
+          aName: conversation.aName,
+          bId: conversation.b,
+          bName: conversation.bName,
+          locationId: conversation.locationId,
+          options: { source: conversation.source },
+          requestedGameTime: conversation.requestedGameTime,
+        };
+    this.log.addEvent({
+      id: randomUUID(),
+      type: 'system',
+      actorId: reservation.aId,
+      targetIds: [reservation.bId],
+      description: `「${reservation.aName}」与「${reservation.bName}」的安排会话${lifecycleLabel(status)}`,
+      location: reservation.locationId,
+      gameTime: now,
+      payload: {
+        kind: 'dialogue_lifecycle',
+        conversationId: reservation.conversationId,
+        status,
+        fromId: reservation.aId,
+        toId: reservation.bId,
+        source: reservation.options.source ?? 'manual',
+        requestedGameTime: reservation.requestedGameTime,
+        waitMinutes: Math.max(0, now - reservation.requestedGameTime),
+        ...(errorText ? { errorText } : {}),
+      },
+    });
+  }
+}
+
+function lifecycleLabel(status: 'queued' | 'started' | 'completed' | 'failed'): string {
+  if (status === 'queued') return '已排队';
+  if (status === 'started') return '已开始';
+  if (status === 'completed') return '已完成';
+  return '执行失败';
 }
 
 function dialogueWorldFacts(world: WorldState, speaker: Agent): string[] {
