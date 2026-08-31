@@ -31,7 +31,8 @@ test('research console exposes town, relationship and inspector viewports simult
 test('three-view layout has desktop and responsive grid contracts', () => {
   assert.match(css, /#research-workspace\s*\{[^}]*display:\s*grid/s);
   assert.match(css, /grid-template-columns:\s*minmax\(480px,[^;]+;/);
-  assert.match(css, /@media \(max-width:\s*1380px\)/);
+  assert.match(css, /@media \(max-width:\s*1560px\)[\s\S]*?#research-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(500px,\s*1\.2fr\)\s*minmax\(420px,\s*1fr\)/s);
+  assert.match(css, /@media \(max-width:\s*1560px\)[\s\S]*?\.inspector-viewport\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/s);
   assert.match(css, /@media \(max-width:\s*980px\)/);
   assert.match(css, /#research-workspace\[data-focus/);
   assert.match(css, /#research-workspace\[data-focus="relations"\]\s*\{[^}]*overflow-y:\s*auto/s);
@@ -52,6 +53,37 @@ test('research console exposes readable controls and keyboard-accessible semanti
   assert.match(css, /font-size:\s*14px/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /image-rendering:\s*pixelated/);
+});
+
+test('wrapped two-plus-one layout exposes direct, focusable viewport navigation', () => {
+  assert.match(html, /<nav class="viewport-jump-nav" aria-label="三窗快速导航">/);
+  for (const [id, label] of [
+    ['town-view', '小镇现场'],
+    ['relation-view', '互动关系'],
+    ['inspector-view', '人物与世界'],
+  ]) {
+    assert.match(html, new RegExp(`href=["']#${id}["'][^>]*>[\\s\\S]*?${label}`));
+    assert.match(html, new RegExp(`<section id=["']${id}["'][^>]*tabindex=["']-1["']`));
+    assert.match(html, new RegExp(`data-focus-view=["'][^"']+["'][^>]*aria-controls=["']${id}["']`));
+  }
+  assert.match(css, /\.viewport-jump-nav a\s*\{[^}]*min-height:\s*40px;[^}]*font-size:\s*14px/s);
+  assert.match(css, /@media \(max-width:\s*1560px\)[\s\S]*?\.viewport-jump-nav\s*\{[^}]*display:\s*flex/s);
+  assert.match(css, /#research-workspace\[data-focus\] \.viewport-jump-nav\s*\{[^}]*display:\s*none/s);
+  assert.match(client, /button\.setAttribute\('aria-label', active \? `恢复三窗布局/);
+});
+
+test('primary console metadata and relationship controls meet readable type minimums', () => {
+  assert.match(css, /\.status-label\s*\{[^}]*font-size:\s*13px/s);
+  assert.match(css, /\.viewport-legend\s*\{[^}]*font-size:\s*13px/s);
+  assert.match(css, /\.tool-button\s*\{[^}]*min-width:\s*40px;[^}]*min-height:\s*40px;[^}]*font-size:\s*14px/s);
+  assert.match(css, /#network-edge-count\s*\{[^}]*font:\s*700 13px/s);
+  assert.match(css, /\.network-field\s*\{[^}]*padding:\s*8px;[^}]*border:\s*1px solid var\(--edge-soft\);[^}]*font-size:\s*13px/s);
+  assert.match(css, /\.network-field:focus-within\s*\{[^}]*border-color:/s);
+  assert.match(css, /\.network-field select\s*\{[^}]*min-height:\s*40px;[^}]*font-size:\s*14px/s);
+  assert.match(css, /\.zone-label\s*\{[^}]*font-size:\s*13px/s);
+  assert.match(css, /\.model-mode-option small\s*\{[^}]*font-size:\s*13px/s);
+  assert.match(css, /#run-status \.run-condition\s*\{[^}]*font-size:\s*13px/s);
+  assert.doesNotMatch(client, /style="font-size:11px"/);
 });
 
 test('hidden research canvases preserve their last usable layout', () => {
@@ -184,7 +216,7 @@ test('frequently used research controls meet the 40px target baseline', () => {
   assert.match(css, /\.icon-btn\s*\{[^}]*min-height:\s*40px/s);
   assert.match(css, /\.nar-ava\s*\{[^}]*width:\s*40px;\s*height:\s*40px/s);
   assert.match(css, /\.cand\s*\{[^}]*min-height:\s*40px/s);
-  assert.match(css, /\.conversation-summary span\s*\{[^}]*font-size:\s*12px/s);
+  assert.match(css, /\.conversation-summary span\s*\{[^}]*font-size:\s*13px/s);
 });
 
 test('panel text escaping is safe in both text and attribute contexts', () => {

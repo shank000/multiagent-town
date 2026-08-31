@@ -1089,7 +1089,7 @@ function pollExperiment(): void {
     }
     const live = !!st.running;
     el.classList.toggle('live', live);
-    el.innerHTML = `<div class="dot"></div>实验：${live ? `<b>运行中（余 ${st.remainingDays} 天）</b>` : '<b>未运行</b>'}<br><span style="font-size:11px">记忆${st.mem === 'on' ? '开' : '关'} · 馈礼${st.gift === 'on' ? '开' : '关'}</span>`;
+    el.innerHTML = `<div class="dot"></div>实验：${live ? `<b>运行中（余 ${st.remainingDays} 天）</b>` : '<b>未运行</b>'}<br><span class="run-condition">记忆${st.mem === 'on' ? '开' : '关'} · 馈礼${st.gift === 'on' ? '开' : '关'}</span>`;
   }).catch(() => { /* 服务未就绪时静默 */ });
 }
 setInterval(pollExperiment, 2000);
@@ -1446,7 +1446,10 @@ function bindWorkspaceInteractions(): void {
     const focused = workspace.dataset.focus ?? '';
     for (const button of focusButtons) {
       const active = button.dataset.focusView === focused;
+      const controlledView = button.getAttribute('aria-controls');
+      const viewName = controlledView ? document.getElementById(controlledView)?.querySelector('h2')?.textContent?.trim() : '';
       button.setAttribute('aria-pressed', String(active));
+      button.setAttribute('aria-label', active ? `恢复三窗布局（当前聚焦${viewName ?? ''}）` : `聚焦${viewName ?? ''}视窗`);
       button.textContent = active ? '恢复三窗' : '聚焦';
     }
   };

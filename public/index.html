@@ -32,7 +32,12 @@
   </header>
 
   <main id="research-workspace">
-    <section class="viewport town-viewport" data-view="town" aria-labelledby="town-title">
+    <nav class="viewport-jump-nav" aria-label="三窗快速导航">
+      <a href="#town-view"><span>01</span>小镇现场</a>
+      <a href="#relation-view"><span>02</span>互动关系</a>
+      <a href="#inspector-view"><span>03</span>人物与世界</a>
+    </nav>
+    <section id="town-view" class="viewport town-viewport" data-view="town" tabindex="-1" aria-labelledby="town-title">
       <header class="viewport-head">
         <div><span class="eyebrow">VIEW 01 · FIELD</span><h2 id="town-title">小镇现场</h2></div>
         <div class="viewport-head-tools">
@@ -41,7 +46,7 @@
             <button class="tool-button" id="map-zoom-out" type="button" aria-label="缩小小镇">−</button>
             <button class="tool-button" id="map-reset" type="button">1:1</button>
             <button class="tool-button" id="map-zoom-in" type="button" aria-label="放大小镇">＋</button>
-            <button class="tool-button focus-view" type="button" data-focus-view="town" aria-pressed="false">聚焦</button>
+            <button class="tool-button focus-view" type="button" data-focus-view="town" aria-controls="town-view" aria-label="聚焦小镇现场视窗" aria-pressed="false">聚焦</button>
           </div>
         </div>
       </header>
@@ -54,18 +59,18 @@
       </div>
     </section>
 
-    <section class="viewport relation-viewport" data-view="relations" aria-labelledby="relation-title">
+    <section id="relation-view" class="viewport relation-viewport" data-view="relations" tabindex="-1" aria-labelledby="relation-title">
       <header class="viewport-head">
         <div><span class="eyebrow">VIEW 02 · STRUCTURE</span><h2 id="relation-title">互动关系与伙伴选择</h2></div>
         <div class="viewport-head-tools">
           <div class="viewport-legend"><span id="network-legend-direction">箭头＝有向看法</span><span id="network-legend-weight">边宽＝关系强度</span></div>
-          <div class="viewport-actions">
+          <div class="viewport-actions" aria-label="关系视图操作">
             <div id="network-mode" class="network-mode" role="tablist" aria-label="关系网络模式">
               <button type="button" class="active" data-network-mode="social" role="tab" aria-selected="true">社会关系</button>
               <button type="button" data-network-mode="choice" role="tab" aria-selected="false">伙伴选择</button>
             </div>
             <button class="tool-button" id="network-reset" type="button">重排</button>
-            <button class="tool-button focus-view" type="button" data-focus-view="relations" aria-pressed="false">聚焦</button>
+            <button class="tool-button focus-view" type="button" data-focus-view="relations" aria-controls="relation-view" aria-label="聚焦互动关系视窗" aria-pressed="false">聚焦</button>
           </div>
         </div>
       </header>
@@ -138,12 +143,12 @@
       </div>
     </section>
 
-    <section class="viewport inspector-viewport" data-view="inspector" aria-labelledby="inspector-title">
+    <section id="inspector-view" class="viewport inspector-viewport" data-view="inspector" tabindex="-1" aria-labelledby="inspector-title">
       <header class="viewport-head">
         <div><span class="eyebrow">VIEW 03 · INSPECTOR</span><h2 id="inspector-title">人物与世界</h2></div>
-        <div class="viewport-head-tools horizontal">
+        <div class="viewport-head-tools horizontal" aria-label="人物与世界视图操作">
           <select id="world-select" aria-label="切换平行世界"></select>
-          <button class="tool-button focus-view" type="button" data-focus-view="inspector" aria-pressed="false">聚焦</button>
+          <button class="tool-button focus-view" type="button" data-focus-view="inspector" aria-controls="inspector-view" aria-label="聚焦人物与世界视窗" aria-pressed="false">聚焦</button>
         </div>
       </header>
       <div class="inspector-scroll viewport-body">
