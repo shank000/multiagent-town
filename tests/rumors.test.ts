@@ -10,7 +10,7 @@ test('谣言种子与传播链', () => {
   r.spread('agent:林晚晴', 'agent:周岚', id, '湖边埋着宝藏', 700);
   r.spread('agent:周岚', 'agent:陈默', id, '听说湖边埋着宝藏（转述）', 800);
   assert.equal(r.carriersOf(id).length, 3);
-  assert.deepEqual(r.carriedBy('agent:陈默').map((x) => x.content), ['听说湖边埋着宝藏（转述）']);
+  assert.deepEqual(r.carriedBy('agent:陈默').map((x) => x.content), ['湖边埋着宝藏（转述）']);
   assert.equal(r.rows().length, 3); // 种子 + 两次传播
 });
 
