@@ -120,7 +120,14 @@ export class ReflectionEngine {
         .flatMap((record) => record.evidenceIds))
       : new Set<string>();
 
-    const questionResponse = await this.askQuestions(agent.id, evidence.map((item) => item.content));
+    const degradedStages: string[] = [];
+    const questionEvidence = selectPromptEvidence(evidence, 20);
+    const questionResponse = await this.modelStage(
+      'questions',
+      () => this.askQuestions(agent.id, questionEvidence.map((item) => item.content)),
+      {},
+      degradedStages,
+    );
     const questions = uniqueStrings(questionResponse.questions, 3, 120);
     const candidateInsights: string[] = [];
     const evidenceIds = new Set(evidence.map((item) => item.id));
@@ -132,13 +139,24 @@ export class ReflectionEngine {
           .filter((item) => isEventEvidence(item) && !consumedEvidence.has(item.id))
           .slice(0, 6);
       for (const item of questionEvidence) evidenceIds.add(item.id);
-      const response = await this.askInsights(agent.id, question, questionEvidence.map((item) => item.content));
+      const response = await this.modelStage(
+        'insights',
+        () => this.askInsights(agent.id, question, questionEvidence.map((item) => item.content)),
+        {},
+        degradedStages,
+      );
       candidateInsights.push(...uniqueStrings(response.insights, 5, 160));
     }
 
     const boundedEvidence = this.loadEvidence(agent.id, [...evidenceIds], evidence, kind);
-    const journalResponse = await this.askJournal(
-      agent, day, kind, boundedEvidence, questions, candidateInsights, priorInsights, prior, priorDaily?.diary ?? ''
+    const journalResponse = await this.modelStage(
+      'journal',
+      () => this.askJournal(
+        agent, day, kind, selectPromptEvidence(boundedEvidence, 20), questions,
+        candidateInsights, priorInsights, prior, priorDaily?.diary ?? '',
+      ),
+      {},
+      degradedStages,
     );
     const allowedEvidence = new Set(boundedEvidence.map((item) => item.id));
     const insights = uniqueInsightStrings(journalResponse.insights, 5, 180);
@@ -204,7 +222,24 @@ export class ReflectionEngine {
       guidance: finalGuidance,
       revisions,
       evidenceIds: [...allowedEvidence],
+      degradedStages,
     }));
+  }
+
+  private async modelStage<T>(
+    stage: string,
+    task: () => Promise<T>,
+    fallback: T,
+    degradedStages: string[],
+  ): Promise<T> {
+    try {
+      return await task();
+    } catch (error) {
+      degradedStages.push(stage);
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[reflection-fallback] agent-stage=${stage} reason=${compactFailureReason(reason)}`);
+      return fallback;
+    }
   }
 
   private evidenceFor(agentId: string, day: number, kind: ReflectionKind): Memory[] {
@@ -409,6 +444,19 @@ function isEventEvidence(item: Memory): boolean {
   return item.kind !== 'insight' && item.kind !== 'reflection' && item.kind !== 'plan';
 }
 
+function selectPromptEvidence(evidence: readonly Memory[], limit: number): Memory[] {
+  return [...evidence]
+    .sort((a, b) => b.importance - a.importance || b.createdGameTime - a.createdGameTime)
+    .slice(0, limit)
+    .sort((a, b) => a.createdGameTime - b.createdGameTime || a.id.localeCompare(b.id));
+}
+
+function compactFailureReason(reason: string): string {
+  if (/context|上下文|exceed_context_size/iu.test(reason)) return 'context_limit';
+  if (/timeout|期限|未完成|超时/iu.test(reason)) return 'timeout';
+  return 'model_error';
+}
+
 function fallbackDiary(agent: Agent, day: number, evidence: Memory[]): string {
   if (!evidence.length) return `第${day}天没有足够的事件证据。我会继续履行${agent.persona.occupation}的职责，并留意自己的判断。`;
   const highlights = evidence.slice(-3).map((item) => item.content).join('；');
@@ -463,6 +511,7 @@ function reflectionEvent(input: {
   guidance: string[];
   revisions: InsightRevision[];
   evidenceIds: string[];
+  degradedStages: string[];
 }): GameEvent {
   const label = input.kind === 'daily' ? '写下日记' : '重新思考';
   return {
@@ -483,6 +532,10 @@ function reflectionEvent(input: {
       guidance: input.guidance,
       revisions: input.revisions.length,
       evidenceIds: input.evidenceIds,
+      quality: {
+        status: input.degradedStages.length ? 'model_fallback' : 'validated',
+        degradedStages: [...new Set(input.degradedStages)],
+      },
     },
   };
 }

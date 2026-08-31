@@ -117,6 +117,38 @@ test('没有事件证据的日记明确记录证据不足，不形成无来源�
   assert.deepEqual(daily.beliefs, []);
 });
 
+test('反思模型不可用时仍以事件证据形成日记，并标注降级阶段', async () => {
+  const provider: LLMProvider = {
+    name: 'reflection-unavailable',
+    async complete(): Promise<LLMResponse> {
+      throw new Error('request exceeds the available context size');
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const engine = new ReflectionEngine(new LLMGateway({ provider, retries: 0 }), store, log);
+  const agent = makeAgent({ id: 'agent:fallback', name: '乙', persona: persona({ name: '乙', occupation: '邮差' }) });
+  store.addMemory({
+    id: 'fallback-evidence', agentId: agent.id, kind: 'observation',
+    content: '第1天 09:00，乙把一封信送到书店。', importance: 8, createdGameTime: 540,
+  });
+
+  await engine.summarizeDay(agent, 1, 1439);
+  await engine.drain();
+
+  const daily = store.dailyReflectionFor(agent.id, 1);
+  assert.ok(daily);
+  assert.match(daily.diary, /送到书店/);
+  assert.ok(daily.evidenceIds.includes('fallback-evidence'));
+  const event = log.eventsForDay(1).find((item) => item.payload?.kind === 'reflection');
+  const quality = event?.payload?.quality as { status?: string; degradedStages?: string[] } | undefined;
+  assert.equal(quality?.status, 'model_fallback');
+  assert.deepEqual(quality?.degradedStages, ['questions', 'journal']);
+
+  db.raw.close();
+});
+
 test('最终日记只投影事件证据、心态与人物价值，不接纳模型新增事实', () => {
   const agent = makeAgent({ id: 'agent:1', name: '甲', persona: persona({ name: '甲', occupation: '咖啡师' }) });
   const diary = reflectionDiaryOf(agent, 1, [

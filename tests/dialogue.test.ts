@@ -431,7 +431,7 @@ test('会话仅在相邻时自然开始，摘要收尾期间锁定双方并在�
   }
 });
 
-test('首轮模型超过墙钟期限时记录异常并释放会话参与者', async () => {
+test('模型连续超过墙钟期限时以证据约束台词完成四轮并释放会话参与者', async () => {
   const provider: LLMProvider = {
     name: 'never-responds',
     complete: async () => new Promise<LLMResponse>(() => undefined),
@@ -451,13 +451,22 @@ test('首轮模型超过墙钟期限时记录异常并释放会话参与者', as
     const waiting = dialogue.activeSessions()[0];
     assert.equal(waiting.phase, 'generating_model');
     assert.equal(waiting.speakerId, null);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    dialogue.tick(world, 0, 10);
+    await dialogue.drain();
+    for (let now = 10; now <= 30; now += 2) {
+      dialogue.tick(world, now === 10 ? 0 : 2, now);
+      await dialogue.drain();
+      if (store.conversationsFor(a.id)[0]?.status === 'completed') break;
+    }
     assert.equal(dialogue.isParticipantActive(a.id), false);
     const stored = store.conversationsFor(a.id)[0];
-    assert.equal(stored.status, 'error');
-    assert.match(stored.errorText, /执行槽后.*未完成生成/);
-    assert.equal(stored.messages.length, 0);
+    assert.equal(stored.status, 'completed');
+    assert.equal(stored.messages.length, 4);
+    assert.ok(stored.messages.every((message) => message.content.length > 0));
+    const turns = log.eventsForDay(1).filter((event) => event.payload?.kind === 'chat');
+    assert.equal(turns.length, 4);
+    assert.ok(turns.every((event) => (
+      (event.payload?.quality as { status?: string } | undefined)?.status === 'safe_fallback'
+    )));
   } finally {
     await dialogue.drain();
     db.raw.close();

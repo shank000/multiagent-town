@@ -421,12 +421,12 @@ export class DialogueEngine {
     };
     this.pending.set(key, entry);
     const task = (async () => {
+      const latestPrompt = s.turns.at(-1)?.content ?? '';
       try {
         const carried = this.rumors ? this.rumors.carriedBy(speaker.id).map((r) => ({ id: r.id, content: r.content })) : [];
         const relationship = this.rels ? this.rels.getOrCreate(speaker.id, other.id) : null;
         const affection = relationship?.affection ?? 0;
         const honesty = personalityOf(speaker.persona).honesty;
-        const latestPrompt = s.turns.at(-1)?.content ?? '';
         const retrievedMemories = latestPrompt
           ? this.store.retrieve(speaker.id, latestPrompt, now, 12)
             .filter((item) => keywordSimilarity(latestPrompt, item.content) > 0)
@@ -525,8 +525,26 @@ export class DialogueEngine {
           quality: { status: 'safe_fallback', attempts: 2, rejectedReasons, validator: 'dialogue-turn/v2' },
         };
       } catch (err) {
-        entry.error = err instanceof Error ? err.message : String(err);
-        console.warn(`[dialogue] conversation=${s.conversationId} speaker=${speaker.id} failed: ${entry.error}`);
+        const failure = dialogueFailureReason(err);
+        entry.resolved = {
+          utterance: conservativeDialogueReply(latestPrompt, [
+            ...this.store.recentMemories(speaker.id, 8)
+              .filter((item) => item.kind === 'observation')
+              .map((item) => item.content),
+          ], {
+            priorTurns: s.turns.map((turn) => turn.content),
+            speakerName: speaker.name,
+            otherName: other.name,
+          }),
+          end: s.turns.length + 1 >= MIN_NATURAL_TURNS,
+          quality: {
+            status: 'safe_fallback',
+            attempts: 1,
+            rejectedReasons: [failure],
+            validator: 'dialogue-turn/v2',
+          },
+        };
+        console.warn(`[dialogue-fallback] conversation=${s.conversationId} speaker=${speaker.id} reason=${failure}`);
       }
     })();
     this.track(task);
@@ -693,6 +711,14 @@ export class DialogueEngine {
       },
     });
   }
+}
+
+function dialogueFailureReason(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/context|上下文|exceeds the available context size|exceed_context_size/iu.test(text)) return '模型上下文不足';
+  if (/queue|排队|执行槽/iu.test(text) && /timeout|期限|未完成|超时/iu.test(text)) return '模型排队或生成超时';
+  if (/timeout|期限|未完成|超时/iu.test(text)) return '模型生成超时';
+  return '模型调用失败';
 }
 
 function lifecycleLabel(status: 'queued' | 'started' | 'completed' | 'failed', termination?: 'interrupted'): string {

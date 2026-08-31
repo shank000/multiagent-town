@@ -125,7 +125,7 @@ test('较早的冲突预留阻止后发会话插队，并在现有会话结束�
   }
 });
 
-test('互选共享的预留会话生成失败时，两条选择仍关联同一 failed 终态', async () => {
+test('互选共享的预留会话在模型失败时仍以同一 ID 完成可审计终态', async () => {
   const provider: LLMProvider = {
     name: 'failing-dialogue',
     async complete(): Promise<LLMResponse> {
@@ -148,14 +148,19 @@ test('互选共享的预留会话生成失败时，两条选择仍关联同一 f
     assert.ok(conversationId);
     assert.ok(choices.every((choice) => choice.payload?.conversationId === conversationId));
     await dialogue.drain();
-    dialogue.tick(world, 0, 21);
+    for (let now = 21; now <= 40; now += 1) {
+      dialogue.tick(world, 1, now);
+      await dialogue.drain();
+      if (store.conversationsFor(agents[0].id)[0]?.status === 'completed') break;
+    }
 
     const lifecycle = log.eventsOfKind('dialogue_lifecycle');
-    assert.deepEqual(lifecycle.map((event) => event.payload?.status), ['queued', 'started', 'failed']);
+    assert.deepEqual(lifecycle.map((event) => event.payload?.status), ['queued', 'started', 'completed']);
     assert.ok(lifecycle.every((event) => event.payload?.conversationId === conversationId));
     const stored = store.conversationsFor(agents[0].id)[0];
     assert.equal(stored.id, conversationId);
-    assert.equal(stored.status, 'error');
+    assert.equal(stored.status, 'completed');
+    assert.equal(stored.turnCount, 4);
   } finally {
     await dialogue.drain();
     db.raw.close();
