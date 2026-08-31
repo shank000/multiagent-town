@@ -78,6 +78,57 @@ test('两次模型台词不合格后，问题相关的自然保底回答才会�
   }
 });
 
+test('内部心智记录与审计事件不会在模型失败后成为居民台词', async () => {
+  let dialogueCalls = 0;
+  const provider: LLMProvider = {
+    name: 'audit-register-fallback',
+    async complete(request): Promise<LLMResponse> {
+      assert.equal(request.template, DIALOGUE_TEMPLATE);
+      dialogueCalls += 1;
+      const parsed = dialogueCalls === 1
+        ? { utterance: '最近在读什么书？', end_dialogue: false }
+        : { utterance: '我能确认的是：第71天19:30，陈默选择了林晚晴一对一交流。', end_dialogue: false };
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const a = makeAgent({ id: 'agent:chen', name: '陈默', persona: persona({ name: '陈默' }) });
+  const b = makeAgent({ id: 'agent:shen', name: '沈屿', persona: persona({ name: '沈屿' }) });
+  const world = new WorldState(OBJS, [a, b]);
+  const dialogue = new DialogueEngine(new LLMGateway({ provider, retries: 0 }), store, log);
+  for (const memory of [
+    { kind: 'plan' as const, content: '第1天计划：最近准备读《内部计划书》。' },
+    { kind: 'reflection' as const, content: '第1天日记：最近读了《内部日记书》。' },
+    { kind: 'dialogue_summary' as const, content: '第1天 对话摘要：双方借书名交流，情感渐进升温。' },
+    { kind: 'observation' as const, content: '第71天 19:30，沈屿选择了陈默一对一交流，并谈到最近读什么书。' },
+    { kind: 'observation' as const, content: '第76天 19:30，白露对林晚晴说：最近在读《内部转录书》。' },
+  ]) {
+    store.addMemory({ agentId: b.id, ...memory, importance: 8, createdGameTime: 9 });
+  }
+  try {
+    assert.equal(dialogue.start(a, b, 10), true);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 12);
+    dialogue.tick(world, 2, 14);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 16);
+
+    const messages = store.messagesFor(a.id, 10)
+      .sort((left, right) => (left.turnIndex ?? 0) - (right.turnIndex ?? 0));
+    assert.equal(dialogueCalls, 3);
+    assert.equal(messages.length, 2);
+    assert.match(messages[1].content, /想不起|记不清/);
+    assert.doesNotMatch(messages[1].content, /内部|第\d+天|\d{1,2}:\d{2}|选择了|一对一交流|记录|依据|确认|双方|情感.*升温/);
+    const fallbackEvent = log.eventsForDay(1).find((event) => event.payload?.line === messages[1].content);
+    assert.equal((fallbackEvent?.payload?.quality as { status?: string } | undefined)?.status, 'safe_fallback');
+  } finally {
+    await dialogue.drain();
+    db.raw.close();
+  }
+});
+
 test('多轮对话：交替 4 句后结束并摘要双写', async () => {
   const { log, world, dialogue, a, b } = setup();
   dialogue.start(a, b, 10);

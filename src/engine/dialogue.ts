@@ -401,12 +401,12 @@ export class DialogueEngine {
         const affection = relationship?.affection ?? 0;
         const honesty = personalityOf(speaker.persona).honesty;
         const latestPrompt = s.turns.at(-1)?.content ?? '';
-        const speakerMemories = latestPrompt
+        const retrievedMemories = latestPrompt
           ? this.store.retrieve(speaker.id, latestPrompt, now, 12)
             .filter((item) => keywordSimilarity(latestPrompt, item.content) > 0)
             .slice(0, 8)
-            .map((item) => item.content)
-          : this.store.recentMemories(speaker.id, 8).map((item) => item.content);
+          : this.store.recentMemories(speaker.id, 8);
+        const speakerMemories = retrievedMemories.map((item) => item.content);
         const relationshipHistory = relationship?.knowledge ?? [];
         const worldFacts = world ? dialogueWorldFacts(world, speaker) : [];
         const ctx = {
@@ -434,7 +434,11 @@ export class DialogueEngine {
         };
         const baseMessages = dialogueMessages(ctx);
         const conversationalEvidence = [
-          ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), ...worldFacts,
+          ...retrievedMemories
+            .filter((item) => item.kind === 'observation')
+            .map((item) => item.content),
+          ...carried.map((item) => item.content),
+          ...worldFacts,
         ];
         const qualityEvidence = [
           ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), speaker.persona.background,

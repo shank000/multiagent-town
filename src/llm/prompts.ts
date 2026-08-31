@@ -245,11 +245,11 @@ export function dialogueMessages(ctx: {
     ? `\n对话对象背景（只用于理解对方，不要替对方发言）：${dialoguePersonaText(ctx.otherPersona, false)}`
     : '';
   const relationshipHistory = ctx.relationshipHistory?.length
-    ? `\n你们过去互动的已知摘要：\n${ctx.relationshipHistory.slice(-2).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
+    ? `\n你们过去互动的内部摘要（只用于理解关系，不得照读或用研究总结口吻说出）：\n${ctx.relationshipHistory.slice(-2).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n你们没有可用的既往互动摘要，不要虚构共同经历。';
   const speakerMemories = ctx.speakerMemories?.length
-    ? `\n你近期可确认的个人记忆：\n${ctx.speakerMemories.slice(-4).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
-    : '\n没有可确认的近期个人记忆。';
+    ? `\n你的内部记忆材料（只能自然转述其中事实，不得朗读日期、记录标签或原始转录）：\n${ctx.speakerMemories.slice(-4).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
+    : '\n没有可用的近期个人记忆。';
   const worldFacts = ctx.worldFacts?.length
     ? `\n当前场景与世界功能（功能存在不等于事件已发生）：\n${ctx.worldFacts.slice(0, 6).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n没有额外的现场功能信息。';
@@ -262,8 +262,9 @@ export function dialogueMessages(ctx: {
     '3. 保持人物的知识边界和说话风格，但不要为了显示职业或爱好而硬转话题。\n' +
     '4. 既往摘要只是回忆；已经说过的内容只有在追问、修正或兑现约定时才重提。\n' +
     '5. 每次只说 1~3 句，不要替对方说话；若已聊了 3 句以上或话头已尽，把 end_dialogue 设为 true。\n' +
-    '6. 关于“最近做了什么、读了什么、谁说了什么”等事实，只能使用人物背景、近期记忆、既往摘要或本次前文中明确给出的内容；没有依据时自然说明不知道、没印象或最近没有，禁止编造书名、引语和共同经历。\n' +
+    '6. 关于“最近做了什么、读了什么、谁说了什么”等事实，只能使用人物背景、近期记忆、既往摘要或本次前文中明确给出的内容；记忆里没有时自然说明不知道、没印象或最近没有，禁止编造书名、引语和共同经历。\n' +
     '7. 世界事件有明确状态边界：「活动预告（尚未发生）」只表示计划，不能说自己已经参加；只有「活动现场（已核验）」且名单包含自己时才能声称参加。只有「花店订单（已履约）」或明确的赠送/收到证据才能声称鲜花已经送达。场景功能清单只说明可执行条件；清单外活动只能作为愿望或提议，任何已经发生的共同经历都必须有完成证据。\n' +
+    '8. utterance 必须是居民当面对另一位居民说的口语。不得说出“我能确认的是”“依据/证据/记录显示”“第几天几点”等审计语言，也不得使用“双方”“情感升温”“关系变化”等旁观者摘要；不清楚时只需自然说想不起来、没听说或不太清楚。\n' +
     '只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}',
     {
       speakerName: ctx.speakerName,

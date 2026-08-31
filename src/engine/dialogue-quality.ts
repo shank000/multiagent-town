@@ -17,8 +17,12 @@ const FORMULA = /你刚才提到|围绕我们的话题|我认真想了想|我听
 const QUESTION = /[？?]|(?:什么|怎么|为何|为什么|谁|哪(?:个|里|些)?|多少|是否|有没有|吗|呢)(?:[，。！？?]|$)/;
 const EMPTY_OR_FILLER = /^(?:[嗯啊哦唔…\.，。！？!?\s]|不知道|没什么|随便)+$/;
 const GENERIC_ANSWER = /^(?:早上好|早啊|你好|嗨)[！!。\s]*(?:今天也要加油[！!。\s]*)?$/;
-const NON_CONVERSATIONAL_EVIDENCE = /^(?:人物设定|人物档案|人物背景|角色背景|背景|系统提示|系统消息|小镇功能[^：:]*|现场物件[^：:]*|system|persona|prompt)[：:]/iu;
+const NON_CONVERSATIONAL_EVIDENCE = /^(?:人物设定|人物档案|人物背景|角色背景|背景|系统提示|系统消息|日记|计划|反思|洞察|实验记录|选择记录|事件记录|对话记录|会话记录|聊天记录|关系分析|关系报告|研究分析|小镇功能[^：:]*|现场物件[^：:]*|system|persona|prompt)[：:]/iu;
 const PROVENANCE_PREFIX = /^(?:(?:第\s*\d+\s*天(?:\s*\d{1,2}:\d{2})?)\s*)?(?:对话摘要|关系摘要|关系记忆|观察记录|记忆记录|活动现场(?:（已核验）)?|活动预告(?:（尚未发生）)?|花店订单(?:（已履约）)?|当前实际位置|现场状态|现场物件[^：:]*|小镇功能[^：:]*)[：:]\s*/u;
+const INTERNAL_MEMORY_PREFIX = /^第\s*\d+\s*天\s*(?:日记|计划|反思|洞察|对话摘要|关系摘要|关系记忆)[：:]/u;
+const TIMESTAMPED_AUDIT_RECORD = /^第\s*\d+\s*天\s*\d{1,2}:\d{2}[，,\s]*(?:.*(?:选择了|选择对象|候选伙伴|一对一交流)|[^：:]{1,32}(?:对|→)[^：:]{1,32}说[：:])/u;
+const META_RELATIONSHIP_SUMMARY = /(?:双方|两人).{0,80}(?:对话|交流|隐喻|关系|情感|互信|信任|尊重).{0,30}(?:升温|加深|增强|提升|变化|形成|达成)/u;
+const AUDIT_REGISTER = /(?:我能确认的是|(?:没有|缺少|足够|可靠).{0,8}(?:依据|证据|记录)|(?:等|待).{0,8}确认后|(?:记录|数据|证据)(?:显示|表明)|根据.{0,12}(?:记录|数据|证据)|活动现场（已核验）|活动预告（尚未发生）|花店订单（已履约）|第\s*\d+\s*天\s*\d{1,2}:\d{2})/u;
 const STOP_BIGRAMS = new Set([
   '今天', '最近', '什么', '怎么', '为何', '为什', '什么', '事情', '值得', '一下',
   '这个', '那个', '现在', '还是', '可以', '觉得', '知道', '没有', '一个', '我们', '你们',
@@ -30,6 +34,9 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
   const reasons: string[] = [];
   if (!utterance || utterance.length > 120 || EMPTY_OR_FILLER.test(utterance)) reasons.push('台词为空、过长或只有填充词');
   if (FORMULA.test(utterance)) reasons.push('使用机械复述套话');
+  if (usesAuditRegister(utterance)) {
+    reasons.push('使用研究审计或关系元摘要口吻');
+  }
   if (GENERIC_ANSWER.test(utterance) && QUESTION.test(context.latestPrompt)) reasons.push('用寒暄回避了明确问题');
 
   const normalized = normalize(utterance);
@@ -78,6 +85,18 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
+function usesAuditRegister(utterance: string): boolean {
+  const sourceText = utterance.replace(
+    /^(?:(?:嗯+|哦+|唔+|其实|这个|怎么说呢)[，,。；;\s]*)+/u,
+    '',
+  );
+  return AUDIT_REGISTER.test(utterance)
+    || META_RELATIONSHIP_SUMMARY.test(utterance)
+    || NON_CONVERSATIONAL_EVIDENCE.test(sourceText)
+    || INTERNAL_MEMORY_PREFIX.test(sourceText)
+    || TIMESTAMPED_AUDIT_RECORD.test(sourceText);
+}
+
 export interface ConservativeDialogueOptions {
   priorTurns?: readonly string[];
   rumorEvidence?: readonly string[];
@@ -120,12 +139,19 @@ function relevantEvidence(prompt: string, evidence: readonly string[]): Grounded
 
 function conversationalEvidence(raw: string): string {
   let text = raw.replace(/\s+/gu, ' ').trim();
-  if (!text || NON_CONVERSATIONAL_EVIDENCE.test(text)) return '';
+  if (
+    !text
+    || NON_CONVERSATIONAL_EVIDENCE.test(text)
+    || INTERNAL_MEMORY_PREFIX.test(text)
+    || TIMESTAMPED_AUDIT_RECORD.test(text)
+    || META_RELATIONSHIP_SUMMARY.test(text)
+  ) return '';
   text = text
     .replace(/<[^>]{1,80}>/gu, ' ')
     .replace(/\[(?:memory|event|evidence)[^\]]*\]/giu, ' ')
     .replace(/(?:memory|event|evidence)[-_ ]?id\s*[:=]\s*[^\s，。；]+/giu, ' ')
     .replace(/(?:记忆|事件|证据)\s*ID\s*[：:=]\s*[^\s，。；]+/giu, ' ')
+    .replace(/^第\s*\d+\s*天\s*\d{1,2}:\d{2}[，,]\s*/u, '')
     .replace(PROVENANCE_PREFIX, '')
     .replace(/^「([^」]+)」现场核验未达到两人[：:]\s*/u, '$1')
     .replace(/活动现场（已核验）|活动预告（尚未发生）|花店订单（已履约）/gu, '')
@@ -172,7 +198,7 @@ function groundedReplies(
 
   const activity = activityNameIn(prompt) ?? activityNameIn(fact);
   if (activity && /取消|没有人到场/u.test(fact)) {
-    const flowerTail = /鲜花|花束|送花/u.test(prompt) ? '；送花这件事我也没有能确认的记录。' : '。';
+    const flowerTail = /鲜花|花束|送花/u.test(prompt) ? '；送花这件事我也想不起来了。' : '。';
     return [
       `没参加，${activity}后来取消了${flowerTail}`,
       `${activity}没有成行，我没有参加${flowerTail}`,
@@ -192,7 +218,7 @@ function groundedReplies(
       || /[^，。；]{1,12}(?:、|和|与)[^，。；]{1,12}在[^，。；]{0,12}(?:参加|到场)/u.test(fact);
     if (!namesSupportSpeaker) return uncertainReplies(prompt);
     if (asksShared && !textSupportsDyad) {
-      return [`我参加过，但我不能确认你是否也参加了。`, `我记得自己参加过，你有没有参加我不敢确定。`];
+      return [`我参加过，但不记得你当时在不在。`, `我记得自己参加过，你有没有参加我说不准。`];
     }
     const subject = asksShared ? '我们' : '我';
     return [
@@ -219,7 +245,7 @@ function groundedReplies(
     const answer = /(?:没有|没|未|取消|不能|不会)/u.test(fact) ? '没有' : '有';
     return [`${answer}，${naturalFact}。`, `${answer}这回事，我记得${naturalFact}。`];
   }
-  return [`我记得，${naturalFact}。`, `就我知道的，${naturalFact}。`];
+  return [`我记得，${naturalFact}。`, `我印象里，${naturalFact}。`];
 }
 
 function firstPersonFact(fact: string): string {
@@ -231,18 +257,18 @@ function firstPersonFact(fact: string): string {
 
 function uncertainReplies(prompt: string): string[] {
   if (/读.{0,4}(?:什么|哪本|书)|什么书/u.test(prompt)) {
-    return ['最近没有能确定的阅读记录，我不想随口编个书名。', '我想不起最近读过哪本书，先不乱说。', '最近读什么我没有把握，等想起来再告诉你。'];
+    return ['我一下想不起最近读过什么了。', '最近读的书名我记不清了，先不瞎说。', '这阵子读过什么，我一时真想不起来。'];
   }
-  if (/谁|哪位/u.test(prompt)) return ['我还不能确认具体是谁，先不乱猜。', '具体是谁我想不起来，暂时不能确定。', '我现在说不准是哪一位。'];
-  if (/为什么|为何/u.test(prompt)) return ['原因我还没有想清楚，暂时不能确定。', '我现在还解释不了原因，不想凭空猜。', '为什么会这样，我还没有可靠的答案。'];
+  if (/谁|哪位/u.test(prompt)) return ['我想不起是谁了，别让我瞎猜。', '具体名字我记不清了。', '是哪一位，我现在说不准。'];
+  if (/为什么|为何/u.test(prompt)) return ['原因我还没想明白。', '我现在也解释不了，还是别瞎猜了。', '为什么会这样，我一时说不上来。'];
   if (/怎么看|如何看|你觉得/u.test(prompt)) return ['我现在还没有形成明确看法。', '我的判断还不成熟，暂时说不准。', '我想再了解一些情况，眼下还不能下结论。'];
   if (/哪里|哪儿|何处/u.test(prompt)) return ['具体在哪里我还不知道。', '地点我现在说不准。', '我暂时想不起具体地点。'];
-  if (/什么时候|何时|几点/u.test(prompt)) return ['具体时间我还不能确定。', '什么时候发生的，我暂时想不起来。', '时间我现在说不准。'];
+  if (/什么时候|何时|几点/u.test(prompt)) return ['具体时间我记不清了。', '什么时候发生的，我暂时想不起来。', '时间我现在说不准。'];
   if (/^(?:是|不是|有|没有|没|会|不会|能|不能|是否)|吗[？?]?$/u.test(prompt.trim())) {
-    return ['我现在不能确定有没有，先不把猜测当成事实。', '这件事我还不能肯定。', '我目前没有把握回答是或不是。'];
+    return ['这事我记不清了，不敢说有还是没有。', '这件事我不太清楚。', '是还是不是，我现在真说不准。'];
   }
-  if (QUESTION.test(prompt)) return ['具体情况我暂时想不起来，先不乱说。', '这件事我现在说不准。', '我还没有可靠的信息来回答。'];
-  return ['我记下了，但没有把握的细节先不补充。', '我明白了，暂时不添加不确定的细节。', '这件事我先记着，等有把握再多说。'];
+  if (QUESTION.test(prompt)) return ['具体情况我想不起来了，先不瞎说。', '这件事我现在说不准。', '我不太清楚这件事。'];
+  return ['这件事我先记着。', '我明白你的意思了。', '这事我得再想想。'];
 }
 
 function chooseFreshReply(replies: readonly string[], priorTurns: readonly string[]): string {
@@ -252,7 +278,7 @@ function chooseFreshReply(replies: readonly string[], priorTurns: readonly strin
 }
 
 export function dialogueRepairInstruction(reasons: readonly string[]): string {
-  return `\n\n<QUALITY_REPAIR>上一版台词未通过入库检查：${reasons.join('；')}。请直接重写台词，只使用已提供事实，不增加具体人名、作品名、时间或事件；活动预告不能写成已经参加，馈礼意向不能写成已经送达；明确问题必须先回答。</QUALITY_REPAIR>`;
+  return `\n\n<QUALITY_REPAIR>上一版台词未通过入库检查：${reasons.join('；')}。请直接重写台词，只使用已提供事实，不增加具体人名、作品名、时间或事件；活动预告不能写成已经参加，馈礼意向不能写成已经送达；明确问题必须先回答。必须像居民当面说话，不得朗读日期编号、记录标签、证据依据，也不得用“双方”“情感升温”等研究总结口吻。</QUALITY_REPAIR>`;
 }
 
 function worldClaimReasons(context: DialogueQualityContext): string[] {

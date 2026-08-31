@@ -57,8 +57,8 @@ test('无证据的第三方居民和作品名不能进入正式台词', () => {
 });
 
 test('保守回答按问题类型回应且不引入新事实', () => {
-  assert.match(conservativeDialogueReply('最近在读什么书？'), /没有.*阅读记录/);
-  assert.match(conservativeDialogueReply('收信人是谁？'), /不能确认.*谁/);
+  assert.match(conservativeDialogueReply('最近在读什么书？'), /想不起|记不清/);
+  assert.match(conservativeDialogueReply('收信人是谁？'), /想不起|记不清/);
   assert.match(conservativeDialogueReply('你怎么看这件事？'), /看法|判断/);
   assert.equal(
     conservativeDialogueReply('今天送信遇到了什么？', ['送信时发现一封信写着旧地址。']),
@@ -86,6 +86,42 @@ test('连续保底轮次保持确定性但不重复同一句', () => {
   assert.equal(second, repeat);
   assert.match(first, /最近|读/);
   assert.match(second, /最近|读/);
+});
+
+test('模型台词中的审计记录与关系元摘要口吻全部被拒绝', () => {
+  const badForms = [
+    '我能确认的是：第71天19:30，陈默选择了林晚晴一对一交流。',
+    '我能确认的是：第76天19:30，白露对林晚晴说：最近还好吗？',
+    '双方通过咖啡与画作的隐喻交流，情感渐进升温。',
+    '这件事我目前没有足够依据回答，等确认后再告诉你。',
+    '嗯，第53天日记：我今天重新理解了这段关系。',
+  ];
+  for (const utterance of badForms) {
+    const result = assessDialogueTurn({
+      ...base,
+      latestPrompt: '你还记得我们聊过什么吗？',
+      priorTurns: ['你还记得我们聊过什么吗？'],
+      evidence: [utterance],
+      utterance,
+    });
+    assert.equal(result.ok, false, utterance);
+    assert.ok(result.reasons.some((reason) => reason.includes('审计') || reason.includes('元摘要')), utterance);
+  }
+});
+
+test('日记、计划、选择、事件转录与关系分析不成为保底台词', () => {
+  const sources = [
+    '第71天日记：最近在读《内部日记书》。',
+    '第71天计划：准备阅读《内部计划书》。',
+    '选择记录：第71天19:30，陈默选择了林晚晴一对一交流。',
+    '事件记录：第71天20:00，沈屿开始阅读《内部事件书》。',
+    '对话记录：白露对林晚晴说：我在读《内部转录书》。',
+    '关系分析：双方通过画作隐喻交流，情感渐进升温。',
+    '第76天19:30，白露对林晚晴说：最近在读《内部原话书》。',
+  ];
+  const reply = conservativeDialogueReply('最近在读什么书？', sources);
+  assert.match(reply, /想不起|记不清/);
+  assert.doesNotMatch(reply, /内部|第\d+天|\d{1,2}:\d{2}|记录|依据|证据|确认|双方|情感.*升温/);
 });
 
 test('相关现场事实与传闻被自然保留，研究侧来源语法不进入台词', () => {
@@ -265,5 +301,6 @@ test('否定虚假共同经历时仍拒绝顺带编造无证据的过去事件',
     evidence: ['「湖边派对」现场核验未达到两人：无人实际到场，活动取消。'],
     utterance: '我能确认的是：「湖边派对」现场核验未达到两人：无人实际到场，活动取消。',
   });
-  assert.equal(groundedCancellation.ok, true);
+  assert.equal(groundedCancellation.ok, false);
+  assert.ok(groundedCancellation.reasons.some((reason) => reason.includes('审计')));
 });

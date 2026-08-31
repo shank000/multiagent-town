@@ -161,6 +161,9 @@ test('对话提示词允许结束对话（end_dialogue 非写死 false）', () =
   assert.ok(sys.includes('不要用「你刚才提到」'));
   assert.ok(sys.includes('第一句必须先给出答案'));
   assert.ok(sys.includes('禁止编造书名'));
+  assert.ok(sys.includes('内部摘要（只用于理解关系'));
+  assert.ok(sys.includes('不得朗读日期、记录标签或原始转录'));
+  assert.ok(sys.includes('不得使用“双方”“情感升温”“关系变化”等旁观者摘要'));
 });
 
 test('对话提示仅携带有限会话窗口且 M0 上下文保持紧凑', () => {
