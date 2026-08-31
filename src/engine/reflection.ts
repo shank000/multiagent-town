@@ -40,7 +40,6 @@ interface JournalRaw {
 export class ReflectionEngine {
   private thresholdPending = new Set<string>();
   private dailyScheduled = new Set<string>();
-  private dayCount = new Map<string, { day: number; count: number }>();
   private chains = new Map<string, Promise<void>>();
   private active = new Set<Promise<void>>();
 
@@ -52,8 +51,7 @@ export class ReflectionEngine {
   ) {}
 
   tick(agent: Agent, day: number, now: number): void {
-    const dc = this.dayCount.get(agent.id);
-    const count = dc && dc.day === day ? dc.count : 0;
+    const count = this.store.triggeredReflectionCount(agent.id, day);
     if (count >= MAX_TRIGGERED_PER_DAY || this.thresholdPending.has(agent.id)) return;
     const triggerScore = this.store.accumulator(agent.id);
     if (triggerScore <= REFLECTION_THRESHOLD) return;
@@ -64,7 +62,6 @@ export class ReflectionEngine {
 
     this.store.resetAccumulator(agent.id);
     this.thresholdPending.add(agent.id);
-    this.dayCount.set(agent.id, { day, count: count + 1 });
     void this.enqueue(agent.id, async () => {
       try {
         await this.run(agent, day, now, 'triggered', triggerScore);

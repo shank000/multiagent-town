@@ -179,28 +179,20 @@ test('持久证据水位线支持两次触发反思与全天日记，且不重�
     triggerScore: 0, createdGameTime: 1439,
   });
   try {
-    for (let index = 0; index < 26; index += 1) store.addMemory({
-      id: `first:${index}`, agentId: agent.id, kind: 'observation', content: `第一批新证据 ${index}`,
-      importance: 6, createdGameTime: 1500 + index,
-    });
-    engine.tick(agent, 2, 1600);
-    await engine.drain();
-
-    engine = new ReflectionEngine(gateway, store, log);
-    for (let index = 0; index < 26; index += 1) store.addMemory({
-      id: `second:${index}`, agentId: agent.id, kind: 'observation', content: `第二批新证据 ${index}`,
-      importance: 6, createdGameTime: 1700 + index,
-    });
-    engine.tick(agent, 2, 1800);
-    await engine.drain();
-
-    engine = new ReflectionEngine(gateway, store, log);
-    for (let index = 0; index < 16; index += 1) store.addMemory({
-      id: `plan-only:${index}`, agentId: agent.id, kind: 'plan', content: `计划文本 ${index}`,
-      importance: 10, createdGameTime: 1820 + index,
-    });
-    engine.tick(agent, 2, 1850);
-    await engine.drain();
+    for (const [batch, startAt, tickAt] of [
+      ['first', 1500, 1600],
+      ['second', 1700, 1800],
+      ['third', 1820, 1900],
+    ] as const) {
+      engine = new ReflectionEngine(gateway, store, log);
+      for (let index = 0; index < 26; index += 1) store.addMemory({
+        id: `${batch}:${index}`, agentId: agent.id, kind: 'observation', content: `${batch} 批新证据 ${index}`,
+        importance: 6, createdGameTime: startAt + index,
+      });
+      engine.tick(agent, 2, tickAt);
+      await engine.drain();
+    }
+    assert.equal(store.triggeredReflectionCount(agent.id, 2), 2);
     assert.equal(store.reflectionsFor(agent.id).filter((record) => record.kind === 'triggered' && record.day === 2).length, 2);
 
     for (let index = 0; index < 207; index += 1) store.addMemory({
@@ -223,8 +215,10 @@ test('持久证据水位线支持两次触发反思与全天日记，且不重�
     assert.equal(triggered[0].evidenceIds.filter((id) => secondEvidence.has(id)).length, 0);
     assert.ok(triggered[0].evidenceIds.every((id) => id.startsWith('first:')));
     assert.ok(triggered[1].evidenceIds.every((id) => id.startsWith('second:')));
+    assert.ok(triggered.every((record) => record.evidenceIds.every((id) => !id.startsWith('third:'))));
     assert.ok(daily.evidenceIds.some((id) => id.startsWith('first:')));
     assert.ok(daily.evidenceIds.some((id) => id.startsWith('second:')));
+    assert.ok(daily.evidenceIds.some((id) => id.startsWith('third:')));
     assert.ok(daily.evidenceIds.includes('late-important'));
     assert.match(daily.diary, /晚间发生了必须复盘的重要事件/);
 

@@ -318,6 +318,14 @@ export class MemoryStore {
     return this.reflectionsFor(agentId).find((record) => record.kind === 'daily' && record.day === day) ?? null;
   }
 
+  triggeredReflectionCount(agentId: string, day: number): number {
+    const row = this.db.raw.prepare(
+      `SELECT COUNT(*) AS count FROM reflections
+       WHERE agent_id = ? AND reflection_kind = 'triggered' AND day = ?`
+    ).get(agentId, day) as { count: number };
+    return row.count;
+  }
+
   previousDailyReflection(agentId: string, beforeDay: number): ReflectionRecord | null {
     return this.reflectionsFor(agentId)
       .filter((record) => record.kind === 'daily' && record.day < beforeDay)
