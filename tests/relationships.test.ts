@@ -89,6 +89,30 @@ test('关系状态与证据写入保持原子一致', () => {
   assert.equal(store.evidenceFor('agent:a', 'agent:b').length, 1);
 });
 
+test('近期重复对话增量递减，而馈礼处理保持原始效应', () => {
+  const { store } = setup();
+  const dialogueDeltas = [0, 10, 20].map((now) => store.update('agent:a', 'agent:b', {
+    affectionDelta: 0.2,
+    respectDelta: 0.1,
+    evidence: { kind: 'dialogue', text: '继续交谈' },
+  }, now));
+  assert.equal(dialogueDeltas[0].affectionDelta, 0.2);
+  assert.ok(dialogueDeltas[1].affectionDelta < dialogueDeltas[0].affectionDelta);
+  assert.ok(dialogueDeltas[2].affectionDelta < dialogueDeltas[1].affectionDelta);
+  assert.ok(Number(dialogueDeltas[1].metadata.repetitionScale) < 1);
+
+  const firstGift = store.update('agent:c', 'agent:d', {
+    affectionDelta: 0.1,
+    evidence: { kind: 'gift_received', text: '收到鲜花' },
+  }, 30);
+  const secondGift = store.update('agent:c', 'agent:d', {
+    affectionDelta: 0.1,
+    evidence: { kind: 'gift_received', text: '再次收到鲜花' },
+  }, 40);
+  assert.equal(firstGift.affectionDelta, 0.1);
+  assert.equal(secondGift.affectionDelta, 0.1);
+});
+
 test('关系证据按 gameTime 闭区间精确读取并用 SQL 计数', () => {
   const { db, store } = setup();
   store.update('agent:a', 'agent:b', { evidence: { kind: 'dialogue', text: '下界' } }, 100);

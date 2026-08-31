@@ -153,25 +153,28 @@ export class RelationshipStore {
   /** 原子更新旧维度并写一条证据；返回的 applied delta 已包含夹紧结果。 */
   update(a: string, b: string, patch: RelationshipPatch, now = 0): RelationshipEvidence {
     const current = this.getOrCreate(a, b);
-    const requestedAffection = finiteDelta(patch.affectionDelta, MAX_DELTA);
-    const requestedRespect = finiteDelta(patch.respectDelta, MAX_DELTA);
+    const gameTime = Number.isFinite(now) ? Math.max(0, Math.floor(now)) : 0;
+    const repetitionScale = this.repetitionScale(a, b, patch.evidence?.kind, gameTime);
+    const requestedAffection = finiteDelta(patch.affectionDelta, MAX_DELTA) * repetitionScale;
+    const requestedRespect = finiteDelta(patch.respectDelta, MAX_DELTA) * repetitionScale;
     const affection = clamp(current.affection + requestedAffection, -1, 1);
     const respect = clamp(current.respect + requestedRespect, -1, 1);
     const affectionDelta = affection - current.affection;
     const respectDelta = respect - current.respect;
     const knowledge = [...current.knowledge, ...(patch.knowledge ?? [])].slice(-MAX_KNOWLEDGE);
-    const gameTime = Number.isFinite(now) ? Math.max(0, Math.floor(now)) : 0;
     const source = patch.evidence;
     const evidenceId = randomUUID();
     const sourceKind = source?.kind ?? 'manual';
     const sourceText = (source?.text || patch.knowledge?.at(-1) || '关系状态更新').slice(0, 240);
-    const trustDelta = finiteDelta(source?.trustDelta, MAX_PROXY_DELTA);
-    const supportDelta = finiteDelta(source?.supportDelta, MAX_PROXY_DELTA);
+    const trustDelta = finiteDelta(source?.trustDelta, MAX_PROXY_DELTA) * repetitionScale;
+    const supportDelta = finiteDelta(source?.supportDelta, MAX_PROXY_DELTA) * repetitionScale;
     const inferredTension = Math.max(0, -affectionDelta) + Math.max(0, -respectDelta);
     const tensionDelta = source?.tensionDelta === undefined
       ? clamp(inferredTension, 0, MAX_PROXY_DELTA)
-      : clamp(finiteDelta(source.tensionDelta, MAX_PROXY_DELTA), 0, MAX_PROXY_DELTA);
-    const metadata = source?.metadata ?? {};
+      : clamp(finiteDelta(source.tensionDelta, MAX_PROXY_DELTA) * repetitionScale, 0, MAX_PROXY_DELTA);
+    const metadata = repetitionScale < 1
+      ? { ...(source?.metadata ?? {}), repetitionScale }
+      : source?.metadata ?? {};
 
     this.db.raw.exec('BEGIN IMMEDIATE');
     try {
@@ -215,6 +218,18 @@ export class RelationshipStore {
       tensionDelta,
       metadata,
     };
+  }
+
+  /** 同一方向近期重复对话的关系增量递减；馈礼等实验处理保持原始效应。 */
+  private repetitionScale(a: string, b: string, kind: RelationshipSourceKind | undefined, now: number): number {
+    if (kind !== 'dialogue') return 1;
+    const windowStart = Math.max(0, now - 7 * 1440);
+    const row = this.db.raw.prepare(
+      `SELECT COUNT(*) AS count FROM relationship_evidence
+       WHERE agent_a = ? AND agent_b = ? AND source_kind = ? AND game_time >= ? AND game_time <= ?
+         AND (ABS(affection_delta) + ABS(respect_delta) + ABS(trust_delta) + ABS(support_delta) + ABS(tension_delta)) > 0.000000001`
+    ).get(a, b, kind, windowStart, now) as { count: number };
+    return 1 / Math.sqrt(1 + row.count);
   }
 
   allFor(agentId: string): Relationship[] {

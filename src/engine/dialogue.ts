@@ -525,13 +525,12 @@ export class DialogueEngine {
         payload: { kind: 'chat_summary', line: summary, fromId: s.a, toId: s.b, conversationId: s.conversationId },
       });
       if (this.rels) {
-        // 优先消费真机输出的渐进增量（夹紧由 RelationshipStore 负责），缺省 0.1/0.05
+        // 只消费模型明确返回的有限数值；缺失或无效字段不推断正向关系变化。
         const parsed = (summaryRes?.parsed) as { affection_delta?: number; respect_delta?: number } | null;
-        const aD = Number(parsed?.affection_delta ?? 0.1);
-        const rD = Number(parsed?.respect_delta ?? 0.05);
-        const trustDelta = (Number.isFinite(aD) ? aD : 0) * 0.2 + (Number.isFinite(rD) ? rD : 0) * 0.6;
-        const tensionDelta = Math.max(0, -(Number.isFinite(aD) ? aD : 0))
-          + Math.max(0, -(Number.isFinite(rD) ? rD : 0));
+        const aD = finiteRelationshipDelta(parsed?.affection_delta);
+        const rD = finiteRelationshipDelta(parsed?.respect_delta);
+        const trustDelta = aD * 0.2 + rD * 0.6;
+        const tensionDelta = Math.max(0, -aD) + Math.max(0, -rD);
         for (const [from, to] of [[s.a, s.b], [s.b, s.a]] as const) {
           this.rels.update(from, to, {
             affectionDelta: aD,
@@ -641,4 +640,8 @@ function distanceToObject(agent: Agent, object: WorldObject): number {
   const dx = agent.x < object.x ? object.x - agent.x : agent.x >= object.x + object.w ? agent.x - (object.x + object.w - 1) : 0;
   const dy = agent.y < object.y ? object.y - agent.y : agent.y >= object.y + object.h ? agent.y - (object.y + object.h - 1) : 0;
   return dx + dy;
+}
+
+function finiteRelationshipDelta(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(-0.2, Math.min(0.2, value)) : 0;
 }

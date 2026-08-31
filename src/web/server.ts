@@ -409,6 +409,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           return;
         }
         const standing = computeStanding(hub().mind.rels.allPairs());
+        for (const agent of hub().world.allAgents()) if (!standing.has(agent.id)) standing.set(agent.id, 0);
         const list = [...standing.entries()]
           .map(([id, score]) => ({ id, name: hub().world.allAgents().find((a) => a.id === id)?.name ?? id, score }))
           .sort((a, b) => b.score - a.score);
@@ -782,7 +783,9 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           Math.max(right.direction?.strength ?? 0, right.reverseDirection?.strength ?? 0)
           - Math.max(left.direction?.strength ?? 0, left.reverseDirection?.strength ?? 0)
         ) || left.otherId.localeCompare(right.otherId));
-        const standings = [...computeStanding(selected.mind.rels.allPairs()).entries()]
+        const standingMap = computeStanding(selected.mind.rels.allPairs());
+        for (const agent of selected.world.allAgents()) if (!standingMap.has(agent.id)) standingMap.set(agent.id, 0);
+        const standings = [...standingMap.entries()]
           .map(([sid, score]) => ({ id: sid, name: selected.world.allAgents().find((a) => a.id === sid)?.name ?? sid, score }))
           .sort((a, b) => b.score - a.score);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

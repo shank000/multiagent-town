@@ -68,6 +68,48 @@ test('对话结束双向更新关系（渐进 + knowledge）', async () => {
   assert.ok(ab.affection <= 0.2); // 渐进上限
 });
 
+test('摘要缺失或返回无效关系增量时保持零漂移', async () => {
+  const provider: LLMProvider = {
+    name: 'missing-summary-deltas',
+    async complete(request): Promise<LLMResponse> {
+      if (request.template === DIALOGUE_TEMPLATE) {
+        const parsed = { utterance: '谢谢你告诉我。', end_dialogue: true };
+        return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+      }
+      const parsed = { summary: '双方确认了消息。', affection_delta: '未知', respect_delta: null };
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const rels = new RelationshipStore(db);
+  const a = makeAgent({ id: 'agent:a', name: '甲', persona: persona({ name: '甲' }) });
+  const b = makeAgent({ id: 'agent:b', name: '乙', persona: persona({ name: '乙' }) });
+  const world = new WorldState(OBJS, [a, b]);
+  const dialogue = new DialogueEngine(new LLMGateway({ provider, retries: 0 }), store, log, 12, rels);
+  try {
+    assert.equal(dialogue.start(a, b, 10), true);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 12);
+    await dialogue.drain();
+    dialogue.tick(world, 0, 12);
+
+    assert.equal(rels.getOrCreate(a.id, b.id).affection, 0);
+    assert.equal(rels.getOrCreate(a.id, b.id).respect, 0);
+    assert.equal(rels.getOrCreate(b.id, a.id).affection, 0);
+    assert.equal(rels.getOrCreate(b.id, a.id).respect, 0);
+    const evidence = rels.evidenceFor(a.id, b.id);
+    assert.equal(evidence.length, 1);
+    assert.equal(evidence[0].affectionDelta, 0);
+    assert.equal(evidence[0].respectDelta, 0);
+    assert.equal(evidence[0].trustDelta, 0);
+  } finally {
+    await dialogue.drain();
+    db.raw.close();
+  }
+});
+
 test('会话前文逐轮传给下一位说话者，消息与事件共享会话和轮次身份', async () => {
   const contexts: Record<string, unknown>[] = [];
   const provider: LLMProvider = {

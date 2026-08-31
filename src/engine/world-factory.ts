@@ -105,7 +105,7 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
   }
   const time = new TimeEngine(options.gameMinutesPerTick ?? 30);
   const gateway = options.gateway ?? new LLMGateway({ provider: 'mock' });
-  const mind = new MindEngine({ db, llm: gateway, log, scopeId: id });
+  const mind = new MindEngine({ db, llm: gateway, log, scopeId: id, townModelSeed: seed });
   const player = new PlayerDirector();
   const executor = new AgentExecutor(gateway, world, log, mind, player, id);
   // 主实验配对世界保持原有对话机制；探索世界承载多通道社会互动。

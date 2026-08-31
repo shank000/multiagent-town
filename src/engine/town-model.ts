@@ -1,6 +1,6 @@
 // 公开活动：预告意向 → 居民步行前往 → 现场到场核验 → 仅对真实参与者形成共同经历。
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Agent, Persona, Personality, Tile, WorldObject } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
@@ -21,13 +21,20 @@ interface CatalogEvent {
   activityVerb: string;
   sensoryCues: string[];
   durationMinutes: number;
+  capacity: number;
 }
 
 interface PlannedEvent {
   day: number;
   event: CatalogEvent;
   interestedIds: string[];
+  selectedIds: string[];
   stagedTiles: Map<string, Tile>;
+}
+
+export interface TownModelOptions {
+  /** 同一世界种子、日期、居民和活动得到相同出席排序；不消费伙伴选择 RNG。 */
+  seed?: number | string;
 }
 
 const PLAN_MINUTE = 300;
@@ -38,25 +45,28 @@ const CATALOG: readonly CatalogEvent[] = [
   {
     name: '湖边派对', announcement: '计划今晚在湖边举办小型聚会；只有实际到场才算参加。',
     trait: 'extraversion', venueId: 'obj:lake', attendanceRadius: 2, activityVerb: '参加湖边派对',
-    sensoryCues: ['湖风与水声', '居民在湖边交谈的声音'], durationMinutes: 60,
+    sensoryCues: ['湖风与水声', '居民在湖边交谈的声音'], durationMinutes: 60, capacity: 3,
   },
   {
     name: '书店读书会', announcement: '计划今晚在默语书店举行读书会；只有实际到场才算参加。',
     trait: 'curiosity', venueId: 'obj:bookstore_counter', attendanceRadius: 2, activityVerb: '参加书店读书会',
-    sensoryCues: ['翻动书页的声音', '书店木架与纸张的气味'], durationMinutes: 60,
+    sensoryCues: ['翻动书页的声音', '书店木架与纸张的气味'], durationMinutes: 60, capacity: 3,
   },
   {
     name: '广场集市', announcement: '计划今晚开放广场集市摊位；只有实际到场才算参加。',
     trait: 'extraversion', venueId: 'obj:market_stall', attendanceRadius: 3, activityVerb: '参加广场集市',
-    sensoryCues: ['篮筐与零钱碰撞声', '果蔬、面包和干草的气味'], durationMinutes: 60,
+    sensoryCues: ['篮筐与零钱碰撞声', '果蔬、面包和干草的气味'], durationMinutes: 60, capacity: 3,
   },
 ] as const;
 
 export class TownModel {
   private plans = new Map<number, PlannedEvent>();
   private lastNow = 0;
+  private seed: string;
 
-  constructor(private log: EventLog, private rels: RelationshipStore) {}
+  constructor(private log: EventLog, _rels: RelationshipStore, options: TownModelOptions = {}) {
+    this.seed = `${typeof options.seed}:${String(options.seed ?? 'town-default')}`;
+  }
 
   tick(world: WorldState, _dt: number, now: number): void {
     if (now < this.lastNow) {
@@ -85,9 +95,18 @@ export class TownModel {
   private plan(world: WorldState, day: number, now: number): void {
     const event = CATALOG[(day - 1) % CATALOG.length];
     const interestedIds = world.allAgents()
-      .filter((agent) => personalityOf(agent.persona)[event.trait] >= 0.6)
+      .filter((agent) => personalityOf(agent.persona)[event.trait] >= 0.25)
       .map((agent) => agent.id);
-    this.plans.set(day, { day, event, interestedIds, stagedTiles: new Map() });
+    const selectedIds = interestedIds
+      .map((agentId) => {
+        const trait = personalityOf(world.getAgent(agentId).persona)[event.trait];
+        const variation = this.seededUnit(`attendance:${day}:${event.name}:${agentId}`);
+        return { agentId, score: trait * 0.55 + variation * 0.45 };
+      })
+      .sort((left, right) => right.score - left.score || left.agentId.localeCompare(right.agentId))
+      .slice(0, event.capacity)
+      .map((item) => item.agentId);
+    this.plans.set(day, { day, event, interestedIds, selectedIds, stagedTiles: new Map() });
     const venue = world.getObject(event.venueId);
     this.log.addEvent({
       id: randomUUID(), type: 'broadcast', actorId: null, targetIds: interestedIds,
@@ -96,7 +115,8 @@ export class TownModel {
       payload: {
         kind: 'town_event_announcement', name: event.name, status: 'planned',
         venueId: event.venueId, venueName: venue?.name ?? event.venueId,
-        interestedIds, memoryAgentIds: interestedIds,
+        interestedIds, selectedIds, attendanceCapacity: event.capacity,
+        selectionMethod: 'seeded_trait_rank/v1', memoryAgentIds: interestedIds,
       },
     });
   }
@@ -105,7 +125,7 @@ export class TownModel {
     const venue = world.getObject(plan.event.venueId);
     if (!venue) return;
     const reserved = new Set([...plan.stagedTiles.values()].map(tileKey));
-    for (const agentId of plan.interestedIds) {
+    for (const agentId of plan.selectedIds) {
       if (plan.stagedTiles.has(agentId)) continue;
       const agent = world.getAgent(agentId);
       if (agent.state === 'thinking' || /睡|就寝|打盹/u.test(agent.action?.action.verb ?? '')) continue;
@@ -145,9 +165,9 @@ export class TownModel {
 
   private startOrCancel(world: WorldState, plan: PlannedEvent, now: number): void {
     const venue = world.getObject(plan.event.venueId);
-    const interested = plan.interestedIds.map((id) => world.getAgent(id));
+    const selected = plan.selectedIds.map((id) => world.getAgent(id));
     const attendees = venue
-      ? interested.filter((agent) => distanceToObject(agent, venue) <= plan.event.attendanceRadius)
+      ? selected.filter((agent) => distanceToObject(agent, venue) <= plan.event.attendanceRadius)
       : [];
     const attendeeIds = new Set(attendees.map((agent) => agent.id));
     const observers = venue
@@ -155,7 +175,7 @@ export class TownModel {
         && distanceToObject(agent, venue) <= plan.event.attendanceRadius + 2)
       : [];
     if (!venue || attendees.length < 2) {
-      this.releaseStaged(interested, plan.event.venueId, new Set());
+      this.releaseStaged(selected, plan.event.venueId, new Set());
       const present = attendees.length ? attendees.map((agent) => agent.name).join('、') : '无人';
       this.log.addEvent({
         id: randomUUID(), type: 'system', actorId: null, targetIds: plan.interestedIds,
@@ -164,6 +184,8 @@ export class TownModel {
         payload: {
           kind: 'town_event_cancelled', name: plan.event.name, status: 'cancelled',
           venueId: plan.event.venueId, attendeeIds: attendees.map((agent) => agent.id),
+          interestedIds: plan.interestedIds, selectedIds: plan.selectedIds,
+          attendanceCapacity: plan.event.capacity, selectionMethod: 'seeded_trait_rank/v1',
           memoryAgentIds: plan.interestedIds,
         },
       });
@@ -192,7 +214,7 @@ export class TownModel {
       agent.actionEndsAt = now + plan.event.durationMinutes;
       agent.lastDecisionAt = now;
     }
-    this.releaseStaged(interested, plan.event.venueId, attendeeIds);
+    this.releaseStaged(selected, plan.event.venueId, attendeeIds);
     this.log.addEvent({
       id: eventId, type: 'broadcast', actorId: null,
       targetIds: [...attendees.map((agent) => agent.id), ...observers.map((agent) => agent.id)],
@@ -202,28 +224,21 @@ export class TownModel {
         kind: 'town_event', name: plan.event.name, status: 'active',
         venueId: venue.id, venueName: venue.name,
         participants: attendees.map((agent) => agent.id),
+        interestedIds: plan.interestedIds, selectedIds: plan.selectedIds,
+        attendanceCapacity: plan.event.capacity, selectionMethod: 'seeded_trait_rank/v1',
         observerIds: observers.map((agent) => agent.id),
         memoryAgentIds: [...attendees.map((agent) => agent.id), ...observers.map((agent) => agent.id)],
         sensoryCues: plan.event.sensoryCues,
         startsAt: now, endsAt: now + plan.event.durationMinutes,
       },
     });
-    for (let i = 0; i < attendees.length; i += 1) {
-      for (let j = i + 1; j < attendees.length; j += 1) {
-        for (const [from, to] of [[attendees[i], attendees[j]], [attendees[j], attendees[i]]] as const) {
-          this.rels.update(from.id, to.id, {
-            affectionDelta: 0.1,
-            knowledge: [`${from.name}与${to.name}在${venue.name}实际共同参加${plan.event.name}。`],
-            evidence: {
-              kind: 'shared_activity', eventId,
-              text: `在${venue.name}实际共同参加${plan.event.name}`,
-              metadata: { activity: plan.event.name, venueId: venue.id, status: 'attendance_verified' },
-            },
-          }, now);
-        }
-      }
-    }
+    // 共同在场由可重放的 town_event 参与者列表记录；仅同场不推断二元亲密关系。
+    // 后续若发生对话、协作或馈礼，再由对应的二元证据更新 RelationshipStore。
     this.plans.delete(plan.day);
+  }
+
+  private seededUnit(label: string): number {
+    return createHash('sha256').update(this.seed).update('\0').update(label).digest().readUInt32BE(0) / 0x1_0000_0000;
   }
 
   private releaseStaged(agents: Agent[], venueId: string, keep: ReadonlySet<string>): void {

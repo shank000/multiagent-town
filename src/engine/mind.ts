@@ -21,6 +21,7 @@ export interface MindEngineOptions {
   llm: LLMGateway;
   log: EventLog;
   scopeId?: string;
+  townModelSeed?: number | string;
 }
 
 export class MindEngine {
@@ -45,7 +46,7 @@ export class MindEngine {
     this.rels = new RelationshipStore(opts.db);
     this.rumors = new RumorTracker(opts.db);
     this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 12, this.rels, this.rumors, { scopeId });
-    this.townModel = new TownModel(opts.log, this.rels);
+    this.townModel = new TownModel(opts.log, this.rels, { seed: opts.townModelSeed ?? scopeId });
     this.townLife = new TownLifeEngine(opts.log);
   }
 
