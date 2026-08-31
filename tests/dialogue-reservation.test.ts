@@ -92,29 +92,68 @@ test('预留 API 在执行前返回稳定会话 ID，同时保留自然会话的
   }
 });
 
-test('预留会话生成失败时以同一会话 ID 记录 failed 终态', async () => {
+test('较早的冲突预留阻止后发会话插队，并在现有会话结束后按序启动', async () => {
+  const { db, dialogue, agents, world } = setup(4);
+  try {
+    agents[0].x = 0;
+    agents[1].x = 1;
+    agents[2].x = 4;
+    agents[3].x = 5;
+    assert.equal(dialogue.start(agents[0], agents[1], 1, { source: 'proximity', world }), true);
+    await dialogue.drain();
+
+    const earlier = dialogue.reserve(agents[1], agents[2], 1, {
+      requireAdjacent: false, source: 'experiment', world,
+    });
+    const later = dialogue.reserve(agents[2], agents[3], 1, {
+      requireAdjacent: false, source: 'experiment', world,
+    });
+    assert.equal(dialogue.dispatchReservations(world, 1), 0, '后发预留不能越过共享参与者的较早预留');
+
+    dialogue.tick(world, 0, 2);
+    await dialogue.drain();
+    dialogue.tick(world, 0, 3);
+    assert.deepEqual(
+      dialogue.activeSessions().map((session) => session.conversationId),
+      [earlier.conversationId],
+    );
+    assert.ok(!dialogue.activeSessions().some((session) => session.conversationId === later.conversationId));
+  } finally {
+    await dialogue.drain();
+    db.raw.close();
+  }
+});
+
+test('互选共享的预留会话生成失败时，两条选择仍关联同一 failed 终态', async () => {
   const provider: LLMProvider = {
     name: 'failing-dialogue',
     async complete(): Promise<LLMResponse> {
       throw new Error('测试生成失败');
     },
   };
-  const { db, log, store, dialogue, agents, world } = setup(2, provider);
+  const { db, log, store, dialogue, agents, world, mind } = setup(2, provider);
   try {
-    const reservation = dialogue.reserve(agents[0], agents[1], 20, {
-      requireAdjacent: false,
-      source: 'experiment',
+    const experiment = new PartnerChoiceExperiment(
+      log,
       world,
-    });
-    assert.equal(dialogue.dispatchReservations(world, 20), 1);
+      mind,
+      { historyAccess: 'off', giftExchange: 'off' },
+      { random: () => 0 },
+    );
+    experiment.round(20);
+    const choices = log.eventsOfKind('experiment_pair_choice');
+    assert.equal(choices.length, 2);
+    const conversationId = String(choices[0].payload?.conversationId ?? '');
+    assert.ok(conversationId);
+    assert.ok(choices.every((choice) => choice.payload?.conversationId === conversationId));
     await dialogue.drain();
     dialogue.tick(world, 0, 21);
 
     const lifecycle = log.eventsOfKind('dialogue_lifecycle');
     assert.deepEqual(lifecycle.map((event) => event.payload?.status), ['queued', 'started', 'failed']);
-    assert.ok(lifecycle.every((event) => event.payload?.conversationId === reservation.conversationId));
+    assert.ok(lifecycle.every((event) => event.payload?.conversationId === conversationId));
     const stored = store.conversationsFor(agents[0].id)[0];
-    assert.equal(stored.id, reservation.conversationId);
+    assert.equal(stored.id, conversationId);
     assert.equal(stored.status, 'error');
   } finally {
     await dialogue.drain();
@@ -143,6 +182,14 @@ test('六居民碰撞选择全部排队并最终形成可审计的完成生命�
       assert.equal(typeof choice.payload?.conversationId, 'string');
       assert.equal(choice.payload?.conversationStatus, 'queued');
     }
+    const choiceByActor = new Map(choices.map((choice) => [choice.actorId, choice]));
+    const reciprocalA = choiceByActor.get('agent:0');
+    const reciprocalB = choiceByActor.get('agent:1');
+    assert.equal(reciprocalA?.payload?.chosen, 'agent:1');
+    assert.equal(reciprocalB?.payload?.chosen, 'agent:0');
+    assert.equal(reciprocalA?.payload?.conversationId, reciprocalB?.payload?.conversationId);
+    const uniqueConversationIds = new Set(choices.map((choice) => choice.payload?.conversationId));
+    assert.equal(uniqueConversationIds.size, choices.length - 1, '一组互选合并为一个会话，其余定向选择各自履约');
 
     for (let now = 1171; now <= 1200; now += 1) {
       dialogue.tick(world, 1, now);
@@ -150,7 +197,7 @@ test('六居民碰撞选择全部排队并最终形成可审计的完成生命�
       await dialogue.drain();
       const completed = log.eventsOfKind('dialogue_lifecycle')
         .filter((event) => event.payload?.status === 'completed');
-      if (completed.length === choices.length) break;
+      if (completed.length === uniqueConversationIds.size) break;
     }
 
     const lifecycleByConversation = new Map<string, Set<string>>();
@@ -169,8 +216,8 @@ test('六居民碰撞选择全部排队并最终形成可审计的完成生命�
 
     assert.equal(devScore, 100);
     assert.equal(failed.length, 0);
-    assert.equal(new Set(choices.map((choice) => choice.payload?.conversationId)).size, choices.length);
-    assert.equal(store.conversationsFor(agents[0].id, 100).filter((record) => record.status === 'completed').length, choices.length);
+    assert.equal(lifecycleByConversation.size, uniqueConversationIds.size);
+    assert.equal(store.conversationsFor(agents[0].id, 100).filter((record) => record.status === 'completed').length, uniqueConversationIds.size);
   } finally {
     await dialogue.drain();
     db.raw.close();

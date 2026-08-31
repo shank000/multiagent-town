@@ -100,14 +100,20 @@ export class PartnerChoiceExperiment {
       snapshot: this.pickSnapshot(agent),
       partner: this.pickPartner(agent, now, `round:${now}:agent:${agent.id}`),
     }));
+    const reservations = new Map<string, { conversationId: string; status: 'queued' }>();
 
     for (const { agent, partner, snapshot } of decisions) {
       if (partner === null) continue;
-      const reservation = this.mind.dialogue.reserve(agent, partner, now, {
-        requireAdjacent: false,
-        source: 'experiment',
-        world: this.world,
-      });
+      const pair = experimentPairKey(agent.id, partner.id);
+      let reservation = reservations.get(pair);
+      if (!reservation) {
+        reservation = this.mind.dialogue.reserve(agent, partner, now, {
+          requireAdjacent: false,
+          source: 'experiment',
+          world: this.world,
+        });
+        reservations.set(pair, reservation);
+      }
       this.log.addEvent({
         id: randomUUID(),
         type: 'chat',
@@ -220,4 +226,8 @@ export class PartnerChoiceExperiment {
     this.manualDecisionIndex.set(agentId, index + 1);
     return `manual:${agentId}:${index}`;
   }
+}
+
+function experimentPairKey(aId: string, bId: string): string {
+  return aId < bId ? `${aId}|${bId}` : `${bId}|${aId}`;
 }
