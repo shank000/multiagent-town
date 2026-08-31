@@ -211,6 +211,50 @@ test('当前上下文中的 affordance 动词无需修复即可执行', async ()
   assert.ok(!log.eventsForDay(1).some((event) => event.payload?.status === 'stale_rejected'));
 });
 
+test('唯一声明谓词映射执行 canonical 动词并记录规范化证据', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const objects: WorldObject[] = [
+    { id: 'obj:town', name: '小镇', type: 'town', parentId: null, x: 0, y: 0, w: 4, h: 4 },
+    {
+      id: 'obj:cafe_counter', name: '咖啡馆吧台', type: 'room', parentId: 'obj:town', x: 0, y: 0, w: 1, h: 1,
+      affordances: [
+        { verb: '开店准备', outcome: '准备营业' },
+        { verb: '煮咖啡招待客人', outcome: '完成咖啡馆接待' },
+      ],
+    },
+  ];
+  const agent = makeAgent({ id: 'agent:owner', x: 0, y: 0, locationId: 'obj:cafe_counter' });
+  const provider = new StubProvider([{
+    content: '',
+    parsed: {
+      thought: '给客人煮咖啡',
+      action: { type: 'interact', target: 'obj:cafe_counter', verb: '煮咖啡' },
+      duration_minutes: 10,
+    },
+  }]);
+  const executor = new AgentExecutor(
+    new LLMGateway({ provider, retries: 0 }),
+    new WorldState(objects, [agent]),
+    log,
+  );
+
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+
+  assert.equal(provider.calls, 1);
+  assert.equal(agent.action?.action.verb, '煮咖啡招待客人');
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'normalized');
+  assert.deepEqual(diagnostic?.payload?.normalization, {
+    code: 'interaction_verb_canonicalized',
+    detail: '交互动词「煮咖啡」已按唯一声明谓词规范为「煮咖啡招待客人」',
+  });
+  assert.match(String((diagnostic?.payload?.reasons as string[] | undefined)?.[0]), /唯一声明谓词规范/);
+  db.raw.close();
+});
+
 test('跨过有效期的快速 tick 响应被丢弃，并在当前时刻重新决策', async () => {
   const { log, agent, executor, provider } = setup([
     {

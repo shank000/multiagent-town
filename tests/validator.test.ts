@@ -40,6 +40,48 @@ test('interact 动词必须由目标 affordance、作息或明确玩家指令落
     { ...context, playerInstruction: '请去公园给画架系红丝带' },
   );
   assert.equal(playerVerb.ok, true);
+
+  const expandedWithHallucination = validateDecision(
+    { thought: '做更多事情', action: { type: 'interact', target: 'obj:cafe', verb: '煮咖啡并修理电器' }, duration_minutes: 10 },
+    has,
+    context,
+  );
+  assert.equal(expandedWithHallucination.ok, false, '模型扩写不得通过反向包含获得授权');
+  assert.equal(expandedWithHallucination.errorCode, 'ungrounded_interaction');
+});
+
+test('紧凑 interact 谓词仅在唯一匹配时规范为声明动词', () => {
+  const result = validateDecision(
+    { thought: '开始营业', action: { type: 'interact', target: 'obj:cafe', verb: '煮咖啡' }, duration_minutes: 10 },
+    has,
+    { interactionVerbs: () => ['开店准备', '煮咖啡招待客人'] },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.decision.action.verb, '煮咖啡招待客人');
+  assert.equal(result.normalization?.code, 'interaction_verb_canonicalized');
+  assert.match(result.normalization?.detail ?? '', /煮咖啡.*煮咖啡招待客人/);
+
+  const suffixPredicate = validateDecision(
+    { thought: '开始写生', action: { type: 'interact', target: 'obj:park', verb: '写生' }, duration_minutes: 10 },
+    has,
+    { interactionVerbs: () => ['在公园写生'] },
+  );
+  assert.equal(suffixPredicate.ok, true);
+  assert.equal(suffixPredicate.decision.action.verb, '在公园写生');
+  assert.equal(suffixPredicate.normalization?.code, 'interaction_verb_canonicalized');
+});
+
+test('紧凑 interact 谓词匹配多个声明时拒绝执行', () => {
+  const result = validateDecision(
+    { thought: '开始营业', action: { type: 'interact', target: 'obj:cafe', verb: '煮咖啡' }, duration_minutes: 10 },
+    has,
+    { interactionVerbs: () => ['煮咖啡招待客人', '煮咖啡准备外带'] },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'ungrounded_interaction');
+  assert.match(result.error ?? '', /无法唯一映射/);
 });
 
 test('未知目标 → 不通过且降级为 idle', () => {

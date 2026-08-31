@@ -31,6 +31,7 @@ interface ActionDecisionQuality {
   validator: typeof ACTION_DECISION_VALIDATOR;
   model?: string;
   rejectionCodes?: ActionDecisionRejectionCode[];
+  normalization?: NonNullable<ValidationResult['normalization']>;
 }
 
 /** 动作类型与目标使用互斥分支，结构化生成阶段即可遵守跨字段约束。 */
@@ -320,6 +321,7 @@ export class AgentExecutor {
         validator: ACTION_DECISION_VALIDATOR,
         ...(model ? { model } : {}),
         ...(rejectionCodes.size ? { rejectionCodes: [...rejectionCodes] } : {}),
+        ...(validation.normalization ? { normalization: { ...validation.normalization } } : {}),
       };
       const decision = this.enforceSleepRoutine(agent, selected, now);
       entry.resolved = { decision, quality, reasons };
