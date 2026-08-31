@@ -301,10 +301,12 @@ multiagent-town/
 
 **MemoryStore 三因子检索**（不引向量库）：
 ```
-score = 0.25 * 0.995^(now-lastAccess)      # recency
+score = 0.25 * 0.995^(now-createdGameTime) # recency（证据年龄）
       + 0.35 * importance/10               # importance
       + 0.40 * Jaccard(中文双字shingle)    # relevance
 ```
+
+`lastAccessGameTime` 只记录记忆最近一次进入 top-k 的时刻，供审计与活跃度统计使用，不参与检索评分。
 
 **RelationshipStore**：有向（A→B 与 B→A 分存）；`affection`/`respect` 各 -1..1，单次变化量 ±0.2 封顶；证据账本记录 trust/support/tension/frequency 代理的事件来源，并提供闭区间全量读取、双人读取与 SQL 精确计数。只读测量层按时间窗生成 6+4 连续观察量与双人证据；有向、dyad、actor 层分别映射为箭头、无向线与节点外环，不把任何观察代理写回因果处理。
 

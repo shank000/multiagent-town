@@ -241,11 +241,13 @@ acting ──完成──▶ idle
 
 ```
 score = α_recency·recency + α_importance·importance + α_relevance·relevance
-recency    = 0.995^(now - last_access_game_time)        # 指数衰减
-importance = 写入时缓存的 1~10 分
-relevance  = min-max 归一化后的 embedding 余弦相似度
+recency    = 0.995^(now - created_game_time)            # 按证据年龄指数衰减
+importance = 写入时缓存的 1~10 分 / 10
+relevance  = 中文双字 shingle 的 Jaccard 相似度
 初始权重建议：α_recency=0.25, α_importance=0.35, α_relevance=0.40（必须实测调优）
 ```
+
+`last_access_game_time` 在记忆进入 top-k 后照常刷新，仅用于访问审计，不回写 recency，避免一次命中形成自我强化的长期锁定。
 
 检索后按时间排序拼入 prompt（最近的在前）。另取 3 条**最近反思 insight** 作为"自我认知"注入。
 

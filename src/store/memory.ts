@@ -79,6 +79,14 @@ export interface ConversationRecord {
 export const RECENCY_ALPHA = 0.25;
 export const IMPORTANCE_ALPHA = 0.35;
 export const RELEVANCE_ALPHA = 0.40;
+export const RECENCY_DECAY_PER_MINUTE = 0.995;
+
+export interface MemoryRetrievalScore {
+  recency: number;
+  importance: number;
+  relevance: number;
+  total: number;
+}
 
 /** 双字 shingle：去标点空白后滑窗取二元组（中文为主，含字母数字） */
 export function shingles(text: string): string[] {
@@ -98,6 +106,27 @@ export function keywordSimilarity(a: string, b: string): number {
   let inter = 0;
   for (const s of A) if (setB.has(s)) inter++;
   return inter / (A.length + B.length - inter);
+}
+
+/**
+ * 可解释的三因子得分。近因只表示证据自创建以来的年龄；lastAccessGameTime
+ * 保留为访问审计字段，不参与排序，避免检索行为反过来给旧证据续期。
+ */
+export function memoryRetrievalScore(
+  memory: Pick<Memory, 'content' | 'importance' | 'createdGameTime'>,
+  query: string,
+  now: number,
+): MemoryRetrievalScore {
+  const age = Math.max(0, now - memory.createdGameTime);
+  const recency = RECENCY_DECAY_PER_MINUTE ** age;
+  const importance = memory.importance / 10;
+  const relevance = keywordSimilarity(query, memory.content);
+  return {
+    recency,
+    importance,
+    relevance,
+    total: RECENCY_ALPHA * recency + IMPORTANCE_ALPHA * importance + RELEVANCE_ALPHA * relevance,
+  };
 }
 
 interface RawMem { id: string; agent_id: string; kind: string; content: string; importance: number; created_game_time: number; last_access_game_time: number; source_event_id: string | null }
@@ -171,18 +200,19 @@ export class MemoryStore {
     }
   }
 
-  /** 三因子检索：0.25·recency(0.995^Δt) + 0.35·importance/10 + 0.40·关键词Jaccard */
+  /** 三因子检索：recency 按创建时间衰减；last_access 仅在选中后更新，供审计使用。 */
   retrieve(agentId: string, query: string, now: number, k = 20): Memory[] {
     const rows = this.db.raw.prepare('SELECT * FROM memories WHERE agent_id = ?').all(agentId) as unknown as RawMem[];
     const scored = rows
       .map((r) => {
         const mem = toMem(r);
-        const recency = 0.995 ** (now - mem.lastAccessGameTime);
-        const relevance = keywordSimilarity(query, mem.content);
-        const score = RECENCY_ALPHA * recency + IMPORTANCE_ALPHA * (mem.importance / 10) + RELEVANCE_ALPHA * relevance;
-        return { mem, score };
+        return { mem, score: memoryRetrievalScore(mem, query, now).total };
       })
-      .sort((x, y) => y.score - x.score || y.mem.createdGameTime - x.mem.createdGameTime);
+      .sort((x, y) => (
+        y.score - x.score
+        || y.mem.createdGameTime - x.mem.createdGameTime
+        || (x.mem.id < y.mem.id ? -1 : x.mem.id > y.mem.id ? 1 : 0)
+      ));
     const top = scored.slice(0, k).map((s) => s.mem);
     const upd = this.db.raw.prepare('UPDATE memories SET last_access_game_time = ? WHERE id = ?');
     for (const m of top) {
