@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { ExperimentWorkspaceRuntime, nextWorkspaceDatabasePath, normalizeWorkspaceConfig } from '../src/engine/workspace';
 import { LLMGateway } from '../src/llm/gateway';
+import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 import { BackendRuntimeLog, runtimeLogPathForDatabase } from '../src/runtime/backend-log';
 import { createTownServer } from '../src/web/server';
 
@@ -114,6 +115,55 @@ test('工作空间 API 安全替换为选择性加载的小镇并保留独立数
     await gateway.drain();
     runtimeLog.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('暂停后创建工作空间会等待规划器的后续模型批次共同结算', async () => {
+  const provider: LLMProvider = {
+    name: 'delayed-workspace-test',
+    async complete(_request: LLMRequest): Promise<LLMResponse> {
+      await new Promise((resolve) => setTimeout(resolve, 8));
+      return {
+        content: '{}', parsed: {},
+        usage: { inputTokens: 1, outputTokens: 1, costYuan: 0 },
+      };
+    },
+  };
+  const gateway = new LLMGateway({ provider, retries: 0, maxConcurrent: 1, expectedActiveAgents: 6 });
+  const workspace = await ExperimentWorkspaceRuntime.create({
+    name: '认知结算基线', seed: 1, worldSpeed: 60, defaultExperimentDays: 30,
+    worldKinds: ['mem-on'], startPaused: true,
+  }, { gateway, nextDatabasePath: () => ':memory:' }, ':memory:');
+  const first = workspace.current.worlds[0];
+  const server = await createTownServer({
+    world: first.world, time: first.time, loop: first.loop, log: first.log, mind: first.mind,
+    player: first.player, experiment: first.experiment ?? undefined, worlds: workspace.current.worlds,
+    workspace, llm: gateway, port: 0,
+  });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    for (let index = 0; index < 4; index++) await first.loop.step({ awaitDecisions: false });
+    const pending = gateway.schedulerSnapshot();
+    assert.ok(pending.active > 0 || pending.queued > 0);
+
+    const response = await fetch(`${base}/api/workspace`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '认知结算后的双世界', seed: 2, worldSpeed: 0.2, defaultExperimentDays: 30,
+        worldKinds: ['mem-on', 'mem-off'], startPaused: true,
+      }),
+    });
+    assert.equal(response.status, 201, await response.clone().text());
+    const created = await response.json() as { workspace: { worldIds: string[] }; worlds: unknown[] };
+    assert.deepEqual(created.workspace.worldIds, ['w1', 'w2']);
+    assert.equal(created.worlds.length, 2);
+    const settled = gateway.schedulerSnapshot();
+    assert.equal(settled.active, 0);
+    assert.equal(settled.queued, 0);
+  } finally {
+    await server.close();
+    await workspace.dispose();
+    await gateway.drain();
   }
 });
 

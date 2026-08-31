@@ -256,12 +256,15 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     };
   };
   const settlePausedCognition = async () => {
-    if (!paused || !opts.llm) return;
-    const scheduler = opts.llm.schedulerSnapshot();
-    if (scheduler.active !== 0 || scheduler.queued !== 0) return;
+    if (!paused) return;
     const controlledWorlds = hubWorlds ?? [hub()];
     if (controlledWorlds.some((world) => (world.mind?.dialogue.activeSessions().length ?? 0) > 0)) return;
+    await Promise.all(controlledWorlds.map((world) => world.loop.drain()));
+    await Promise.all(controlledWorlds.map((world) => world.mind?.drain() ?? Promise.resolve()));
+    await opts.llm?.drain();
     await Promise.all(controlledWorlds.map((world) => world.loop.settlePendingDecisions()));
+    await Promise.all(controlledWorlds.map((world) => world.mind?.drain() ?? Promise.resolve()));
+    await opts.llm?.drain();
   };
 
   function snapshotOf(selected: HubAccess): WorldSnapshot & { worldId: string } {

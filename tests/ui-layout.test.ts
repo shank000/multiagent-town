@@ -195,6 +195,8 @@ test('experiment workspace UI creates or safely resets a town and selects one to
   assert.match(server, /WORLD_TEMPLATE_CATALOG/);
   assert.match(server, /opts\.workspace\.replace\(body\)/);
   assert.match(server, /worlds:\s*\(hubWorlds \?\? \[hub\(\)\]\)/);
+  assert.match(server, /world\.mind\?\.drain\(\)/);
+  assert.match(server, /opts\.llm\?\.drain\(\)/);
   assert.match(server, /\/api\/workspace\/reset/);
   assert.match(server, /startPaused:\s*true/);
   assert.match(css, /\.workspace-world-options\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
