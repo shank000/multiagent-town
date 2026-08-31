@@ -26,6 +26,8 @@ test('工作空间 API 安全替换为选择性加载的小镇并保留独立数
   const directory = mkdtempSync(join(tmpdir(), 'town-workspace-'));
   const initialBase = join(directory, 'initial.sqlite');
   const nextBase = join(directory, 'next.sqlite');
+  const thirdBase = join(directory, 'third.sqlite');
+  const replacementPaths = [nextBase, thirdBase];
   const runtimeLog = new BackendRuntimeLog(runtimeLogPathForDatabase(initialBase), { captureConsole: false });
   const gateway = new LLMGateway({ provider: 'mock', expectedActiveAgents: 6 });
   const workspace = await ExperimentWorkspaceRuntime.create({
@@ -34,7 +36,7 @@ test('工作空间 API 安全替换为选择性加载的小镇并保留独立数
   }, {
     gateway,
     runtimeLog,
-    nextDatabasePath: () => nextBase,
+    nextDatabasePath: () => replacementPaths.shift() ?? join(directory, 'unexpected.sqlite'),
   }, initialBase);
   const first = workspace.current;
   const primary = first.worlds[0];
@@ -47,10 +49,13 @@ test('工作空间 API 安全替换为选择性加载的小镇并保留独立数
   try {
     const before = await (await fetch(`${base}/api/workspace`)).json() as {
       workspace: { id: string; worldIds: string[] }; templates: unknown[]; safety: { ready: boolean };
+      active: string; worlds: unknown[];
     };
     assert.deepEqual(before.workspace.worldIds, ['w1']);
     assert.equal(before.templates.length, 3);
     assert.equal(before.safety.ready, true);
+    assert.equal(before.active, 'w1');
+    assert.equal(before.worlds.length, 1);
     assert.ok(existsSync(join(directory, 'initial-w1.sqlite')));
     assert.equal(existsSync(join(directory, 'initial-w2.sqlite')), false);
 
@@ -85,6 +90,24 @@ test('工作空间 API 安全替换为选择性加载的小镇并保留独立数
     assert.equal(registry.worlds.length, 2);
     assert.equal(registry.workspaceName, '双世界稳健性');
     assert.equal(runtimeLog.filePath, runtimeLogPathForDatabase(nextBase));
+
+    const thirdResponse = await fetch(`${base}/api/workspace`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: '三世界并行复验', seed: 43, worldSpeed: 0.3, defaultExperimentDays: 60,
+        worldKinds: ['mem-on', 'mem-off', 'rumor'], startPaused: true,
+      }),
+    });
+    assert.equal(thirdResponse.status, 201, await thirdResponse.clone().text());
+    const createdThree = await thirdResponse.json() as { workspace: { worldIds: string[] }; active: string; worlds: unknown[] };
+    assert.deepEqual(createdThree.workspace.worldIds, ['w1', 'w2', 'w3']);
+    assert.equal(createdThree.worlds.length, 3);
+    assert.equal(createdThree.active, 'w1');
+    for (const id of ['w1', 'w2', 'w3']) assert.ok(existsSync(join(directory, `third-${id}.sqlite`)));
+    const thirdRegistry = await (await fetch(`${base}/api/worlds`)).json() as { worlds: unknown[]; workspaceName: string };
+    assert.equal(thirdRegistry.worlds.length, 3);
+    assert.equal(thirdRegistry.workspaceName, '三世界并行复验');
+    assert.equal(runtimeLog.filePath, runtimeLogPathForDatabase(thirdBase));
   } finally {
     await server.close();
     await workspace.dispose();

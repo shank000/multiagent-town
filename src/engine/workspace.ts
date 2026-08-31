@@ -80,7 +80,8 @@ export class ExperimentWorkspaceRuntime {
   get current(): BuiltExperimentWorkspace { return this.currentValue; }
 
   async replace(input: unknown): Promise<BuiltExperimentWorkspace> {
-    const next = await buildWorkspace(input, this.options, this.options.nextDatabasePath(), false);
+    const config = normalizeWorkspaceConfig(input);
+    const next = await buildWorkspace(config, this.options, this.options.nextDatabasePath(), false);
     const previous = this.currentValue;
     try {
       await disposeManagedWorlds(previous.worlds);

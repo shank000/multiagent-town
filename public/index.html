@@ -7,7 +7,7 @@
   <title>涌现社会研究台 · multiagent-town</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
-<body>
+<body data-workbench-explorer="open">
   <header id="hud">
     <div id="brand"><span class="brand-mark">E</span><div><b>EMERGENCE</b><small>SOCIAL OBSERVATORY</small></div></div>
     <div class="hud-status"><span class="status-label">世界时钟</span><strong id="clock">第1天 00:00</strong></div>
@@ -30,6 +30,37 @@
     <a class="hud-link" href="/stats.html" aria-label="打开深度社会统计页">深度统计</a>
     <a class="hud-link log-link" href="/logs.html" aria-label="打开后端运行日志页">后端日志</a>
   </header>
+
+  <nav id="workbench-rail" aria-label="实验工作台活动栏">
+    <button id="workbench-explorer-toggle" class="workbench-rail-action active" type="button" aria-controls="workspace-explorer" aria-expanded="true" title="实验资源管理器">
+      <span aria-hidden="true">▱</span><small>实验</small>
+    </button>
+    <a class="workbench-rail-action" href="#town-view" title="小镇现场"><span aria-hidden="true">⌂</span><small>小镇</small></a>
+    <a class="workbench-rail-action" href="#relation-view" title="人物关系"><span aria-hidden="true">⌘</span><small>关系</small></a>
+    <a class="workbench-rail-action" href="#inspector-view" title="人物与世界"><span aria-hidden="true">◎</span><small>观察</small></a>
+  </nav>
+
+  <aside id="workspace-explorer" aria-labelledby="workspace-explorer-title">
+    <header class="workspace-explorer-head">
+      <div><span class="section-kicker">EXPERIMENT EXPLORER</span><h2 id="workspace-explorer-title">实验工作区</h2></div>
+      <button id="workspace-explorer-close" type="button" aria-label="收起实验资源管理器" title="收起">‹</button>
+    </header>
+    <div class="workspace-explorer-actions">
+      <button id="workspace-create-open" class="workspace-primary-action" type="button"><span>＋</span> 新建实验工作空间</button>
+      <button id="workspace-reset-open" class="workspace-secondary-action" type="button"><span>↻</span> 重启当前世界状态</button>
+    </div>
+    <section class="workspace-explorer-section" aria-label="当前工作空间">
+      <div class="workspace-explorer-label"><span>当前工作空间</span><b id="workspace-loaded-count">— / 3</b></div>
+      <div id="workspace-tree" class="workspace-tree" role="tree" aria-live="polite">
+        <div class="workspace-tree-loading">正在读取实验配置……</div>
+      </div>
+    </section>
+    <section class="workspace-explorer-section workspace-explorer-guide" aria-label="加载说明">
+      <div class="workspace-explorer-label"><span>加载规则</span></div>
+      <p>每个工作空间只启动创建时选中的世界。可以运行单世界、双组对照或三世界并行实验。</p>
+    </section>
+    <footer><span class="live-dot"></span><span id="workspace-explorer-status">正在连接实验运行时</span></footer>
+  </aside>
 
   <main id="research-workspace">
     <nav class="viewport-jump-nav" aria-label="三窗快速导航">
@@ -155,13 +186,6 @@
         <section class="world-card glass-card is-compact" aria-label="当前世界状态">
           <div class="workspace-strip">
             <div><span class="section-kicker">EXPERIMENT WORKSPACE</span><strong id="workspace-summary">载入实验工作空间……</strong></div>
-            <details class="workspace-operations">
-              <summary class="mini-action">运行管理</summary>
-              <div>
-                <button class="mini-action" id="workspace-create-open" type="button">＋ 新建小镇</button>
-                <button class="mini-action danger" id="workspace-reset-open" type="button">↻ 重置当前小镇</button>
-              </div>
-            </details>
           </div>
           <div class="world-card-top">
             <div><span class="section-kicker">当前世界</span><div id="world-desc">载入世界状态……</div></div>
@@ -263,26 +287,40 @@
   </div>
   <dialog id="workspace-create-dialog" class="workspace-dialog workspace-create-dialog" aria-labelledby="workspace-create-title">
     <form id="workspace-create-form">
-      <header class="dialog-head"><div><span class="section-kicker">NEW EXPERIMENT WORKSPACE</span><h2 id="workspace-create-title">创建小镇实验</h2><p>每次创建使用全新的数据库、日志和世界状态；请选择实际需要运行的处理世界。</p></div><button class="dialog-close" type="button" data-close-dialog="workspace-create-dialog" aria-label="关闭">×</button></header>
-      <div class="dialog-body">
-        <section class="editor-section"><h3>小镇初始配置</h3><div class="editor-grid">
-          <label class="wide">工作空间名称<input name="name" maxlength="60" value="关系记忆实验" required /></label>
-          <label>随机种子<input name="seed" type="number" min="1" max="2147483647" value="1" required /></label>
-          <label>默认实验天数<input name="defaultExperimentDays" type="number" min="1" max="365" value="30" required /></label>
-          <label>世界运行速度<select name="worldSpeed"><option value="0.05">0.05× · 极慢推理</option><option value="0.1">0.1×</option><option value="0.2">0.2×</option><option value="0.3">0.3×</option><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1× · 基准</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option><option value="60">60× · 高速观察</option></select></label>
-          <label class="workspace-pause-option"><input name="startPaused" type="checkbox" checked /> 创建后保持暂停，确认配置再运行</label>
-        </div></section>
-        <section class="editor-section"><h3>选择加载的世界 <small>至少 1 个，最多 3 个</small></h3>
-          <div id="workspace-world-options" class="workspace-world-options">
-            <label class="workspace-world-option active"><input type="checkbox" name="worldKinds" value="mem-on" checked /><span><b>关系记忆 · 开</b><small>历史可见 · 馈礼开启 · 联合处理展示</small></span></label>
-            <label class="workspace-world-option"><input type="checkbox" name="worldKinds" value="mem-off" /><span><b>关系记忆 · 关</b><small>历史隐藏 · 馈礼关闭 · 零处理参考</small></span></label>
-            <label class="workspace-world-option"><input type="checkbox" name="worldKinds" value="rumor" /><span><b>谣言传播</b><small>秘密注入 · 选择性披露 · 传播链观察</small></span></label>
-          </div>
-          <p class="workspace-create-note">加载多个世界时共享同一模型调度器并保持时钟同步；未选择的世界不会创建引擎、数据库或模型任务。</p>
-          <div id="workspace-create-safety" class="model-config-safety">创建前需要暂停当前小镇、停止正式实验并等待对话和推理队列清空。</div>
-        </section>
+      <header class="dialog-head workspace-studio-head"><div><span class="section-kicker">EXPERIMENT WORKSPACE STUDIO</span><h2 id="workspace-create-title">新建小镇实验工作空间</h2><p>从初始配置创建一套隔离的小镇状态，只加载本次研究需要的世界。</p></div><button class="dialog-close" type="button" data-close-dialog="workspace-create-dialog" aria-label="关闭">×</button></header>
+      <div class="workspace-studio-layout">
+        <aside class="workspace-studio-steps" aria-label="实验配置步骤">
+          <div class="active"><span>01</span><b>基本配置</b><small>命名与随机种子</small></div>
+          <div><span>02</span><b>处理世界</b><small>选择加载 1–3 个</small></div>
+          <div><span>03</span><b>启动检查</b><small>隔离数据与暂停状态</small></div>
+        </aside>
+        <div class="dialog-body workspace-studio-editor">
+          <div class="workspace-editor-tab"><span>◆</span> experiment.config <i>初始小镇配置</i></div>
+          <section class="editor-section"><h3>小镇初始配置</h3><div class="editor-grid">
+            <label class="wide">工作空间名称<input name="name" maxlength="60" value="关系记忆实验" required /></label>
+            <label>随机种子<input name="seed" type="number" min="1" max="2147483647" value="1" required /></label>
+            <label>默认实验天数<input name="defaultExperimentDays" type="number" min="1" max="365" value="30" required /></label>
+            <label>世界运行速度<select name="worldSpeed"><option value="0.05">0.05× · 极慢推理</option><option value="0.1">0.1×</option><option value="0.2">0.2×</option><option value="0.3">0.3×</option><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1× · 基准</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option><option value="60">60× · 高速观察</option></select></label>
+            <label class="workspace-pause-option"><input name="startPaused" type="checkbox" checked /> 创建后保持暂停，核对居民、模型与实验配置后再运行</label>
+          </div></section>
+          <section class="editor-section workspace-world-editor">
+            <div class="workspace-section-title"><h3>选择加载的世界 <small>至少 1 个，最多 3 个</small></h3><output id="workspace-world-count">将加载 1 个世界</output></div>
+            <div class="workspace-world-presets" aria-label="世界组合快速预设">
+              <button type="button" class="active" data-world-preset="1">单世界观察</button>
+              <button type="button" data-world-preset="2">双组对照</button>
+              <button type="button" data-world-preset="3">三世界并行</button>
+            </div>
+            <div id="workspace-world-options" class="workspace-world-options">
+              <label class="workspace-world-option active"><input type="checkbox" name="worldKinds" value="mem-on" checked /><span><b><i>W1</i> 关系记忆 · 开</b><small>历史可见 · 馈礼开启 · 联合处理展示</small><em>已加入工作空间</em></span></label>
+              <label class="workspace-world-option"><input type="checkbox" name="worldKinds" value="mem-off" /><span><b><i>W2</i> 关系记忆 · 关</b><small>历史隐藏 · 馈礼关闭 · 零处理参考</small><em>本次不加载</em></span></label>
+              <label class="workspace-world-option"><input type="checkbox" name="worldKinds" value="rumor" /><span><b><i>W3</i> 谣言传播</b><small>秘密注入 · 选择性披露 · 传播链观察</small><em>本次不加载</em></span></label>
+            </div>
+            <p class="workspace-create-note">已选世界共享同一模型调度器并保持时钟同步；其余世界不创建引擎、数据库或模型任务。</p>
+            <div id="workspace-create-safety" class="model-config-safety">创建前需要暂停当前小镇、停止正式实验并等待对话和推理队列清空。</div>
+          </section>
+        </div>
       </div>
-      <footer class="dialog-actions"><button type="button" class="icon-btn" data-close-dialog="workspace-create-dialog">取消</button><button id="workspace-create-submit" type="submit" class="icon-btn primary">创建独立工作空间</button></footer>
+      <footer class="dialog-actions workspace-studio-actions"><span>创建后自动打开新工作空间，当前文件型实验档案继续保留。</span><button type="button" class="icon-btn" data-close-dialog="workspace-create-dialog">取消</button><button id="workspace-create-submit" type="submit" class="icon-btn primary">创建并打开 1 个世界</button></footer>
     </form>
   </dialog>
   <dialog id="workspace-reset-dialog" class="workspace-dialog compact-dialog" aria-labelledby="workspace-reset-title">

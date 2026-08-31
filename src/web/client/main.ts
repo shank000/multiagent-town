@@ -1311,16 +1311,64 @@ function workspaceKindLabel(kind: WorkspaceWorldKind): string {
   return '谣言传播';
 }
 
+function workspaceKindDescription(kind: WorkspaceWorldKind): string {
+  if (kind === 'mem-on') return '历史可见 · 实验组';
+  if (kind === 'mem-off') return '历史隐藏 · 对照组';
+  return '选择性披露 · 传播观察';
+}
+
+function selectedWorkspaceWorldCount(): number {
+  const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
+  return form?.querySelectorAll<HTMLInputElement>('input[name="worldKinds"]:checked').length ?? 0;
+}
+
+function refreshWorkspaceCreateSubmit(): void {
+  const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
+  if (!submit) return;
+  const selected = selectedWorkspaceWorldCount();
+  submit.textContent = selected > 0 ? `创建并打开 ${selected} 个世界` : '请至少选择 1 个世界';
+  submit.disabled = workspaceCreateOperationActive
+    || !workspaceEndpointAvailable
+    || !workspaceSafetyReady
+    || selected < 1;
+}
+
+function syncWorkspaceExplorerActive(worldId: string): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-workspace-world-id]').forEach((button) => {
+    const active = button.dataset.workspaceWorldId === worldId;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-current', active ? 'true' : 'false');
+  });
+}
+
+function renderWorkspaceExplorer(workspace: WorkspaceMetaView): void {
+  const count = document.getElementById('workspace-loaded-count');
+  if (count) count.textContent = `${workspace.worldCount} / 3`;
+  const tree = document.getElementById('workspace-tree');
+  if (tree) {
+    const children = workspace.worldIds.map((worldId, index) => {
+      const kind = workspace.worldKinds[index];
+      if (!kind) return '';
+      return `<button type="button" class="workspace-tree-world" role="treeitem" data-workspace-world-id="${escapeHtml(worldId)}"><i>${escapeHtml(worldId.toUpperCase())}</i><span><b>${escapeHtml(workspaceKindLabel(kind))}</b><small>${escapeHtml(workspaceKindDescription(kind))}</small></span><em aria-hidden="true"></em></button>`;
+    }).join('');
+    tree.innerHTML = `<div class="workspace-tree-root" role="treeitem" aria-expanded="true"><span aria-hidden="true">▾</span><b>${escapeHtml(workspace.name)}</b><small>seed ${workspace.seed} · ${workspace.defaultExperimentDays} 天 · ${workspace.worldSpeed}×</small></div>${children}`;
+  }
+  const status = document.getElementById('workspace-explorer-status');
+  if (status) status.textContent = `${workspace.worldCount} 个世界已加载 · ${workspace.startPaused ? '等待启动' : '正在运行'}`;
+  syncWorkspaceExplorerActive(activeWorldId);
+}
+
 function renderWorkspaceSafety(safety: LLMConfigSafetyView): void {
   workspaceSafetyReady = safety.ready;
+  const explorerStatus = document.getElementById('workspace-explorer-status');
+  if (explorerStatus) explorerStatus.textContent = `${loadedWorldCount} 个世界已加载 · ${safety.paused ? '已暂停' : '正在运行'}`;
   const element = document.getElementById('workspace-create-safety');
   if (!element) return;
   element.classList.toggle('ready', safety.ready);
   element.textContent = safety.ready
     ? '当前状态可安全创建。旧工作空间的数据库与日志会完整保留。'
     : `创建保护：${safety.reasons.join('；') || '当前暂不可创建'}。`;
-  const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
-  if (submit) submit.disabled = workspaceCreateOperationActive || !workspaceEndpointAvailable || !safety.ready;
+  refreshWorkspaceCreateSubmit();
   const resetSafety = document.getElementById('workspace-reset-safety');
   if (resetSafety) {
     resetSafety.classList.toggle('ready', safety.ready);
@@ -1336,6 +1384,7 @@ function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): v
   workspaceEndpointAvailable = true;
   currentWorkspace = view.workspace;
   loadedWorldCount = Math.max(1, view.workspace.worldCount);
+  renderWorkspaceExplorer(view.workspace);
   const summary = document.getElementById('workspace-summary');
   if (summary) {
     const worlds = view.workspace.worldKinds.map(workspaceKindLabel).join(' / ');
@@ -1373,6 +1422,12 @@ async function loadWorkspaceConfiguration(populate: boolean): Promise<void> {
     currentWorkspace = null;
     const summary = document.getElementById('workspace-summary');
     if (summary) summary.textContent = '当前后台需安全重启后启用工作空间管理';
+    const count = document.getElementById('workspace-loaded-count');
+    if (count) count.textContent = '不可用';
+    const tree = document.getElementById('workspace-tree');
+    if (tree) tree.innerHTML = '<div class="workspace-tree-loading">工作空间接口不可用；当前页面仍可观察原有内存世界。</div>';
+    const explorerStatus = document.getElementById('workspace-explorer-status');
+    if (explorerStatus) explorerStatus.textContent = '实验工作空间接口未连接';
     const safety = document.getElementById('workspace-create-safety');
     if (safety) { safety.classList.remove('ready'); safety.textContent = '当前内存世界保持运行；安全重启后可创建独立小镇实验。'; }
     const open = document.getElementById('workspace-create-open') as HTMLButtonElement | null;
@@ -1390,14 +1445,64 @@ function bindWorkspaceConfiguration(): void {
   const resetForm = document.getElementById('workspace-reset-form') as HTMLFormElement | null;
   const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
   if (!dialog || !form || !resetDialog || !resetForm) return;
+  const setExplorerOpen = (open: boolean) => {
+    document.body.dataset.workbenchExplorer = open ? 'open' : 'closed';
+    const toggle = document.getElementById('workbench-explorer-toggle');
+    toggle?.classList.toggle('active', open);
+    toggle?.setAttribute('aria-expanded', String(open));
+    window.setTimeout(() => window.dispatchEvent(new Event('resize')), 190);
+  };
+  document.getElementById('workbench-explorer-toggle')?.addEventListener('click', () => {
+    setExplorerOpen(document.body.dataset.workbenchExplorer !== 'open');
+  });
+  document.getElementById('workspace-explorer-close')?.addEventListener('click', () => setExplorerOpen(false));
+  document.getElementById('workspace-tree')?.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-workspace-world-id]');
+    const worldId = button?.dataset.workspaceWorldId;
+    const select = document.getElementById('world-select') as HTMLSelectElement | null;
+    if (!worldId || !select || select.value === worldId) return;
+    select.value = worldId;
+    select.dispatchEvent(new Event('change'));
+  });
   const refreshWorldOptions = () => {
+    const selected = Array.from(form.querySelectorAll<HTMLInputElement>('input[name="worldKinds"]:checked')).map((input) => input.value);
     form.querySelectorAll<HTMLElement>('.workspace-world-option').forEach((option) => {
       const checkbox = option.querySelector<HTMLInputElement>('input[name="worldKinds"]');
-      option.classList.toggle('active', checkbox?.checked === true);
+      const active = checkbox?.checked === true;
+      option.classList.toggle('active', active);
+      const state = option.querySelector('em');
+      if (state) state.textContent = active ? '已加入工作空间' : '本次不加载';
     });
+    const count = document.getElementById('workspace-world-count');
+    if (count) count.textContent = selected.length > 0 ? `将加载 ${selected.length} 个世界` : '尚未选择世界';
+    const presets: Record<string, string[]> = {
+      '1': ['mem-on'],
+      '2': ['mem-on', 'mem-off'],
+      '3': ['mem-on', 'mem-off', 'rumor'],
+    };
+    form.querySelectorAll<HTMLButtonElement>('[data-world-preset]').forEach((button) => {
+      const expected = presets[button.dataset.worldPreset ?? ''] ?? [];
+      button.classList.toggle('active', expected.length === selected.length && expected.every((kind) => selected.includes(kind)));
+    });
+    refreshWorkspaceCreateSubmit();
   };
   form.querySelectorAll<HTMLInputElement>('input[name="worldKinds"]').forEach((input) => {
     input.addEventListener('change', refreshWorldOptions);
+  });
+  form.querySelectorAll<HTMLButtonElement>('[data-world-preset]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const presets: Record<string, WorkspaceWorldKind[]> = {
+        '1': ['mem-on'],
+        '2': ['mem-on', 'mem-off'],
+        '3': ['mem-on', 'mem-off', 'rumor'],
+      };
+      const selected = presets[button.dataset.worldPreset ?? ''];
+      if (!selected) return;
+      form.querySelectorAll<HTMLInputElement>('input[name="worldKinds"]').forEach((input) => {
+        input.checked = selected.includes(input.value as WorkspaceWorldKind);
+      });
+      refreshWorldOptions();
+    });
   });
   refreshWorldOptions();
   document.getElementById('workspace-create-open')?.addEventListener('click', () => {
@@ -1472,7 +1577,7 @@ function bindWorkspaceConfiguration(): void {
       await loadWorkspaceConfiguration(false);
     } finally {
       workspaceCreateOperationActive = false;
-      submit.disabled = !workspaceEndpointAvailable || !workspaceSafetyReady;
+      refreshWorkspaceCreateSubmit();
     }
   });
 }
@@ -2079,12 +2184,14 @@ function bindControls(): void {
     }));
     activeWorldId = w.active ?? 'w1';
     sel.value = activeWorldId;
+    syncWorkspaceExplorerActive(activeWorldId);
     const cur = w.worlds.find((x) => x.id === activeWorldId);
     if (cur) renderWorldMeta(cur);
     const activateWorldView = async (worldId: string): Promise<WorldListItem | undefined> => {
       const nextSnapshot = await fetchWorldSnapshot(worldId);
       activeWorldId = worldId;
       sel.value = worldId;
+      syncWorkspaceExplorerActive(worldId);
       installWorldSnapshot(nextSnapshot);
       const selectedWorld = w.worlds.find((item) => item.id === worldId);
       if (selectedWorld) renderWorldMeta(selectedWorld);
@@ -2148,6 +2255,7 @@ function bindControls(): void {
         }
         activeWorldId = previousWorldId;
         sel.value = activeWorldId;
+        syncWorkspaceExplorerActive(activeWorldId);
         showToast(rollbackConfirmed
           ? '平行世界切换失败，当前世界保持不变'
           : '平行世界状态未能确认，请刷新页面重新同步', 'error');

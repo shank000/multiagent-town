@@ -178,20 +178,30 @@ test('Agent 模型运行方式在 UI 明确提供 Mock、本地模型与 API 三
 
 test('experiment workspace UI creates or safely resets a town and selects one to three world templates', () => {
   for (const id of [
+    'workbench-rail', 'workbench-explorer-toggle', 'workspace-explorer', 'workspace-tree',
+    'workspace-loaded-count', 'workspace-explorer-status',
     'workspace-summary', 'workspace-create-open', 'workspace-create-dialog', 'workspace-create-form',
-    'workspace-world-options', 'workspace-create-safety', 'workspace-create-submit',
+    'workspace-world-options', 'workspace-world-count', 'workspace-create-safety', 'workspace-create-submit',
     'workspace-reset-open', 'workspace-reset-dialog', 'workspace-reset-form', 'workspace-reset-submit',
   ]) assert.match(html, new RegExp(`id=["']${id}["']`));
   for (const kind of ['mem-on', 'mem-off', 'rumor']) assert.match(html, new RegExp(`value=["']${kind}["']`));
+  for (const count of ['1', '2', '3']) assert.match(html, new RegExp(`data-world-preset=["']${count}["']`));
   assert.match(client, /fetch\('\/api\/workspace'/);
   assert.match(client, /data\.getAll\('worldKinds'\)/);
+  assert.match(client, /renderWorkspaceExplorer/);
+  assert.match(client, /data-workspace-world-id/);
+  assert.match(client, /创建并打开 \$\{selected\} 个世界/);
   assert.match(client, /window\.location\.reload\(\)/);
   assert.match(server, /WORLD_TEMPLATE_CATALOG/);
   assert.match(server, /opts\.workspace\.replace\(body\)/);
+  assert.match(server, /worlds:\s*\(hubWorlds \?\? \[hub\(\)\]\)/);
   assert.match(server, /\/api\/workspace\/reset/);
   assert.match(server, /startPaused:\s*true/);
   assert.match(css, /\.workspace-world-options\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
-  assert.match(css, /\.workspace-operations\s*\{/);
+  assert.match(css, /#workbench-rail\s*\{/);
+  assert.match(css, /#workspace-explorer\s*\{/);
+  assert.match(css, /\.workspace-studio-layout\s*\{/);
+  assert.match(css, /body\[data-workbench-explorer="closed"\] #research-workspace/);
 });
 
 test('timeline controls expose fractional manual speeds and continuous model-aware governance', () => {

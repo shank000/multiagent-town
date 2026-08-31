@@ -963,6 +963,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           ok: true,
           workspace: opts.workspace.current.meta,
           templates: WORLD_TEMPLATE_CATALOG,
+          active: activeId,
+          worlds: (hubWorlds ?? [hub()]).map((world) => world.meta),
           safety: llmConfigurationSafety(),
         }));
         return;
