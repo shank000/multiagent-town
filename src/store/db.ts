@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   id                TEXT PRIMARY KEY,
   agent_a           TEXT NOT NULL,
   agent_b           TEXT NOT NULL,
-  status            TEXT NOT NULL CHECK (status IN ('active','completed','error')),
+  status            TEXT NOT NULL CHECK (status IN ('active','completed','error','interrupted')),
   started_game_time INTEGER NOT NULL,
   ended_game_time   INTEGER,
   turn_count        INTEGER NOT NULL DEFAULT 0,
@@ -174,6 +174,7 @@ export function openDb(path: string): DbHandle {
   ensureColumn(raw, 'reflections', 'version', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(raw, 'messages', 'conversation_id', 'TEXT');
   ensureColumn(raw, 'messages', 'turn_index', 'INTEGER');
+  ensureInterruptedConversationStatus(raw);
   raw.exec('CREATE INDEX IF NOT EXISTS idx_reflections_agent_day ON reflections(agent_id, day, created_game_time)');
   raw.exec('CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(game_time)');
   raw.exec('CREATE INDEX IF NOT EXISTS idx_messages_conversation_turn ON messages(conversation_id, turn_index)');
@@ -190,6 +191,43 @@ export function openDb(path: string): DbHandle {
       return row?.value ?? null;
     },
   };
+}
+
+/** 旧库的 CHECK 约束不能 ALTER；事务内重建表并原样搬运既有会话。 */
+function ensureInterruptedConversationStatus(raw: DatabaseSync): void {
+  const row = raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversations'")
+    .get() as { sql?: string } | undefined;
+  if (row?.sql?.includes("'interrupted'")) return;
+  raw.exec('BEGIN IMMEDIATE');
+  try {
+    raw.exec(`
+      ALTER TABLE conversations RENAME TO conversations_before_interrupted;
+      CREATE TABLE conversations (
+        id                TEXT PRIMARY KEY,
+        agent_a           TEXT NOT NULL,
+        agent_b           TEXT NOT NULL,
+        status            TEXT NOT NULL CHECK (status IN ('active','completed','error','interrupted')),
+        started_game_time INTEGER NOT NULL,
+        ended_game_time   INTEGER,
+        turn_count        INTEGER NOT NULL DEFAULT 0,
+        summary           TEXT NOT NULL DEFAULT '',
+        error_text        TEXT NOT NULL DEFAULT '',
+        updated_game_time INTEGER NOT NULL
+      );
+      INSERT INTO conversations(
+        id, agent_a, agent_b, status, started_game_time, ended_game_time,
+        turn_count, summary, error_text, updated_game_time
+      ) SELECT
+        id, agent_a, agent_b, status, started_game_time, ended_game_time,
+        turn_count, summary, error_text, updated_game_time
+      FROM conversations_before_interrupted;
+      DROP TABLE conversations_before_interrupted;
+      COMMIT;
+    `);
+  } catch (error) {
+    try { raw.exec('ROLLBACK'); } catch { /* 原始迁移错误优先 */ }
+    throw error;
+  }
 }
 
 function ensureColumn(raw: DatabaseSync, table: 'reflections' | 'messages', column: string, definition: string): void {

@@ -223,3 +223,105 @@ test('六居民碰撞选择全部排队并最终形成可审计的完成生命�
     db.raw.close();
   }
 });
+
+test('终止边界先排空模型调用，再幂等中断活跃会话和排队预留', async () => {
+  let releaseDialogue!: () => void;
+  let markStarted!: () => void;
+  const dialogueReleased = new Promise<void>((resolve) => { releaseDialogue = resolve; });
+  const dialogueStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+  const provider: LLMProvider = {
+    name: 'gated-dialogue',
+    async complete(request: LLMRequest): Promise<LLMResponse> {
+      assert.equal(request.template, DIALOGUE_TEMPLATE);
+      markStarted();
+      await dialogueReleased;
+      const parsed = { utterance: '我听见了，我们稍后接着聊。', end_dialogue: false };
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const { db, log, store, dialogue, agents, world } = setup(3, provider);
+  try {
+    store.startConversation({ id: 'conversation:completed', agentA: agents[0].id, agentB: agents[2].id, startedGameTime: 2 });
+    store.finishConversation('conversation:completed', 'completed', 5, { summary: '既有完成记录' });
+
+    const active = dialogue.reserve(agents[0], agents[1], 10, {
+      requireAdjacent: false, source: 'experiment', world,
+    });
+    assert.equal(dialogue.dispatchReservations(world, 10), 1);
+    await dialogueStarted;
+    const queued = dialogue.reserve(agents[1], agents[2], 11, {
+      requireAdjacent: false, source: 'experiment', world,
+    });
+
+    let terminated = false;
+    const termination = dialogue.terminate(20, '有限世界达到终点').then(() => { terminated = true; });
+    await flush();
+    assert.equal(terminated, false, '仍在执行的模型调用必须先排空');
+    assert.equal(store.conversationsFor(agents[0].id).find((item) => item.id === active.conversationId)?.status, 'active');
+
+    releaseDialogue();
+    await termination;
+    assert.deepEqual(dialogue.activeSessions(), []);
+
+    const interrupted = store.conversationsFor(agents[0].id).find((item) => item.id === active.conversationId);
+    assert.equal(interrupted?.status, 'interrupted');
+    assert.equal(interrupted?.endedGameTime, 20);
+    assert.equal(interrupted?.errorText, '有限世界达到终点');
+    const completed = store.conversationsFor(agents[0].id).find((item) => item.id === 'conversation:completed');
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.endedGameTime, 5);
+    assert.equal(completed?.summary, '既有完成记录');
+
+    const lifecycle = log.eventsOfKind('dialogue_lifecycle');
+    const statuses = (conversationId: string) => lifecycle
+      .filter((event) => event.payload?.conversationId === conversationId)
+      .map((event) => [event.payload?.status, event.payload?.termination]);
+    assert.deepEqual(statuses(active.conversationId), [
+      ['queued', undefined], ['started', undefined], ['failed', 'interrupted'],
+    ]);
+    assert.deepEqual(statuses(queued.conversationId), [
+      ['queued', undefined], ['failed', 'interrupted'],
+    ]);
+    assert.equal(
+      store.conversationsFor(agents[2].id).some((item) => item.id === queued.conversationId),
+      false,
+      '尚未启动的预留以生命周期事件审计，不制造伪会话记录',
+    );
+
+    const eventCount = lifecycle.length;
+    await dialogue.terminate(99, '重复终止不应覆盖');
+    assert.equal(log.eventsOfKind('dialogue_lifecycle').length, eventCount);
+    const unchanged = store.conversationsFor(agents[0].id).find((item) => item.id === active.conversationId);
+    assert.equal(unchanged?.endedGameTime, 20);
+    assert.equal(unchanged?.errorText, '有限世界达到终点');
+    assert.equal(dialogue.start(agents[0], agents[1], 100, { requireAdjacent: false }), false);
+    assert.throws(
+      () => dialogue.reserve(agents[0], agents[1], 100, { requireAdjacent: false }),
+      /对话引擎已终止/,
+    );
+  } finally {
+    releaseDialogue();
+    await dialogue.terminate(20, '测试清理');
+    db.raw.close();
+  }
+});
+
+test('早于会话开始时间的默认终止时刻不会产生倒置时间线', async () => {
+  const { db, log, store, dialogue, agents, world } = setup(2);
+  try {
+    const reservation = dialogue.reserve(agents[0], agents[1], 10, {
+      requireAdjacent: false, source: 'experiment', world,
+    });
+    assert.equal(dialogue.dispatchReservations(world, 10), 1);
+    await dialogue.terminate(0, '未收到心智 tick 的关闭');
+    const record = store.conversationsFor(agents[0].id).find((item) => item.id === reservation.conversationId);
+    assert.equal(record?.status, 'interrupted');
+    assert.equal(record?.startedGameTime, 10);
+    assert.equal(record?.endedGameTime, 10);
+    const failed = log.eventsOfKind('dialogue_lifecycle').find((event) => event.payload?.status === 'failed');
+    assert.equal(failed?.gameTime, 10);
+  } finally {
+    await dialogue.terminate(0, '测试清理');
+    db.raw.close();
+  }
+});

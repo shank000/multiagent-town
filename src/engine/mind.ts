@@ -24,6 +24,11 @@ export interface MindEngineOptions {
   townModelSeed?: number | string;
 }
 
+export interface MindDisposeOptions {
+  gameTime?: number;
+  reason?: string;
+}
+
 export class MindEngine {
   readonly store: MemoryStore;
   readonly planner: Planner;
@@ -35,6 +40,8 @@ export class MindEngine {
   readonly townLife: TownLifeEngine;
   private writer: MemoryWriter;
   private pendingDaily = new Set<Promise<void>>();
+  private lastGameTime = 0;
+  private disposePromise: Promise<void> | null = null;
 
   constructor(opts: MindEngineOptions) {
     this.store = new MemoryStore(opts.db);
@@ -51,6 +58,7 @@ export class MindEngine {
   }
 
   tick(world: WorldState, dt: number, now: number, realtimeSampling = false): void {
+    this.lastGameTime = Math.max(this.lastGameTime, now);
     const day = Math.floor(now / MINUTES_PER_DAY) + 1;
     const minute = now % MINUTES_PER_DAY;
     const previousTotal = Math.max(0, now - dt);
@@ -116,10 +124,17 @@ export class MindEngine {
     return this.pendingDaily.size > 6;
   }
 
-  /** 停止接收新事件并等待事件记忆写入完成。 */
-  async dispose(): Promise<void> {
+  /** 停止接收新事件，终结会话并等待全部认知记录写入完成。 */
+  dispose(options: MindDisposeOptions = {}): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     this.writer.detach();
-    await this.drain();
+    const gameTime = options.gameTime ?? this.lastGameTime;
+    const reason = options.reason?.trim() || '世界运行结束';
+    this.disposePromise = (async () => {
+      await this.dialogue.terminate(gameTime, reason);
+      await this.drain();
+    })();
+    return this.disposePromise;
   }
 }
 

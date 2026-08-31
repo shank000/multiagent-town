@@ -113,6 +113,8 @@ export class DialogueEngine {
   private pending = new Map<string, Pending>();
   private activeTasks = new Set<Promise<void>>();
   private knownResidentNames = new Set<string>();
+  private closed = false;
+  private terminationPromise: Promise<void> | null = null;
 
   constructor(
     private llm: LLMGateway,
@@ -181,6 +183,7 @@ export class DialogueEngine {
 
   /** 只有相邻且都未参加其他会话的居民才能开始新会话。 */
   start(a: Agent, b: Agent, now: number, options: DialogueStartOptions = {}): boolean {
+    if (this.closed) return false;
     this.knownResidentNames.add(a.name);
     this.knownResidentNames.add(b.name);
     const requireAdjacent = options.requireAdjacent ?? true;
@@ -198,6 +201,7 @@ export class DialogueEngine {
    * 排队本身不占用参与者锁；实际启动仍复用 start 的会话锁和生成流程。
    */
   reserve(a: Agent, b: Agent, now: number, options: DialogueStartOptions = {}): DialogueReservation {
+    if (this.closed) throw new Error('对话引擎已终止，不能新增预留');
     if (a.id === b.id) throw new Error('不能为同一居民预留自我对话');
     const requireAdjacent = options.requireAdjacent ?? true;
     if (requireAdjacent && Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) > 1) {
@@ -223,6 +227,7 @@ export class DialogueEngine {
 
   /** 尝试启动所有参与者已空闲的预留；返回本次实际启动数。 */
   dispatchReservations(world: WorldState, now: number): number {
+    if (this.closed) return 0;
     return this.startReservations(world, now);
   }
 
@@ -264,7 +269,41 @@ export class DialogueEngine {
     while (this.activeTasks.size > 0) await Promise.allSettled([...this.activeTasks]);
   }
 
+  /**
+   * 世界停止时的唯一会话终止边界：先等模型调用落定，再中断仍活跃的持久化会话，
+   * 并让未启动/已启动的安排会话获得兼容的 failed 生命周期审计。
+   */
+  terminate(now: number, reason = '世界运行结束'): Promise<void> {
+    if (this.terminationPromise) return this.terminationPromise;
+    this.closed = true;
+    const endedGameTime = Math.max(0, Math.floor(Number.isFinite(now) ? now : 0));
+    const terminationReason = reason.trim().slice(0, 240) || '世界运行结束';
+    this.terminationPromise = this.terminateActive(endedGameTime, terminationReason);
+    return this.terminationPromise;
+  }
+
+  private async terminateActive(now: number, reason: string): Promise<void> {
+    await this.drain();
+    for (const [key, session] of this.sessions) {
+      if (session.phase !== 'completed') {
+        const terminalGameTime = Math.max(now, session.requestedGameTime);
+        const interrupted = this.store.interruptConversation(session.conversationId, terminalGameTime, reason);
+        if (interrupted && session.lifecycle) {
+          this.emitLifecycle(session, 'failed', terminalGameTime, reason, 'interrupted');
+        }
+        session.phase = 'completed';
+      }
+      this.pending.delete(key);
+    }
+    this.sessions.clear();
+    for (const reservation of this.reservations) {
+      this.emitLifecycle(reservation, 'failed', Math.max(now, reservation.requestedGameTime), reason, 'interrupted');
+    }
+    this.reservations = [];
+  }
+
   tick(world: WorldState, dt: number, now: number): void {
+    if (this.closed) return;
     for (const agent of world.allAgents()) this.knownResidentNames.add(agent.name);
     for (const [key, s] of this.sessions) {
       if (s.phase === 'completed') {
@@ -582,6 +621,7 @@ export class DialogueEngine {
     status: 'queued' | 'started' | 'completed' | 'failed',
     now: number,
     errorText?: string,
+    termination?: 'interrupted',
   ): void {
     const reservation = 'aId' in conversation
       ? conversation
@@ -600,7 +640,7 @@ export class DialogueEngine {
       type: 'system',
       actorId: reservation.aId,
       targetIds: [reservation.bId],
-      description: `「${reservation.aName}」与「${reservation.bName}」的安排会话${lifecycleLabel(status)}`,
+      description: `「${reservation.aName}」与「${reservation.bName}」的安排会话${lifecycleLabel(status, termination)}`,
       location: reservation.locationId,
       gameTime: now,
       payload: {
@@ -613,15 +653,17 @@ export class DialogueEngine {
         requestedGameTime: reservation.requestedGameTime,
         waitMinutes: Math.max(0, now - reservation.requestedGameTime),
         ...(errorText ? { errorText } : {}),
+        ...(termination ? { termination } : {}),
       },
     });
   }
 }
 
-function lifecycleLabel(status: 'queued' | 'started' | 'completed' | 'failed'): string {
+function lifecycleLabel(status: 'queued' | 'started' | 'completed' | 'failed', termination?: 'interrupted'): string {
   if (status === 'queued') return '已排队';
   if (status === 'started') return '已开始';
   if (status === 'completed') return '已完成';
+  if (termination === 'interrupted') return '因世界结束而中断';
   return '执行失败';
 }
 

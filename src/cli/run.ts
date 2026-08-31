@@ -36,7 +36,7 @@ export function parseArgs(argv: string[]): RunArgs {
 
 const STATE_ICON: Record<string, string> = { idle: '·', thinking: '…', moving: '→', acting: '◆' };
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const provider = providerNameFromEnv();
   const gateway = new LLMGateway(gatewayConfigFromEnv());
@@ -51,22 +51,44 @@ function main(): void {
   const loop = new WorldLoop(time, world, executor, log, db, {
     onTick: (clock) => printBoard(clock, world, log, gateway),
   }, social, mind);
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = (reason: string, showSummary: boolean): Promise<void> => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      try {
+        loop.stop();
+        await loop.drain();
+        await mind.dispose({ gameTime: time.state.totalMinutes, reason });
+        await gateway.drain();
+        if (showSummary) printSummary(time.state, gateway, log, args.dbPath);
+      } finally {
+        db.raw.close();
+      }
+    })();
+    return shutdownPromise;
+  };
 
   console.log(`[multiagent-town M0] provider=${provider} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
   if (args.untilMinutes !== null) {
-    void loop.runUntil(args.untilMinutes).then(() => {
-      printSummary(time.state, gateway, log, args.dbPath);
-      process.exit(0);
-    });
+    try {
+      await loop.runUntil(args.untilMinutes);
+      await shutdown('有限运行达到设定终点', true);
+    } catch (error) {
+      await shutdown('有限运行异常终止', false).catch(() => { /* 保留原始运行错误 */ });
+      throw error;
+    }
     return;
   }
   console.log('按 Ctrl+C 停止。');
   loop.start();
-  process.on('SIGINT', () => {
-    loop.stop();
-    printSummary(time.state, gateway, log, args.dbPath);
-    process.exit(0);
-  });
+  const handleSignal = (signal: 'SIGINT' | 'SIGTERM') => {
+    void shutdown(`收到 ${signal}，世界运行结束`, true).catch((error) => {
+      console.error('[town shutdown]', error);
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGINT', () => handleSignal('SIGINT'));
+  process.once('SIGTERM', () => handleSignal('SIGTERM'));
 }
 
 function printBoard(clock: ClockState, world: WorldState, log: EventLog, gateway: LLMGateway): void {
@@ -92,4 +114,7 @@ function printSummary(clock: ClockState, gateway: LLMGateway, log: EventLog, dbP
   console.log(`日志已保存至 ${dbPath}，可用 pnpm replay --day 1 回放。`);
 }
 
-main();
+void main().catch((error: unknown) => {
+  console.error('[town]', error);
+  process.exitCode = 1;
+});

@@ -657,6 +657,7 @@ canvas { display: block; }
 .conversation-card > summary b[data-status="active"] { color: var(--teal); }
 .conversation-card > summary b[data-status="completed"] { color: var(--success); }
 .conversation-card > summary b[data-status="error"] { color: var(--danger); }
+.conversation-card > summary b[data-status="interrupted"] { color: var(--accent-strong); }
 .conversation-card > summary small { color: var(--ink-muted); font: 13px var(--font-mono); }
 .conversation-meta { padding: 7px 10px; border-top: 1px solid var(--edge-soft); color: var(--ink-muted); font: 13px/1.55 var(--font-mono); }
 .conversation-transcript { display: grid; gap: 6px; padding: 8px; }
@@ -667,10 +668,11 @@ canvas { display: block; }
 .conversation-turn span, .conversation-turn time { color: var(--ink-muted); font: 13px var(--font-mono); }
 .conversation-turn p { margin: 3px 0; color: var(--ink); font-size: 14px; line-height: 1.6; }
 .conversation-turn time { display: block; text-align: right; }
-.conversation-summary, .conversation-error { margin: 0 8px 8px; padding: 8px; border-radius: 7px; color: var(--ink-muted); font-size: 13px; }
+.conversation-summary, .conversation-error, .conversation-interruption { margin: 0 8px 8px; padding: 8px; border-radius: 7px; color: var(--ink-muted); font-size: 13px; }
 .conversation-summary { background: rgba(242,198,109,.07); }
 .conversation-summary span { display: block; color: var(--accent); font-size: 13px; font-weight: 700; }
 .conversation-error { background: rgba(245,119,119,.08); color: var(--danger); }
+.conversation-interruption { background: rgba(242,198,109,.08); color: var(--accent-strong); }
 
 .dyad-inspector { display: grid; gap: 10px; font-size: 14px; }
 .dyad-inspector > .relation-card { margin: 0; }

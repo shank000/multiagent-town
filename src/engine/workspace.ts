@@ -185,7 +185,10 @@ export async function disposeManagedWorlds(worlds: readonly ManagedWorld[]): Pro
   if (!worlds.length) return;
   stopAllWorlds([...worlds]);
   await Promise.all(worlds.map((world) => world.loop.drain()));
-  await Promise.all(worlds.map((world) => world.mind.dispose()));
+  await Promise.all(worlds.map((world) => world.mind.dispose({
+    gameTime: world.time.state.totalMinutes,
+    reason: '实验工作空间关闭',
+  })));
   for (const world of worlds) {
     try { world.db.raw.close(); } catch { /* 已关闭的工作空间保持幂等 */ }
   }

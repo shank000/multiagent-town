@@ -309,7 +309,7 @@ interface DyadEvidenceView {
 
 interface DyadConversationView {
   id: string;
-  status: 'active' | 'completed' | 'error';
+  status: 'active' | 'completed' | 'error' | 'interrupted';
   startedGameTime: number;
   endedGameTime: number | null;
   turnCount: number;
@@ -507,7 +507,7 @@ function renderLegacyDimensions(response: RelationshipDyadResponse): string {
 }
 
 function renderDyadConversations(response: RelationshipDyadResponse): string {
-  const statusLabels = { active: '进行中', completed: '已完成', error: '异常结束' } as const;
+  const statusLabels = { active: '进行中', completed: '已完成', error: '异常结束', interrupted: '运行结束' } as const;
   if (!Array.isArray(response.conversations) || !response.conversations.length) {
     return '<p class="label">没有可识别的连贯会话</p>';
   }
@@ -525,7 +525,7 @@ function renderDyadConversations(response: RelationshipDyadResponse): string {
         <p>${escapeHtml(message.content)}</p><time>${safeGameTimeLabel(message.gameTime)}</time></div>
       </div>`;
     }).join('');
-    const status = conversation.status === 'active' || conversation.status === 'completed'
+    const status = conversation.status === 'active' || conversation.status === 'completed' || conversation.status === 'interrupted'
       ? conversation.status
       : 'error';
     return `<details class="conversation-card" ${index === 0 || status === 'active' ? 'open' : ''}>
@@ -533,7 +533,7 @@ function renderDyadConversations(response: RelationshipDyadResponse): string {
       <div class="conversation-meta">${safeGameTimeLabel(conversation.startedGameTime)}${conversation.endedGameTime === null ? '' : ` — ${safeGameTimeLabel(conversation.endedGameTime)}`}</div>
       <div class="conversation-transcript">${transcript || `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>`}</div>
       ${conversation.summary ? `<div class="conversation-summary"><span>会话摘要</span>${escapeHtml(conversation.summary)}</div>` : ''}
-      ${conversation.errorText ? `<div class="conversation-error">${escapeHtml(conversation.errorText)}</div>` : ''}
+      ${conversation.errorText ? `<div class="${status === 'interrupted' ? 'conversation-interruption' : 'conversation-error'}">${escapeHtml(conversation.errorText)}</div>` : ''}
     </details>`;
   }).join('');
 }
@@ -616,7 +616,7 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
       reflections: ReflectionView[];
       dialogues: { fromAgent: string; toAgent: string; content: string; gameTime: number }[];
       conversations: {
-        id: string; status: 'active' | 'completed' | 'error'; startedGameTime: number;
+        id: string; status: 'active' | 'completed' | 'error' | 'interrupted'; startedGameTime: number;
         endedGameTime: number | null; turnCount: number; summary: string; errorText: string;
         runtime?: ConversationRuntimeView | null;
         participants: { id: string; name: string }[];
@@ -722,7 +722,7 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
       const top = rel.standings.slice(0, 3).map((s, i) => `<div class="dl-item">👑${i + 1} ${escapeHtml(s.name)}（${s.score.toFixed(3)}）</div>`).join('');
       body.innerHTML = `<p class="label">小镇声望榜</p>${top}<p class="label">有向社会关系探索性投影</p><p class="relation-notice">${escapeHtml(rel.proxyNotice)} 分类与维度用于描述性检查，不作为关系事实。</p>${bars}`;
     } else {
-      const statusLabel = { active: '进行中', completed: '已完成', error: '异常结束' } as const;
+      const statusLabel = { active: '进行中', completed: '已完成', error: '异常结束', interrupted: '运行结束' } as const;
       body.innerHTML = mind.conversations.length
         ? mind.conversations.map((conversation, index) => {
             const people = conversation.participants.map((participant) => participant.name).join(' ↔ ');
@@ -738,7 +738,7 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
               <div class="conversation-meta">会话 ${escapeHtml(conversation.id.slice(0, 8))} · ${gameTimeLabel(conversation.startedGameTime)}${conversation.endedGameTime === null ? '' : ` — ${gameTimeLabel(conversation.endedGameTime)}`}</div>
               <div class="conversation-transcript">${transcript || `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>`}</div>
               ${conversation.summary ? `<div class="conversation-summary"><span>会话摘要</span>${escapeHtml(conversation.summary)}</div>` : ''}
-              ${conversation.errorText ? `<div class="conversation-error">${escapeHtml(conversation.errorText)}</div>` : ''}
+              ${conversation.errorText ? `<div class="${conversation.status === 'interrupted' ? 'conversation-interruption' : 'conversation-error'}">${escapeHtml(conversation.errorText)}</div>` : ''}
             </details>`;
           }).join('')
         : mind.dialogues.length

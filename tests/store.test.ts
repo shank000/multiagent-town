@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
+import { MemoryStore } from '../src/store/memory';
 import type { GameEvent } from '../src/core/types';
 
 function ev(id: string, gameTime: number, description: string, type: GameEvent['type'], payload: Record<string, unknown> | null = null): GameEvent {
@@ -76,6 +78,70 @@ test('文件模式自动创建目录', () => {
   try {
     db.setMeta('k', 'v');
     assert.equal(db.getMeta('k'), 'v');
+  } finally {
+    db.raw.close();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+test('旧会话表迁移保留既有记录、索引并幂等支持 interrupted 终态', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'town-conversation-migration-'));
+  const path = join(dir, 'legacy.sqlite');
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    CREATE TABLE conversations (
+      id TEXT PRIMARY KEY,
+      agent_a TEXT NOT NULL,
+      agent_b TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active','completed','error')),
+      started_game_time INTEGER NOT NULL,
+      ended_game_time INTEGER,
+      turn_count INTEGER NOT NULL DEFAULT 0,
+      summary TEXT NOT NULL DEFAULT '',
+      error_text TEXT NOT NULL DEFAULT '',
+      updated_game_time INTEGER NOT NULL
+    );
+    CREATE INDEX idx_conversations_agents_time
+      ON conversations(agent_a, agent_b, updated_game_time DESC);
+    INSERT INTO conversations VALUES
+      ('completed:legacy', 'agent:a', 'agent:b', 'completed', 2, 8, 3, '既有摘要', '', 8),
+      ('active:legacy', 'agent:a', 'agent:c', 'active', 12, NULL, 0, '', '', 12);
+  `);
+  legacy.close();
+
+  let db = openDb(path);
+  try {
+    const table = db.raw.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='conversations'")
+      .get() as { sql: string };
+    assert.match(table.sql, /'interrupted'/);
+    const completed = db.raw.prepare("SELECT * FROM conversations WHERE id='completed:legacy'")
+      .get() as { status: string; ended_game_time: number; summary: string };
+    assert.deepEqual(
+      { status: completed.status, ended: completed.ended_game_time, summary: completed.summary },
+      { status: 'completed', ended: 8, summary: '既有摘要' },
+    );
+    const index = db.raw.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_conversations_agents_time'").get();
+    assert.ok(index);
+    const store = new MemoryStore(db);
+    assert.equal(store.interruptConversation('active:legacy', 5, '测试世界结束'), true);
+    const interrupted = db.raw.prepare("SELECT status, ended_game_time, error_text FROM conversations WHERE id='active:legacy'")
+      .get() as { status: string; ended_game_time: number; error_text: string };
+    assert.equal(interrupted.status, 'interrupted');
+    assert.equal(interrupted.ended_game_time, 12);
+    assert.equal(interrupted.error_text, '测试世界结束');
+    assert.equal(store.interruptConversation('active:legacy', 99, '重复终止'), false);
+  } finally {
+    db.raw.close();
+  }
+
+  db = openDb(path);
+  try {
+    const rows = db.raw.prepare('SELECT id, status FROM conversations ORDER BY id').all()
+      .map((row) => ({ ...(row as { id: string; status: string }) }));
+    assert.deepEqual(rows, [
+      { id: 'active:legacy', status: 'interrupted' },
+      { id: 'completed:legacy', status: 'completed' },
+    ]);
   } finally {
     db.raw.close();
     rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });

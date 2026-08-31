@@ -132,6 +132,10 @@ test('inspector exposes directed relationship evidence and groups dialogue by pe
   assert.match(panelClient, /mind\.conversations/);
   assert.match(panelClient, /message\.fromName/);
   assert.match(panelClient, /conversation\.status/);
+  assert.match(panelClient, /interrupted: '运行结束'/);
+  assert.match(panelClient, /conversation-interruption/);
+  assert.match(css, /data-status="interrupted"[^}]*color:\s*var\(--accent-strong\)/s);
+  assert.match(css, /\.conversation-interruption\s*\{[^}]*background:/s);
 });
 
 test('resident editor, pixel identity and multi-channel social interactions are visible and research-scoped', () => {

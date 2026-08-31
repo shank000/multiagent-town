@@ -48,7 +48,7 @@ export interface PlanRecord {
   hourly: AgendaItem[]; status: string; createdGameTime: number;
 }
 
-export type ConversationStatus = 'active' | 'completed' | 'error';
+export type ConversationStatus = 'active' | 'completed' | 'error' | 'interrupted';
 
 export interface ConversationMessage {
   id: string;
@@ -401,6 +401,19 @@ export class MemoryStore {
       `UPDATE conversations SET status = ?, ended_game_time = ?, summary = ?, error_text = ?, updated_game_time = ?
        WHERE id = ?`
     ).run(status, endedGameTime, details.summary ?? '', details.errorText ?? '', endedGameTime, id);
+  }
+
+  /** 世界终止边界只中断仍 active 的会话，避免覆盖已完成或已失败记录。 */
+  interruptConversation(id: string, endedGameTime: number, reason: string): boolean {
+    const result = this.db.raw.prepare(
+      `UPDATE conversations
+       SET status = 'interrupted',
+           ended_game_time = MAX(started_game_time, ?),
+           error_text = ?,
+           updated_game_time = MAX(started_game_time, ?)
+       WHERE id = ? AND status = 'active'`
+    ).run(endedGameTime, reason, endedGameTime, id);
+    return Number(result.changes) > 0;
   }
 
   addMessage(m: {

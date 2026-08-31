@@ -119,6 +119,17 @@ test('dyad 检查器把非法轮次值降级为安全顺序标签', () => {
   assert.ok(!html.includes('<img src=x onerror=alert(1)>'));
 });
 
+test('dyad 检查器把世界终止中断与生成异常明确区分', () => {
+  const interrupted = payload();
+  interrupted.conversations[0]!.status = 'interrupted';
+  interrupted.conversations[0]!.errorText = '有限世界达到终点';
+  const html = renderRelationshipDyadInspector(interrupted);
+  assert.ok(html.includes('运行结束'));
+  assert.ok(html.includes('class="conversation-interruption"'));
+  assert.ok(html.includes('有限世界达到终点'));
+  assert.ok(!html.includes('异常结束'));
+});
+
 test('choice-only 方向不会被显示为已观察的关系状态画像', () => {
   const choiceOnly = payload();
   choiceOnly.aToB!.relationshipStateObserved = false;
