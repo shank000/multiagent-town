@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, GameEvent } from '../core/types';
 import type { EventLog } from '../store/events';
+import { normalizeInsightKey } from '../store/memory';
 import type {
   BeliefUpdate,
   InsightRevision,
@@ -56,6 +57,10 @@ export class ReflectionEngine {
     if (count >= MAX_TRIGGERED_PER_DAY || this.thresholdPending.has(agent.id)) return;
     const triggerScore = this.store.accumulator(agent.id);
     if (triggerScore <= REFLECTION_THRESHOLD) return;
+    if (this.evidenceFor(agent.id, day, 'triggered').length === 0) {
+      this.store.resetAccumulator(agent.id);
+      return;
+    }
 
     this.store.resetAccumulator(agent.id);
     this.thresholdPending.add(agent.id);
@@ -109,8 +114,14 @@ export class ReflectionEngine {
 
   private async run(agent: Agent, day: number, now: number, kind: ReflectionKind, triggerScore: number): Promise<void> {
     const evidence = this.evidenceFor(agent.id, day, kind);
+    if (kind === 'triggered' && evidence.length === 0) return;
     const prior = this.store.reflectionsFor(agent.id)[0] ?? null;
+    const priorDaily = this.store.previousDailyReflection(agent.id, day);
     const priorInsights = this.store.recentInsights(agent.id, 8);
+    const consumedEvidence = kind === 'triggered'
+      ? new Set(this.store.reflectionsFor(agent.id)
+        .flatMap((record) => record.evidenceIds))
+      : new Set<string>();
 
     const questionResponse = await this.askQuestions(agent.id, evidence.map((item) => item.content));
     const questions = uniqueStrings(questionResponse.questions, 3, 120);
@@ -120,19 +131,25 @@ export class ReflectionEngine {
     for (const question of questions) {
       const questionEvidence = kind === 'daily'
         ? evidence.slice().sort((a, b) => b.importance - a.importance || b.createdGameTime - a.createdGameTime).slice(0, 6)
-        : this.store.retrieve(agent.id, question, now, 12).filter(isEventEvidence).slice(0, 6);
+        : this.store.retrieve(agent.id, question, now, 12)
+          .filter((item) => isEventEvidence(item) && !consumedEvidence.has(item.id))
+          .slice(0, 6);
       for (const item of questionEvidence) evidenceIds.add(item.id);
       const response = await this.askInsights(agent.id, question, questionEvidence.map((item) => item.content));
       candidateInsights.push(...uniqueStrings(response.insights, 5, 160));
     }
 
-    const boundedEvidence = this.loadEvidence(agent.id, [...evidenceIds], evidence);
-    const journalResponse = await this.askJournal(agent, day, kind, boundedEvidence, questions, candidateInsights, priorInsights, prior);
+    const boundedEvidence = this.loadEvidence(agent.id, [...evidenceIds], evidence, kind);
+    const journalResponse = await this.askJournal(
+      agent, day, kind, boundedEvidence, questions, candidateInsights, priorInsights, prior, priorDaily?.diary ?? ''
+    );
     const allowedEvidence = new Set(boundedEvidence.map((item) => item.id));
-    const insights = uniqueStrings(journalResponse.insights, 5, 180);
-    const finalInsights = boundedEvidence.length
-      ? (insights.length ? insights : uniqueStrings(candidateInsights, 5, 180))
+    const insights = uniqueInsightStrings(journalResponse.insights, 5, 180);
+    const proposedInsights = boundedEvidence.length
+      ? (insights.length ? insights : uniqueInsightStrings(candidateInsights, 5, 180))
       : [];
+    const priorInsightKeys = new Set(priorInsights.map(normalizeInsightKey));
+    const finalInsights = proposedInsights.filter((insight) => !priorInsightKeys.has(normalizeInsightKey(insight)));
     const mindState = normalizeMindState(journalResponse.mind_state, prior?.mindState ?? initialMindStateOf(agent.persona), boundedEvidence);
     const diary = reflectionDiaryOf(agent, day, boundedEvidence, mindState);
     const revisions = normalizeRevisions(journalResponse.revisions, priorInsights, allowedEvidence);
@@ -196,17 +213,22 @@ export class ReflectionEngine {
   private evidenceFor(agentId: string, day: number, kind: ReflectionKind): Memory[] {
     const source = kind === 'daily'
       ? this.store.memoriesForDay(agentId, day, 240)
-      : this.store.recentMemories(agentId, 120);
+      : this.store.unreflectedEventMemories(agentId, 100);
     return source
       .filter(isEventEvidence)
       .slice(0, kind === 'daily' ? 240 : 100);
   }
 
-  private loadEvidence(agentId: string, ids: string[], current: Memory[]): Memory[] {
+  private loadEvidence(agentId: string, ids: string[], current: Memory[], kind: ReflectionKind): Memory[] {
     const byId = new Map(current.map((item) => [item.id, item]));
     // retrieve() 可能为事件触发反思补充更早证据；recentMemories 提供有界回查。
     for (const item of this.store.recentMemories(agentId, 300).filter(isEventEvidence)) byId.set(item.id, item);
-    return ids.map((id) => byId.get(id)).filter((item): item is Memory => !!item).slice(0, 80);
+    const resolved = ids.map((id) => byId.get(id)).filter((item): item is Memory => !!item);
+    if (kind !== 'daily') return resolved.slice(0, 80);
+    return resolved
+      .sort((a, b) => b.importance - a.importance || b.createdGameTime - a.createdGameTime)
+      .slice(0, 80)
+      .sort((a, b) => a.createdGameTime - b.createdGameTime || a.id.localeCompare(b.id));
   }
 
   private async askQuestions(agentId: string, memories: string[]): Promise<{ questions?: unknown }> {
@@ -244,6 +266,7 @@ export class ReflectionEngine {
     candidateInsights: string[],
     priorInsights: string[],
     prior: { diary: string; mindState: ReflectionMindState } | null,
+    priorDiary: string,
   ): Promise<JournalRaw> {
     const result = await this.llm.complete({
       tier: 'large', template: REFLECTION_JOURNAL_TEMPLATE, jsonMode: true,
@@ -256,7 +279,7 @@ export class ReflectionEngine {
         questions,
         candidateInsights,
         priorInsights,
-        priorDiary: prior?.diary ?? '',
+        priorDiary,
         priorMindState: prior?.mindState ?? null,
       }),
       agentId: agent.id,
@@ -275,6 +298,22 @@ function uniqueStrings(value: unknown, limit: number, maxLength: number): string
   for (const item of value) {
     const text = textOf(item, maxLength);
     if (text && !out.includes(text)) out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function uniqueInsightStrings(value: unknown, limit: number, maxLength: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = textOf(item, maxLength);
+    const key = normalizeInsightKey(text);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      out.push(text);
+    }
     if (out.length >= limit) break;
   }
   return out;

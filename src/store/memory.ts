@@ -88,6 +88,11 @@ export interface MemoryRetrievalScore {
   total: number;
 }
 
+/** 洞察账本去重键：兼容全半角、大小写、空白与句末标点差异。 */
+export function normalizeInsightKey(text: string): string {
+  return text.normalize('NFKC').toLocaleLowerCase('zh-CN').replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
 /** 双字 shingle：去标点空白后滑窗取二元组（中文为主，含字母数字） */
 export function shingles(text: string): string[] {
   const normalized = text.replace(/[^\p{Script=Han}a-z0-9]/giu, '');
@@ -227,6 +232,22 @@ export class MemoryStore {
     return rows.map(toMem);
   }
 
+  /** 尚未被任何持久化反思消费的最新事件证据。 */
+  unreflectedEventMemories(agentId: string, limit = 100): Memory[] {
+    const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
+    const rows = this.db.raw.prepare(
+      `SELECT m.* FROM memories m
+       WHERE m.agent_id = ?
+         AND m.kind NOT IN ('insight', 'reflection', 'plan')
+         AND NOT EXISTS (
+           SELECT 1 FROM reflections r, json_each(r.evidence_ids_json) evidence
+           WHERE r.agent_id = m.agent_id AND evidence.value = m.id
+         )
+       ORDER BY m.created_game_time DESC, m.rowid DESC LIMIT ?`
+    ).all(agentId, safeLimit) as unknown as RawMem[];
+    return rows.map(toMem).reverse();
+  }
+
   memoriesForDay(agentId: string, day: number, limit = 200): Memory[] {
     const start = (day - 1) * 1440;
     const end = day * 1440;
@@ -234,9 +255,12 @@ export class MemoryStore {
     const rows = this.db.raw.prepare(
       `SELECT * FROM memories
        WHERE agent_id = ? AND created_game_time >= ? AND created_game_time < ?
-       ORDER BY created_game_time ASC, rowid ASC LIMIT ?`
+         AND kind NOT IN ('insight', 'reflection', 'plan')
+       ORDER BY importance DESC, created_game_time DESC, rowid DESC LIMIT ?`
     ).all(agentId, start, end, safeLimit) as unknown as RawMem[];
-    return rows.map(toMem);
+    return rows.map(toMem).sort((left, right) => (
+      left.createdGameTime - right.createdGameTime || left.id.localeCompare(right.id)
+    ));
   }
 
   countFor(agentId: string): number {
@@ -294,15 +318,28 @@ export class MemoryStore {
     return this.reflectionsFor(agentId).find((record) => record.kind === 'daily' && record.day === day) ?? null;
   }
 
+  previousDailyReflection(agentId: string, beforeDay: number): ReflectionRecord | null {
+    return this.reflectionsFor(agentId)
+      .filter((record) => record.kind === 'daily' && record.day < beforeDay)
+      .sort((left, right) => right.day - left.day || right.createdGameTime - left.createdGameTime)[0] ?? null;
+  }
+
   recentInsights(agentId: string, n: number): string[] {
     const out: string[] = [];
     const superseded = new Set<string>();
+    const seen = new Set<string>();
     for (const r of this.reflectionsFor(agentId)) {
-      for (const revision of r.revisions) superseded.add(revision.previous);
-      out.push(...r.insights.filter((insight) => !superseded.has(insight)));
-      if (out.length >= n) break;
+      for (const revision of r.revisions) superseded.add(normalizeInsightKey(revision.previous));
+      for (const insight of r.insights) {
+        const display = insight.trim();
+        const key = normalizeInsightKey(display);
+        if (!key || superseded.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        out.push(display);
+        if (out.length >= n) return out;
+      }
     }
-    return out.slice(0, n);
+    return out;
   }
 
   recentGuidance(agentId: string, n: number): string[] {

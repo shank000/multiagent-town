@@ -45,6 +45,37 @@ test('反思树与 insight 提取', () => {
   assert.deepEqual(store.recentInsights('agent:1', 2), ['我最近常去咖啡馆。', '我喜欢观察客人。']);
 });
 
+test('近期洞察按规范化文本去重并保留最新表述', () => {
+  const { store } = setup();
+  store.addReflection({
+    id: 'older', agentId: 'agent:1', parentId: null, depth: 0,
+    questions: [], insights: ['我会认真观察。'], evidenceIds: ['m1'], triggerScore: 160, createdGameTime: 10,
+  });
+  store.addReflection({
+    id: 'newer', agentId: 'agent:1', parentId: 'older', depth: 1,
+    questions: [], insights: ['  我会认真观察！ ', '我会核对事实。'], evidenceIds: ['m2'], triggerScore: 160, createdGameTime: 20,
+  });
+  assert.deepEqual(store.recentInsights('agent:1', 10), ['我会认真观察！', '我会核对事实。']);
+});
+
+test('日内有界取证按重要性选择后恢复时间顺序，不遗漏晚间重要事件', () => {
+  const { store } = setup();
+  for (let index = 0; index < 250; index += 1) {
+    store.addMemory({
+      id: `early:${index}`, agentId: 'agent:1', kind: 'observation',
+      content: `早间普通事件 ${index}`, importance: 1, createdGameTime: 100 + index,
+    });
+  }
+  store.addMemory({
+    id: 'late-important', agentId: 'agent:1', kind: 'observation',
+    content: '晚间重要事件', importance: 10, createdGameTime: 1430,
+  });
+  const selected = store.memoriesForDay('agent:1', 1, 240);
+  assert.equal(selected.length, 240);
+  assert.ok(selected.some((item) => item.id === 'late-important'));
+  assert.ok(selected.every((item, index) => index === 0 || selected[index - 1].createdGameTime <= item.createdGameTime));
+});
+
 test('计划 upsert 与对话消息', () => {
   const { store } = setup();
   store.savePlan({ agentId: 'agent:1', day: 1, broadPlan: '照常经营。', hourly: [{ time: '09:00', action: '开店', location: '咖啡馆吧台' }], status: 'active', createdGameTime: 300 });

@@ -6,6 +6,12 @@ import { MemoryStore } from '../src/store/memory';
 import { LLMGateway } from '../src/llm/gateway';
 import { ReflectionEngine, reflectionDiaryOf } from '../src/engine/reflection';
 import { makeAgent, persona, flush } from './helpers';
+import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
+import {
+  REFLECTION_INSIGHTS_TEMPLATE,
+  REFLECTION_JOURNAL_TEMPLATE,
+  REFLECTION_QUESTIONS_TEMPLATE,
+} from '../src/llm/prompts';
 
 function setup() {
   const db = openDb(':memory:');
@@ -123,4 +129,114 @@ test('最终日记只投影事件证据、心态与人物价值，不接纳模�
   assert.match(diary, /两位客人因咖啡聊成了朋友/);
   assert.match(diary, /咖啡师/);
   assert.doesNotMatch(diary, /干花|热可可|咖啡渍/);
+});
+
+test('持久证据水位线支持两次触发反思与全天日记，且不重复洞察或遗漏晚间证据', async () => {
+  const journalContexts: Record<string, unknown>[] = [];
+  const provider: LLMProvider = {
+    name: 'reflection-watermark',
+    async complete(request: LLMRequest): Promise<LLMResponse> {
+      let parsed: Record<string, unknown>;
+      if (request.template === REFLECTION_QUESTIONS_TEMPLATE) {
+        parsed = { questions: ['今天发生了什么？', '我该如何理解？', '下一步怎么做？'] };
+      } else if (request.template === REFLECTION_INSIGHTS_TEMPLATE) {
+        parsed = { insights: ['我应该认真观察。', '我应该认真观察！'] };
+      } else {
+        assert.equal(request.template, REFLECTION_JOURNAL_TEMPLATE);
+        const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
+        const match = user.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/);
+        assert.ok(match);
+        const context = JSON.parse(match[1]) as Record<string, unknown>;
+        journalContexts.push(context);
+        const evidence = context.evidence as { id: string }[];
+        parsed = {
+          diary: '只使用证据完成日记。',
+          mind_state: {
+            valence: 0, energy: 0.5, stress: 0.3, social_need: 0.5,
+            occupational_focus: 0.7, summary: '继续核对事实。',
+          },
+          insights: ['我应该认真观察！'],
+          beliefs: evidence.length ? [{
+            statement: '我应该认真观察。', confidence: 0.6,
+            evidence_ids: [evidence[0].id], status: 'new', supersedes: null,
+          }] : [],
+          revisions: [],
+          behavior_guidance: ['先核对事实再行动。'],
+        };
+      }
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const gateway = new LLMGateway({ provider, retries: 0 });
+  let engine = new ReflectionEngine(gateway, store, log);
+  const agent = makeAgent({ id: 'agent:1', name: '甲', persona: persona({ name: '甲', occupation: '调查员' }) });
+  store.addReflection({
+    id: 'day1-daily', agentId: agent.id, parentId: null, depth: 0, kind: 'daily', day: 1,
+    questions: [], insights: ['我已经完成第一天复盘。'], evidenceIds: [], diary: '第一天的正式日记。',
+    triggerScore: 0, createdGameTime: 1439,
+  });
+  try {
+    for (let index = 0; index < 26; index += 1) store.addMemory({
+      id: `first:${index}`, agentId: agent.id, kind: 'observation', content: `第一批新证据 ${index}`,
+      importance: 6, createdGameTime: 1500 + index,
+    });
+    engine.tick(agent, 2, 1600);
+    await engine.drain();
+
+    engine = new ReflectionEngine(gateway, store, log);
+    for (let index = 0; index < 26; index += 1) store.addMemory({
+      id: `second:${index}`, agentId: agent.id, kind: 'observation', content: `第二批新证据 ${index}`,
+      importance: 6, createdGameTime: 1700 + index,
+    });
+    engine.tick(agent, 2, 1800);
+    await engine.drain();
+
+    engine = new ReflectionEngine(gateway, store, log);
+    for (let index = 0; index < 16; index += 1) store.addMemory({
+      id: `plan-only:${index}`, agentId: agent.id, kind: 'plan', content: `计划文本 ${index}`,
+      importance: 10, createdGameTime: 1820 + index,
+    });
+    engine.tick(agent, 2, 1850);
+    await engine.drain();
+    assert.equal(store.reflectionsFor(agent.id).filter((record) => record.kind === 'triggered' && record.day === 2).length, 2);
+
+    for (let index = 0; index < 207; index += 1) store.addMemory({
+      id: `ordinary:${index}`, agentId: agent.id, kind: 'observation', content: `日间普通证据 ${index}`,
+      importance: 1, createdGameTime: 1900 + index,
+    });
+    store.addMemory({
+      id: 'late-important', agentId: agent.id, kind: 'observation', content: '晚间发生了必须复盘的重要事件。',
+      importance: 10, createdGameTime: 2879,
+    });
+    await engine.summarizeDay(agent, 2, 2879);
+    await engine.drain();
+
+    const day2 = store.reflectionsFor(agent.id).filter((record) => record.day === 2);
+    const triggered = day2.filter((record) => record.kind === 'triggered').sort((a, b) => a.createdGameTime - b.createdGameTime);
+    const daily = day2.find((record) => record.kind === 'daily');
+    assert.equal(triggered.length, 2);
+    assert.ok(daily);
+    const secondEvidence = new Set(triggered[1].evidenceIds);
+    assert.equal(triggered[0].evidenceIds.filter((id) => secondEvidence.has(id)).length, 0);
+    assert.ok(triggered[0].evidenceIds.every((id) => id.startsWith('first:')));
+    assert.ok(triggered[1].evidenceIds.every((id) => id.startsWith('second:')));
+    assert.ok(daily.evidenceIds.some((id) => id.startsWith('first:')));
+    assert.ok(daily.evidenceIds.some((id) => id.startsWith('second:')));
+    assert.ok(daily.evidenceIds.includes('late-important'));
+    assert.match(daily.diary, /晚间发生了必须复盘的重要事件/);
+
+    const duplicateKey = '我应该认真观察';
+    const ledgerCount = store.reflectionsFor(agent.id)
+      .flatMap((record) => record.insights)
+      .filter((insight) => insight.replace(/[\s。！!]/gu, '') === duplicateKey).length;
+    assert.equal(ledgerCount, 1);
+    assert.equal(journalContexts.length, 3);
+    assert.ok(journalContexts.every((context) => context.priorDiary === '第一天的正式日记。'));
+  } finally {
+    await engine.drain();
+    db.raw.close();
+  }
 });
