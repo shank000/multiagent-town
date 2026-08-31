@@ -46,6 +46,10 @@ interface Session {
   source: NonNullable<DialogueStartOptions['source']>;
   locationId: string | null;
   requestedGameTime: number;
+  openingEvidence: string[];
+  evidenceEventIds: string[];
+  initiatorId: string;
+  triggerReason: NonNullable<DialogueStartOptions['trigger']>['reason'] | null;
 }
 
 interface Reservation {
@@ -91,6 +95,13 @@ export interface DialogueStartOptions {
   source?: 'proximity' | 'experiment' | 'manual';
   /** 用于把首轮台词约束在真实地点、物件与可执行功能内。 */
   world?: WorldState;
+  /** 自发会话的现场观察依据；进入提示词与 chat_start 审计，不改写为已经完成的共同经历。 */
+  trigger?: {
+    initiatorId: string;
+    reason: 'co_presence' | 'observed_event';
+    evidence: string[];
+    evidenceEventIds: string[];
+  };
 }
 
 export interface DialogueReservation {
@@ -254,6 +265,10 @@ export class DialogueEngine {
       turns: [], lastUtterAt: now, phase: 'active', conversationId, lifecycle,
       source: options.source ?? 'manual', locationId: a.locationId,
       requestedGameTime,
+      openingEvidence: options.trigger?.evidence.slice(0, 3).map((item) => item.slice(0, 180)) ?? [],
+      evidenceEventIds: options.trigger?.evidenceEventIds.slice(0, 3) ?? [],
+      initiatorId: options.trigger?.initiatorId ?? a.id,
+      triggerReason: options.trigger?.reason ?? null,
     };
     this.store.startConversation({ id: s.conversationId, agentA: s.a, agentB: s.b, startedGameTime: now });
     this.sessions.set(key, s);
@@ -265,6 +280,10 @@ export class DialogueEngine {
         kind: 'chat_start', conversationId: s.conversationId,
         fromId: a.id, toId: b.id, source: options.source ?? 'manual',
         arranged: !requireAdjacent,
+        initiatorId: s.initiatorId,
+        triggerReason: s.triggerReason,
+        evidenceEventIds: s.evidenceEventIds,
+        openingEvidence: s.openingEvidence,
       },
     });
     if (lifecycle) this.emitLifecycle(s, 'started', now);
@@ -431,6 +450,7 @@ export class DialogueEngine {
           relationshipHistory: relationshipHistory.slice(-3),
           speakerMemories,
           worldFacts,
+          openingEvidence: s.openingEvidence,
           conversationId: s.conversationId,
           participants: [s.a, s.b] as [string, string],
           history: s.turns.map((turn, turnIndex) => {
@@ -446,9 +466,11 @@ export class DialogueEngine {
             .map((item) => item.content),
           ...carried.map((item) => item.content),
           ...worldFacts,
+          ...s.openingEvidence,
         ];
         const qualityEvidence = [
           ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), speaker.persona.background,
+          ...s.openingEvidence,
         ];
         let rejectedReasons: string[] = [];
         for (let attempt = 1; attempt <= 2; attempt += 1) {

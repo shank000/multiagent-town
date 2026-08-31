@@ -73,6 +73,7 @@ export interface ManagedWorld {
   db: DbHandle;
   dbPath: string;
   mind: MindEngine;
+  social: SocialTicker;
   player: PlayerDirector;
   experiment: ExperimentRunner | null;
   seedRumor: (text: string) => void;
@@ -108,9 +109,6 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
   const mind = new MindEngine({ db, llm: gateway, log, scopeId: id, townModelSeed: seed });
   const player = new PlayerDirector();
   const executor = new AgentExecutor(gateway, world, log, mind, player, id);
-  // 主实验配对世界保持原有对话机制；探索世界承载多通道社会互动。
-  const social = new SocialTicker(log, {}, mind.dialogue, kind === 'rumor' ? mind.rels : undefined);
-
   let experiment: ExperimentRunner | null = null;
   let runnerHost: WorldLoop | null = null;
   if (kind === 'mem-on' || kind === 'mem-off') {
@@ -118,8 +116,13 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
       historyAccess: kind === 'mem-on' ? 'on' : 'off',
       giftExchange: kind === 'mem-on' ? 'on' : 'off',
     }, { seed });
-    // 隔离相邻闲聊，让全部对话来自伙伴选择（洁净对照）
-    const loop = new WorldLoop(time, world, executor, log, db, {}, undefined, mind, experiment, gateway);
+  }
+  // 浏览与自然主义观察阶段允许居民自发交谈；正式伙伴选择实验运行时暂停环境闲聊，保持处理边界洁净。
+  const social = new SocialTicker(log, {
+    enabled: () => !(experiment?.state().running ?? false),
+  }, mind.dialogue, mind.rels);
+  if (experiment) {
+    const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind, experiment, gateway);
     runnerHost = loop;
   } else {
     runnerHost = new WorldLoop(time, world, executor, log, db, {}, social, mind, undefined, gateway);
@@ -130,7 +133,7 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
     void mind.rumors.seed(lin.id, text, 0);
     mind.store.addMemory({ agentId: lin.id, kind: 'observation', content: `我知道了一个秘密：${text}`, importance: 9, createdGameTime: 0 });
   };
-  return { meta, world, time, loop, log, db, dbPath, mind, player, experiment, seedRumor };
+  return { meta, world, time, loop, log, db, dbPath, mind, social, player, experiment, seedRumor };
 }
 
 /** 启动全部世界的时钟（每世界独立循环） */

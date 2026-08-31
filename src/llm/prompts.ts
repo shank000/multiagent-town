@@ -224,6 +224,7 @@ export function dialogueMessages(ctx: {
   relationshipHistory?: string[];
   speakerMemories?: string[];
   worldFacts?: string[];
+  openingEvidence?: string[];
   conversationId?: string;
   participants?: [string, string];
   history?: { turnIndex: number; speakerName: string; listenerName: string; content: string }[];
@@ -253,9 +254,12 @@ export function dialogueMessages(ctx: {
   const worldFacts = ctx.worldFacts?.length
     ? `\n当前场景与世界功能（功能存在不等于事件已发生）：\n${ctx.worldFacts.slice(0, 6).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n没有额外的现场功能信息。';
+  const openingEvidence = ctx.openingEvidence?.length
+    ? `\n这次交谈为什么自然发生（现场观察，只用于开题，不得扩大为共同经历）：\n${ctx.openingEvidence.slice(0, 3).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
+    : '\n这次交谈没有额外的现场观察线索，可从当面问候开始。';
   const location = ctx.locationId ? `\n当前会话地点：${ctx.locationId}。` : '';
   return simpleMessages(
-    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${compactDialogueText(ctx.goal)}${otherProfile}${location}${worldFacts}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
+    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${compactDialogueText(ctx.goal)}${otherProfile}${location}${worldFacts}${openingEvidence}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
     '规则：\n' +
     '1. 非首句必须直接回应对方最后一句的信息、问题、情绪或邀请，然后贡献一项新的相关信息、追问、建议或决定。对方提出明确问题时，第一句必须先给出答案；不知道或没有相关经历也要直说，回答之前不得转向别的话题。\n' +
     '2. 不要用「你刚才提到」「围绕我们的话题」「我认真想了想」等套话复述前文，也不要回避一个明确问题。\n' +

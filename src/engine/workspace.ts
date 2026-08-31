@@ -184,6 +184,7 @@ async function buildWorkspace(
 export async function disposeManagedWorlds(worlds: readonly ManagedWorld[]): Promise<void> {
   if (!worlds.length) return;
   stopAllWorlds([...worlds]);
+  for (const world of worlds) world.social.dispose();
   await Promise.all(worlds.map((world) => world.loop.drain()));
   await Promise.all(worlds.map((world) => world.mind.dispose({
     gameTime: world.time.state.totalMinutes,

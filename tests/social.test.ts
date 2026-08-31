@@ -27,7 +27,10 @@ test('相邻累计 3 分钟触发 chat 事件', () => {
 });
 
 test('触发后冷却 90 分钟内不再触发，之后台词轮换', () => {
-  const { log, a, b, ticker } = setup();
+  const log = new EventLog(openDb(':memory:'));
+  const a = makeAgent({ id: 'agent:a', name: '甲', x: 0, y: 0, locationId: 'obj:plaza' });
+  const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1, locationId: 'obj:plaza' });
+  const ticker = new SocialTicker(log, { cooldownMinutes: 90 });
   ticker.tick([a, b], 3, 10); // 第 1 次
   for (let t = 15; t <= 99; t += 5) ticker.tick([a, b], 5, t); // 冷却期内不断相邻
   assert.equal(log.eventsForDay(1).filter((e) => e.type === 'chat').length, 1);
@@ -72,4 +75,49 @@ test('完整对话引擎拒绝新会话时不生成缺少 conversationId 的散�
   ticker.tick([a, b], 3, 10);
   assert.equal(attempts, 1);
   assert.equal(log.count(), 0);
+});
+
+test('完整对话冷却结束后可由同一对居民再次自发开启，不退化为一次性触发', () => {
+  const log = new EventLog(openDb(':memory:'));
+  const a = makeAgent({ id: 'agent:a', name: '甲', x: 0, y: 0, locationId: 'obj:plaza' });
+  const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1, locationId: 'obj:plaza' });
+  const starts: unknown[] = [];
+  const dialogue = {
+    isActive: () => false,
+    start: (_a: unknown, _b: unknown, _now: unknown, options: unknown) => { starts.push(options); return true; },
+  } as unknown as import('../src/engine/dialogue').DialogueEngine;
+  const ticker = new SocialTicker(log, { cooldownMinutes: 30 }, dialogue);
+  ticker.tick([a, b], 3, 10);
+  ticker.tick([a, b], 3, 40);
+  assert.equal(starts.length, 2);
+});
+
+test('自发会话只在居民可社交时发生，并携带双方实际观察到的现场证据', () => {
+  const log = new EventLog(openDb(':memory:'));
+  const a = makeAgent({ id: 'agent:a', name: '甲', x: 0, y: 0, locationId: 'obj:plaza', state: 'moving' });
+  const b = makeAgent({ id: 'agent:b', name: '乙', x: 0, y: 1, locationId: 'obj:plaza' });
+  const starts: { trigger?: { evidence?: string[]; evidenceEventIds?: string[] } }[] = [];
+  const dialogue = {
+    isActive: () => false,
+    start: (_a: unknown, _b: unknown, _now: unknown, options: { trigger?: { evidence?: string[]; evidenceEventIds?: string[] } }) => {
+      starts.push(options);
+      return true;
+    },
+  } as unknown as import('../src/engine/dialogue').DialogueEngine;
+  const ticker = new SocialTicker(log, {}, dialogue);
+  ticker.tick([a, b], 3, 10);
+  assert.equal(starts.length, 0, '移动中不应一边走一边开聊');
+
+  a.state = 'idle';
+  log.addEvent({
+    id: 'observed-action', type: 'interact', actorId: b.id, targetIds: [a.id],
+    description: '乙在广场帮忙扶起了倒下的告示牌。', location: 'obj:plaza', gameTime: 11,
+    payload: { kind: 'public_object_interaction', observerIds: [a.id], memoryAgentIds: [a.id, b.id] },
+  });
+  ticker.tick([a, b], 3, 12);
+  assert.equal(starts.length, 1);
+  assert.deepEqual(starts[0].trigger?.evidenceEventIds, ['observed-action']);
+  assert.match(starts[0].trigger?.evidence?.[0] ?? '', /告示牌/);
+
+  ticker.dispose();
 });
