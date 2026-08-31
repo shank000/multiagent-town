@@ -247,8 +247,8 @@ multiagent-town/
 | `reflection.ts` | `ReflectionEngine` | 每日生成职业视角日记、心境、信念/修订与明日指引；重要性累计 >150 时补充模式洞察；日记由事件原文、模型心态和人物价值分层投影，替代信念退出决策上下文 |
 | `dialogue.ts` | `DialogueEngine` | 多轮会话持久化 conversation/turn/speaker/listener；日常会话要求相邻，实验会面显式 arranged；活跃/收尾期间锁住移动，摘要写回双方记忆与关系证据 |
 | `relational-measures.ts` / `social-relations.ts` | 关系测量与投影 | 按时间窗生成原六项与新增四项连续测量、缺失状态、方向和 dyad 证据；旧六维状态画像仅作探索性兼容层；只读观察结果不进入实验决策 |
-| `social.ts` | `SocialTicker` | 邻近累计 3 游戏分钟触发打招呼；有 DialogueEngine 时转真对话，否则台词池单句 |
-| `rumors.ts` | `RumorTracker` | 谣言 seed/spread/传播链查询；会话中按关系门槛传播 |
+| `social.ts` | `SocialTicker` | 清醒、站定、相邻累计 3 游戏分钟后，按人格、社交需求、关系与现场观察形成自发会话意图；正式伙伴选择实验运行时关闭自然接触 |
+| `rumors.ts` | `RumorTracker` | 谣言 seed/spread/传播链查询；会话中按关系门槛沿一次性有向链传播并规范化转述内容 |
 | `status.ts` | `computeStanding()` | Weighted PageRank + 互惠加成（Agentopia/Sociometer），输入全量关系输出声望分 |
 | `analyze.ts` | `analyzeTown()` | 数据统计与分析核心：只读聚合 events/memories/reflections/plans/messages/relationships/rumors，产出 TownReport（`/api/stats` 数据源） |
 | `town-model.ts` | `TownModel` | 公开活动目录轮换（湖边派对/读书会/集市）；按人格形成参与意向，居民沿 A* 路线前往对应场景；19:30 以实际位置核验到场，少于 2 人取消，达到 2 人才启动物件现场状态并为真实共同参与者写入关系证据 |
@@ -316,7 +316,7 @@ score = 0.25 * 0.995^(now-createdGameTime) # recency（证据年龄）
 - 静态文件：`/`、`/stats.html`、`/logs.html`、`/client.js`、`/stats.js`、`/logs.js`、`/style.css`、`/assets/*`；
 - SSE：`GET /events`，200ms 推 `snapshot`，实时推 `event`；
 - 世界控制：`POST /api/world/control`（pause/resume/speed）；
-- 实验工作空间：`GET /api/workspace` 返回当前初始配置、模板与安全状态；`POST /api/workspace` 在暂停、无正式实验、无在途认知时创建全新数据库/日志并替换当前 1–3 个世界；
+- 实验工作空间：`GET /api/workspace` 返回当前初始配置、模板与安全状态；`POST /api/workspace` 在暂停、无正式实验、无在途认知时创建全新数据库/日志并替换当前 1–3 个世界；`POST /api/workspace/reset` 校验当前 workspaceId 后以同配置创建第 1 天暂停运行，并保留文件研究档案；
 - 数据统计：`GET /api/stats?worldId=w1[&day=N]`（按世界定址，日级口径一致）；
 - 后端日志：`GET /api/runtime-logs` 只读筛选当前进程的有界内存日志，`GET /api/runtime-logs/download` 下载本次运行的完整脱敏 JSONL；服务端持有唯一文件路径，不接受浏览器路径参数；
 - 声望/关系：`GET /api/status`、`GET /api/relationships/:id`；
@@ -500,6 +500,7 @@ pnpm build:web     # 重新打包研究台、统计页与日志页脚本
 | POST | `/api/world/switch` | 切换主控制台观察世界 |
 | GET | `/api/workspace` | 当前工作空间初始配置、世界模板与安全状态 |
 | POST | `/api/workspace` | 从初始配置创建并加载新的 1–3 世界小镇 |
+| POST | `/api/workspace/reset` | 以当前工作空间配置安全创建第 1 天暂停运行 |
 | GET | `/api/stats?worldId=w1[&day=N]` | 指定世界的数据统计报告 |
 | GET | `/api/runtime-logs?level=all&q=&limit=500` | 当前进程的脱敏后端日志 |
 | GET | `/api/runtime-logs/download` | 保存本次运行的完整 JSONL 日志 |
