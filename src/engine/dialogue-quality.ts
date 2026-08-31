@@ -24,6 +24,8 @@ const INTERNAL_MEMORY_PREFIX = /^第\s*\d+\s*天\s*(?:日记|计划|反思|洞�
 const TIMESTAMPED_AUDIT_RECORD = /^第\s*\d+\s*天\s*\d{1,2}:\d{2}[，,\s]*(?:.*(?:选择了|选择对象|候选伙伴|一对一交流)|[^：:]{1,32}(?:对|→)[^：:]{1,32}说[：:])/u;
 const META_RELATIONSHIP_SUMMARY = /(?:双方|两人).{0,80}(?:对话|交流|隐喻|关系|情感|互信|信任|尊重).{0,30}(?:升温|加深|增强|提升|变化|形成|达成)/u;
 const AUDIT_REGISTER = /(?:我能确认的是|(?:没有|缺少|足够|可靠).{0,8}(?:依据|证据|记录)|(?:等|待).{0,8}确认后|(?:记录|数据|证据)(?:显示|表明)|根据.{0,12}(?:记录|数据|证据)|活动现场（已核验）|活动预告（尚未发生）|花店订单（已履约）|第\s*\d+\s*天\s*\d{1,2}:\d{2})/u;
+const WORK_CONTENT_CLAIM = /(?:《[^》]{1,40}》|(?:这|那)本书|书里|书中).{0,20}(?:说|写(?:道|到)?|讲(?:到|的是)?|提到|认为|指出|描述|讨论|谈到)/u;
+const READING_EXPERIENCE_CLAIM = /(?:《[^》]{1,40}》.{0,10}(?:我)?(?:在读|正在读|在看|正在看|读过|看过|读完|看完|读了|看了)|(?:我.{0,4})?(?:在读|正在读|在看|正在看|读过|看过|读完|看完|读了|看了).{0,12}《[^》]{1,40}》)/u;
 const STOP_BIGRAMS = new Set([
   '今天', '最近', '什么', '怎么', '为何', '为什', '什么', '事情', '值得', '一下',
   '这个', '那个', '现在', '还是', '可以', '觉得', '知道', '没有', '一个', '我们', '你们',
@@ -38,6 +40,20 @@ const SEMANTIC_MOTIFS = [
   /夏天|夏日|盛夏/u,
   /温柔|柔软|暖意|温暖/u,
   /湖边|湖面|风里|微风/u,
+] as const;
+const FACT_MOTIFS = [
+  /书架|社会学区|小说区|放回|归位|放对/u,
+  /画|速写|画布|作品/u,
+  /擦杯|吧台/u,
+  /阳光|柠檬黄|光线/u,
+  /咖啡|手冲|咖啡馆/u,
+  /花|花束|花香/u,
+  /湖边|湖面/u,
+] as const;
+const TOPIC_STOP_PHRASES = [
+  '我认真想了想', '围绕我们的话题', '你刚才提到',
+  '最近', '今天', '现在', '这个', '那个', '事情', '一下', '我们', '你们',
+  '可以', '觉得', '知道', '没有', '还是', '一个',
 ] as const;
 
 /** 入库前的确定性质量门：检查承接、重复、套话和无证据的具体人名/书名。 */
@@ -78,6 +94,18 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
   }
   for (const title of utterance.matchAll(/《([^》]{1,40})》/g)) {
     if (!evidenceText.includes(title[0])) reasons.push(`提到无当前证据支持的作品「${title[0]}」`);
+  }
+  for (const sentence of utterance.split(/[。！？!?；\n]/u).map((item) => item.trim()).filter(Boolean)) {
+    if (WORK_CONTENT_CLAIM.test(sentence) && !workContentClaimSupported(sentence, context.evidence)) {
+      reasons.push('转述无当前证据支持的作品内容');
+    }
+    if (
+      READING_EXPERIENCE_CLAIM.test(sentence)
+      && !deniesReadingExperience(sentence)
+      && !readingExperienceSupported(sentence, context.evidence)
+    ) {
+      reasons.push('声称无个人记忆支持的阅读经历');
+    }
   }
   for (const assignment of utterance.matchAll(/(?:收信人|客人|学生|朋友|作者|店主|老师|医生|邻居)(?:是|叫|姓)[^，。！？!?]{1,12}/g)) {
     if (!evidenceText.includes(assignment[0])) reasons.push(`给社会角色添加无证据身份「${assignment[0]}」`);
@@ -127,13 +155,35 @@ export function conservativeDialogueReply(
   evidence: readonly string[] = [],
   options: ConservativeDialogueOptions = {},
 ): string {
+  const priorTurns = options.priorTurns ?? [];
+  if (!latestPrompt.trim()) {
+    return chooseFreshReply(openingReplies(evidence), priorTurns).slice(0, 120);
+  }
+  if (priorTurns.length >= 3 && !QUESTION.test(latestPrompt)) {
+    return chooseFreshReply(closingReplies(), priorTurns).slice(0, 120);
+  }
   const grounded = relevantEvidence(latestPrompt, evidence);
   if (grounded) {
     const rumor = options.rumorEvidence?.includes(grounded.raw) ?? false;
     const replies = groundedReplies(latestPrompt, grounded.text, rumor, options);
-    return chooseFreshReply(replies, options.priorTurns ?? []).slice(0, 120);
+    return chooseFreshReply(replies, priorTurns).slice(0, 120);
   }
-  return chooseFreshReply(uncertainReplies(latestPrompt), options.priorTurns ?? []).slice(0, 120);
+  const replies = !QUESTION.test(latestPrompt)
+    ? continuationReplies(latestPrompt)
+    : uncertainReplies(latestPrompt);
+  return chooseFreshReply(replies, priorTurns).slice(0, 120);
+}
+
+function openingReplies(evidence: readonly string[]): string[] {
+  const grounded = evidence
+    .map(conversationalEvidence)
+    .find((item) => item.length >= 4 && !usesAuditRegister(item));
+  if (!grounded) return ['你好，今天过得怎么样？', '最近还好吗？', '今天有什么想聊的吗？'];
+  const fact = firstPersonFact(grounded).replace(/[。！!？?]+$/u, '').slice(0, 82);
+  return [
+    `${fact}。你今天怎么样？`,
+    `我今天留意到一件事：${fact}。你最近怎么样？`,
+  ];
 }
 
 interface GroundedEvidence {
@@ -285,7 +335,30 @@ function uncertainReplies(prompt: string): string[] {
     return ['这事我记不清了，不敢说有还是没有。', '这件事我不太清楚。', '是还是不是，我现在真说不准。'];
   }
   if (QUESTION.test(prompt)) return ['具体情况我想不起来了，先不瞎说。', '这件事我现在说不准。', '我不太清楚这件事。'];
-  return ['这件事我先记着。', '我明白你的意思了。', '这事我得再想想。'];
+  return continuationReplies(prompt);
+}
+
+function continuationReplies(prompt: string): string[] {
+  if (/(?:已经|终于|后来|就把|放回|完成|处理好|修好|找到了|送到|交给|解决)/u.test(prompt)) {
+    return [
+      '原来如此。你当时为什么会留意到它？',
+      '我明白了。做完以后，你心里是什么感觉？',
+      '听起来你已经处理好了。你当时是怎么想到这么做的？',
+    ];
+  }
+  return [
+    '原来如此。后来怎么样了？',
+    '我明白了。你为什么会留意到这件事？',
+    '听起来这对你挺重要的，你愿意再说说吗？',
+  ];
+}
+
+function closingReplies(): string[] {
+  return [
+    '嗯，我明白你的意思了。今天先聊到这里吧。',
+    '我听懂了，改天我们再接着聊。',
+    '好，我会再想想。下次见面再聊吧。',
+  ];
 }
 
 function chooseFreshReply(replies: readonly string[], priorTurns: readonly string[]): string {
@@ -340,6 +413,36 @@ function worldClaimReasons(context: DialogueQualityContext): string[] {
     }
   }
   return reasons;
+}
+
+function workContentClaimSupported(claim: string, evidence: readonly string[]): boolean {
+  const claimTerms = workContentTerms(claim);
+  if (claimTerms.size === 0) return false;
+  return evidence.some((item) => {
+    if (!WORK_CONTENT_CLAIM.test(item) && !/(?:读书笔记|作品内容|书中内容)/u.test(item)) return false;
+    const evidenceTerms = workContentTerms(item);
+    let overlap = 0;
+    for (const term of claimTerms) if (evidenceTerms.has(term)) overlap += 1;
+    return overlap >= 2;
+  });
+}
+
+function readingExperienceSupported(claim: string, evidence: readonly string[]): boolean {
+  const title = claim.match(/《[^》]{1,40}》/u)?.[0];
+  if (!title) return false;
+  return evidence.some((item) => item.includes(title)
+    && /(?:在读|正在读|读过|看过|读完|看完|读了|看了|阅读)/u.test(item)
+    && !deniesReadingExperience(item));
+}
+
+function deniesReadingExperience(text: string): boolean {
+  return /(?:没|没有|未|不曾|从未).{0,3}(?:在读|正在读|读过|看过|读[《这那]|看[《这那]|阅读过)/u.test(text);
+}
+
+function workContentTerms(text: string): Set<string> {
+  return meaningfulBigrams(text
+    .replace(/《[^》]{1,40}》/gu, ' ')
+    .replace(/(?:这本书|书里|书中|里面|说|写(?:道|到)?|讲(?:到|的是)?|提到|认为|指出|描述|讨论|谈到)/gu, ' '));
 }
 
 function negatedPastClaim(text: string): boolean {
@@ -433,11 +536,29 @@ function pragmaticallyContinues(prompt: string, utterance: string, evidence: rea
 }
 
 function topicOverlap(left: string, right: string): boolean {
-  return setsOverlap(meaningfulBigrams(left), meaningfulBigrams(right));
+  return setsOverlap(topicBigrams(left), topicBigrams(right));
+}
+
+function topicBigrams(text: string): Set<string> {
+  let normalized = normalize(text);
+  for (const phrase of TOPIC_STOP_PHRASES) normalized = normalized.replaceAll(phrase, ' ');
+  const terms = new Set<string>();
+  for (const segment of normalized.split(/\s+/u).filter(Boolean)) {
+    for (const gram of bigrams(segment)) if (!STOP_BIGRAMS.has(gram)) terms.add(gram);
+  }
+  return terms;
 }
 
 function evidenceBridge(prompt: string, utterance: string, evidence: readonly string[]): boolean {
-  return evidence.some((fact) => topicOverlap(prompt, fact) && topicOverlap(fact, utterance));
+  return evidence.some((fact) => topicOverlapCount(prompt, fact) >= 2 && topicOverlapCount(fact, utterance) >= 2);
+}
+
+function topicOverlapCount(left: string, right: string): number {
+  const leftTerms = topicBigrams(left);
+  const rightTerms = topicBigrams(right);
+  let overlap = 0;
+  for (const term of leftTerms) if (rightTerms.has(term)) overlap += 1;
+  return overlap;
 }
 
 function semanticBridge(prompt: string, utterance: string): boolean {
@@ -479,7 +600,16 @@ function nearRepeat(utterance: string, prior: string, isLatest: boolean): boolea
   let overlap = 0;
   for (const term of currentTerms) if (priorTerms.has(term)) overlap += 1;
   const smaller = Math.min(currentTerms.size, priorTerms.size);
-  if (overlap >= 5 && smaller > 0 && overlap / smaller >= 0.62) return true;
+  if (overlap >= 5 && smaller > 0 && overlap / smaller >= 0.54) return true;
+
+  const currentTitles = new Set([...utterance.matchAll(/《[^》]{1,40}》/gu)].map((match) => match[0]));
+  const repeatsTitle = [...prior.matchAll(/《[^》]{1,40}》/gu)].some((match) => currentTitles.has(match[0]));
+  const repeatsPlacement = /书架|社会学区|小说区|放回|归位|放对/u.test(utterance)
+    && /书架|社会学区|小说区|放回|归位|放对/u.test(prior);
+  if (repeatsTitle && repeatsPlacement) return true;
+
+  const sharedFacts = FACT_MOTIFS.filter((motif) => motif.test(utterance) && motif.test(prior)).length;
+  if (sharedFacts >= 3) return true;
 
   const sharedMotifs = SEMANTIC_MOTIFS.filter((motif) => motif.test(utterance) && motif.test(prior)).length;
   return sharedMotifs >= 3 || (sharedMotifs >= 2 && METAPHOR.test(utterance) && METAPHOR.test(prior));

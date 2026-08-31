@@ -63,6 +63,26 @@ test('首轮可以自然开场，后续台词必须语用承接并推进上一�
   });
   assert.equal(topicJump.ok, false);
   assert.ok(topicJump.reasons.some((reason) => reason.includes('语用承接')));
+
+  const sharedFillerOnly = assessDialogueTurn({
+    ...base,
+    latestPrompt: '最近在整理书架，把放错位置的书放回去了。',
+    priorTurns: ['最近在整理书架，把放错位置的书放回去了。'],
+    evidence: ['最近在画小镇的咖啡馆。'],
+    utterance: '我最近在画小镇的咖啡馆，阳光像柠檬黄。',
+  });
+  assert.equal(sharedFillerOnly.ok, false);
+  assert.ok(sharedFillerOnly.reasons.some((reason) => reason.includes('语用承接')));
+
+  const personaBridgeOnly = assessDialogueTurn({
+    ...base,
+    latestPrompt: '这本书谈到人与土地，也让我想到我们的小镇。',
+    priorTurns: ['这本书谈到人与土地，也让我想到我们的小镇。'],
+    evidence: ['人物背景：画家每天在小镇咖啡馆为林晚晴画速写。'],
+    utterance: '我画的是林晚晴擦杯子的样子，阳光是柠檬黄。',
+  });
+  assert.equal(personaBridgeOnly.ok, false);
+  assert.ok(personaBridgeOnly.reasons.some((reason) => reason.includes('语用承接')));
 });
 
 test('连续替换意象的隐喻循环与主题词近义复写被拒绝', () => {
@@ -89,6 +109,32 @@ test('连续替换意象的隐喻循环与主题词近义复写被拒绝', () =>
   });
   assert.equal(paraphrase.ok, false);
   assert.ok(paraphrase.reasons.some((reason) => reason.includes('高度重复')));
+
+  const repeatedBookPlacement = assessDialogueTurn({
+    ...base,
+    latestPrompt: '书放回原位，就像把一段安静的时光重新摆正了。',
+    priorTurns: [
+      '最近在整理书架，发现《乡土中国》被放到了小说区，就把它放回了社会学书架。',
+      '书放回原位，就像把一段安静的时光重新摆正了。',
+    ],
+    evidence: ['今天把《乡土中国》放回社会学书架。'],
+    utterance: '那本《乡土中国》确实该在社会学区，我刚放回去了。',
+  });
+  assert.equal(repeatedBookPlacement.ok, false);
+  assert.ok(repeatedBookPlacement.reasons.some((reason) => reason.includes('重复')));
+
+  const repeatedPaintingImage = assessDialogueTurn({
+    ...base,
+    latestPrompt: '那本书确实该放在社会学区。',
+    priorTurns: [
+      '我最近在画林晚晴在咖啡馆擦杯子的样子，阳光正好是柠檬黄。',
+      '那本书确实该放在社会学区。',
+    ],
+    evidence: ['人物背景：画家计划画林晚晴在吧台后擦杯子的样子，常用柠檬黄表现阳光。'],
+    utterance: '我画的是她擦杯子的样子，吧台上的阳光还是柠檬黄。',
+  });
+  assert.equal(repeatedPaintingImage.ok, false);
+  assert.ok(repeatedPaintingImage.reasons.some((reason) => reason.includes('重复')));
 });
 
 test('第四句起缺少新贡献时必须收束，不能用短回应继续空转', () => {
@@ -137,6 +183,79 @@ test('无证据的第三方居民和作品名不能进入正式台词', () => {
   assert.ok(inventedAnecdote.reasons.some((reason) => reason.includes('老张')));
 });
 
+test('已知书名不能支持模型扩写书中观点，作品内容需要独立证据', () => {
+  const inventedContent = assessDialogueTurn({
+    ...base,
+    latestPrompt: '最近在读《乡土中国》，刚把它放回了对的位置。',
+    priorTurns: ['最近在读《乡土中国》，刚把它放回了对的位置。'],
+    evidence: ['今天把《乡土中国》放回社会学书架。'],
+    utterance: '《乡土中国》里说，人和土地是互相看见的。',
+  });
+  assert.equal(inventedContent.ok, false);
+  assert.ok(inventedContent.reasons.some((reason) => reason.includes('作品内容')));
+
+  const groundedContent = assessDialogueTurn({
+    ...base,
+    latestPrompt: '最近在读《乡土中国》，刚把它放回了对的位置。',
+    priorTurns: ['最近在读《乡土中国》，刚把它放回了对的位置。'],
+    evidence: ['读书笔记写着：《乡土中国》中讨论了熟人社会的差序格局。'],
+    utterance: '《乡土中国》中讨论了熟人社会的差序格局。',
+  });
+  assert.equal(groundedContent.ok, true, groundedContent.reasons.join('；'));
+});
+
+test('对方提到书名不等于当前说话者读过，个人阅读经历需要自身证据', () => {
+  const unsupported = assessDialogueTurn({
+    ...base,
+    latestPrompt: '最近在读《乡土中国》，刚把它放回了对的位置。',
+    priorTurns: ['最近在读《乡土中国》，刚把它放回了对的位置。'],
+    evidence: ['今天上午在公园画雨后的长椅，没有读书。'],
+    utterance: '《乡土中国》我看过，书里说小镇生活很安静。',
+  });
+  assert.equal(unsupported.ok, false);
+  assert.ok(unsupported.reasons.some((reason) => reason.includes('阅读经历')));
+  assert.ok(unsupported.reasons.some((reason) => reason.includes('作品内容')));
+
+  const supported = assessDialogueTurn({
+    ...base,
+    latestPrompt: '最近在读《乡土中国》，刚把它放回了对的位置。',
+    priorTurns: ['最近在读《乡土中国》，刚把它放回了对的位置。'],
+    evidence: ['上个月读过《乡土中国》，读书笔记记下了书中对熟人社会的讨论。'],
+    utterance: '《乡土中国》我读过，书中讨论了熟人社会。',
+  });
+  assert.equal(supported.ok, true, supported.reasons.join('；'));
+
+  const honestDenial = assessDialogueTurn({
+    ...base,
+    latestPrompt: '最近在读《乡土中国》，刚把它放回了对的位置。',
+    priorTurns: ['最近在读《乡土中国》，刚把它放回了对的位置。'],
+    evidence: [],
+    utterance: '《乡土中国》我没读过，你觉得哪部分最有意思？',
+  });
+  assert.equal(honestDenial.ok, true, honestDenial.reasons.join('；'));
+
+  const unsupportedPartialReading = assessDialogueTurn({
+    ...base,
+    latestPrompt: '刚把《乡土中国》放回了书架。',
+    priorTurns: ['刚把《乡土中国》放回了书架。'],
+    evidence: ['今天只是整理书架，把《乡土中国》放回原位。'],
+    utterance: '最近在读《乡土中国》，只是翻了翻，还没读完。',
+  });
+  assert.equal(unsupportedPartialReading.ok, false);
+  assert.ok(unsupportedPartialReading.reasons.some((reason) => reason.includes('阅读经历')));
+
+  const unsupportedCurrentReading = assessDialogueTurn({
+    ...base,
+    latestPrompt: '为什么会留意到《乡土中国》？',
+    priorTurns: ['为什么会留意到《乡土中国》？'],
+    evidence: ['今天只是整理书架，把《乡土中国》放回原位。'],
+    utterance: '我最近在看《乡土中国》，书里讲的是人和土地的关系。',
+  });
+  assert.equal(unsupportedCurrentReading.ok, false);
+  assert.ok(unsupportedCurrentReading.reasons.some((reason) => reason.includes('阅读经历')));
+  assert.ok(unsupportedCurrentReading.reasons.some((reason) => reason.includes('作品内容')));
+});
+
 test('保守回答按问题类型回应且不引入新事实', () => {
   assert.match(conservativeDialogueReply('最近在读什么书？'), /想不起|记不清/);
   assert.match(conservativeDialogueReply('收信人是谁？'), /想不起|记不清/);
@@ -145,6 +264,33 @@ test('保守回答按问题类型回应且不引入新事实', () => {
     conservativeDialogueReply('今天送信遇到了什么？', ['送信时发现一封信写着旧地址。']),
     '我记得，送信时发现一封信写着旧地址。',
   );
+});
+
+test('首轮保底从真实观察发起话题，无观察时使用自然问候', () => {
+  const grounded = conservativeDialogueReply('', [
+    '第3天日记：我在内部总结关系。',
+    '今天上午整理书架，把放错位置的《乡土中国》放回社会学书架。',
+  ], { priorTurns: [] });
+  assert.match(grounded, /整理书架|乡土中国|社会学书架/);
+  assert.match(grounded, /怎么样|最近/);
+  assert.doesNotMatch(grounded, /第3天|日记|总结关系|我能确认|依据|记录/);
+
+  const greeting = conservativeDialogueReply('', [], { priorTurns: [] });
+  assert.match(greeting, /今天|最近/);
+  assert.match(greeting, /[？?]/);
+});
+
+test('中段无相关证据时用追问承接陈述，不使用无话题确认句', () => {
+  const prompt = '今天上午我把放错位置的书放回了书架。';
+  const reply = conservativeDialogueReply(prompt, [], { priorTurns: [prompt] });
+  assert.match(reply, /后来|为什么|再说说/);
+  assert.match(reply, /[？?]/);
+  assert.doesNotMatch(reply, /这件事我先记着|我能确认|依据|记录/);
+
+  const completedPrompt = '我发现书放错了地方，就把它放回了书架。';
+  const completedReply = conservativeDialogueReply(completedPrompt, [], { priorTurns: [completedPrompt] });
+  assert.match(completedReply, /为什么|感觉|怎么想到/);
+  assert.doesNotMatch(completedReply, /后来怎么样/);
 });
 
 test('精确承接阅读问题，不引用人设或证据标签', () => {
@@ -167,6 +313,26 @@ test('连续保底轮次保持确定性但不重复同一句', () => {
   assert.equal(second, repeat);
   assert.match(first, /最近|读/);
   assert.match(second, /最近|读/);
+});
+
+test('会话后半段的保底台词自然回应并明确收束', () => {
+  const priorTurns = [
+    '最近在读《乡土中国》，刚把它放回了对的位置。',
+    '我没读过，你为什么把它放在社会学书架？',
+    '因为它谈的是人与乡土社会。',
+  ];
+  const reply = conservativeDialogueReply(priorTurns.at(-1) ?? '', [], { priorTurns });
+  assert.match(reply, /明白|听懂|再想想/);
+  assert.match(reply, /先聊到这里|改天|下次/);
+  assert.doesNotMatch(reply, /我能确认|依据|记录|双方|关系|情感/);
+
+  const groundedButFinished = conservativeDialogueReply(
+    priorTurns.at(-1) ?? '',
+    ['今天把《乡土中国》放回社会学书架。'],
+    { priorTurns },
+  );
+  assert.match(groundedButFinished, /先聊到这里|改天|下次/);
+  assert.doesNotMatch(groundedButFinished, /乡土中国|社会学书架/);
 });
 
 test('模型台词中的审计记录与关系元摘要口吻全部被拒绝', () => {

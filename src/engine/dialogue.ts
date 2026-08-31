@@ -71,7 +71,7 @@ interface DialogueQualityResult {
   status: 'validated' | 'safe_fallback';
   attempts: number;
   rejectedReasons: string[];
-  validator: 'dialogue-turn/v1';
+  validator: 'dialogue-turn/v2';
 }
 
 export interface ActiveConversation {
@@ -459,7 +459,7 @@ export class DialogueEngine {
           if (attempt > 1) messages[messages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
           const res = await this.llm.complete({
             tier: 'small', template: DIALOGUE_TEMPLATE, jsonMode: true, jsonSchema: DIALOGUE_JSON_SCHEMA,
-            maxTokens: 192, temperature: attempt === 1 ? 0.4 : 0.1,
+            maxTokens: 192, temperature: attempt === 1 ? 0.3 : 0.1,
             messages, agentId: speaker.id, reasoning: false,
             priority: 'dialogue', scopeId: this.scopeId,
             timeoutMs: this.turnTimeoutMs, queueTimeoutMs: this.turnQueueTimeoutMs,
@@ -486,7 +486,7 @@ export class DialogueEngine {
               utterance,
               end: nextTurnCount >= this.naturalTurnLimit
                 || (!!parsed?.end_dialogue && nextTurnCount >= MIN_NATURAL_TURNS),
-              quality: { status: 'validated', attempts: attempt, rejectedReasons, validator: 'dialogue-turn/v1' },
+              quality: { status: 'validated', attempts: attempt, rejectedReasons, validator: 'dialogue-turn/v2' },
             };
             return;
           }
@@ -500,7 +500,7 @@ export class DialogueEngine {
             otherName: other.name,
           }),
           end: s.turns.length + 1 >= MIN_NATURAL_TURNS,
-          quality: { status: 'safe_fallback', attempts: 2, rejectedReasons, validator: 'dialogue-turn/v1' },
+          quality: { status: 'safe_fallback', attempts: 2, rejectedReasons, validator: 'dialogue-turn/v2' },
         };
       } catch (err) {
         entry.error = err instanceof Error ? err.message : String(err);
