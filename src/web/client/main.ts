@@ -308,6 +308,7 @@ async function main(): Promise<void> {
   canvas.addEventListener('dblclick', () => resetDetailCamera());
   canvas.addEventListener('click', onClick);
   bindControls();
+  bindRuntimeLogEntry();
   bindWorkspaceInteractions();
   bindNetworkInteractions();
   bindMetricTabs();
@@ -347,6 +348,31 @@ async function main(): Promise<void> {
   updateHud();
   pollLLMStatus();
   requestAnimationFrame(loop);
+}
+
+function bindRuntimeLogEntry(): void {
+  const link = document.getElementById('runtime-logs-open') as HTMLAnchorElement | null;
+  if (!link) return;
+  link.addEventListener('click', async (event) => {
+    event.preventDefault();
+    if (link.getAttribute('aria-busy') === 'true') return;
+    link.setAttribute('aria-busy', 'true');
+    try {
+      const response = await fetch('/api/runtime-logs?limit=1', { cache: 'no-store' });
+      if (!response.ok) {
+        if (response.status === 404) {
+          showToast('当前后台版本未启用运行日志；请使用更新版服务或安全重启后台', 'error');
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
+      window.location.assign('/logs.html');
+    } catch {
+      showToast('后端日志暂时无法连接，请检查服务状态', 'error');
+    } finally {
+      link.removeAttribute('aria-busy');
+    }
+  });
 }
 
 function resizeCanvas(): void {

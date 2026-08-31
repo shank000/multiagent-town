@@ -279,7 +279,7 @@ test('deep statistics stays world-scoped, read-only and race-safe', () => {
 });
 
 test('后端日志入口提供筛选、跟随、路径复制和完整文件保存', () => {
-  assert.match(html, /href="\/logs\.html"[^>]*>后端日志<\/a>/);
+  assert.match(html, /id="runtime-logs-open"[^>]*href="\/logs\.html"[^>]*>后端日志<\/a>/);
   for (const id of [
     'logs-level', 'logs-search', 'logs-refresh', 'logs-auto', 'logs-follow',
     'logs-download', 'logs-copy-path', 'logs-path', 'logs-root',
@@ -289,6 +289,9 @@ test('后端日志入口提供筛选、跟随、路径复制和完整文件保�
   assert.match(logsClient, /new URLSearchParams\(\{ level, q: search, limit: '1000' \}\)/);
   assert.match(logsClient, /activeController\?\.abort\(\)/);
   assert.match(logsClient, /navigator\.clipboard\.writeText\(lastPath\)/);
+  assert.match(client, /fetch\('\/api\/runtime-logs\?limit=1'/);
+  assert.match(client, /当前后台版本未启用运行日志/);
+  assert.match(client, /window\.location\.assign\('\/logs\.html'\)/);
   assert.match(server, /\/api\/runtime-logs\/download/);
   assert.doesNotMatch(server, /searchParams\.get\(['"]path['"]\)/);
   assert.match(css, /#logs-page\s*\{[^}]*overflow:\s*hidden/s);
