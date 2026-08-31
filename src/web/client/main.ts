@@ -81,6 +81,8 @@ interface WorkspaceMetaView {
   worldCount: number;
   startPaused: boolean;
   createdAt: string;
+  databaseBasePath: string;
+  runtimeLogPath: string;
 }
 interface WorkspaceView {
   workspace: WorkspaceMetaView;
@@ -236,6 +238,7 @@ let loadedWorldCount = 1;
 let workspaceEndpointAvailable = true;
 let workspaceCreateOperationActive = false;
 let workspaceSafetyReady = false;
+let currentWorkspace: WorkspaceMetaView | null = null;
 // 记录上次快照的网格尺寸：仅当网格变化时重算 fit，避免高频快照复位滚轮缩放
 let lastGridW = 0;
 let lastGridH = 0;
@@ -733,8 +736,7 @@ function renderCharacterCard(id: string | null): void {
     <div class="char-row"><span>想法</span>${a.thought ? escapeHtml(a.thought) : '（暂无）'}</div>
     <div class="char-divider"></div>
     <div class="char-row"><span>坐标</span>(${a.x}, ${a.y}) · ${escapeHtml(a.locationName)}</div>
-    <div class="character-actions"><button type="button" data-edit-agent="${encodeURIComponent(a.id)}">编辑档案</button><button type="button" data-interact-agent="${encodeURIComponent(a.id)}">发起互动</button></div>`;
-  box.querySelector<HTMLButtonElement>('[data-edit-agent]')?.addEventListener('click', () => openAgentEditor(a.id));
+    <div class="character-actions"><button type="button" data-interact-agent="${encodeURIComponent(a.id)}">发起互动</button></div>`;
   box.querySelector<HTMLButtonElement>('[data-interact-agent]')?.addEventListener('click', () => openSocialInteraction(a.id));
 }
 
@@ -949,7 +951,7 @@ function bindResearchDialogs(): void {
     const button = event.currentTarget as HTMLButtonElement;
     const card = button.closest('.world-card');
     const compact = card?.classList.toggle('is-compact') ?? false;
-    button.textContent = compact ? '展开配置' : '收起配置';
+    button.textContent = compact ? '展开实验配置' : '收起实验配置';
     button.setAttribute('aria-expanded', String(!compact));
   });
 }
@@ -1319,10 +1321,20 @@ function renderWorkspaceSafety(safety: LLMConfigSafetyView): void {
     : `创建保护：${safety.reasons.join('；') || '当前暂不可创建'}。`;
   const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
   if (submit) submit.disabled = workspaceCreateOperationActive || !workspaceEndpointAvailable || !safety.ready;
+  const resetSafety = document.getElementById('workspace-reset-safety');
+  if (resetSafety) {
+    resetSafety.classList.toggle('ready', safety.ready);
+    resetSafety.textContent = safety.ready
+      ? '当前状态可安全重新开始；新运行会保持暂停，便于先核对初始配置。'
+      : `重置保护：${safety.reasons.join('；') || '当前暂不可重置'}。`;
+  }
+  const resetSubmit = document.getElementById('workspace-reset-submit') as HTMLButtonElement | null;
+  if (resetSubmit) resetSubmit.disabled = workspaceCreateOperationActive || !workspaceEndpointAvailable || !safety.ready;
 }
 
 function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): void {
   workspaceEndpointAvailable = true;
+  currentWorkspace = view.workspace;
   loadedWorldCount = Math.max(1, view.workspace.worldCount);
   const summary = document.getElementById('workspace-summary');
   if (summary) {
@@ -1333,6 +1345,15 @@ function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): v
   renderWorkspaceSafety(view.safety);
   const open = document.getElementById('workspace-create-open') as HTMLButtonElement | null;
   if (open) open.disabled = false;
+  const resetOpen = document.getElementById('workspace-reset-open') as HTMLButtonElement | null;
+  if (resetOpen) resetOpen.disabled = false;
+  const resetSummary = document.getElementById('workspace-reset-summary');
+  if (resetSummary) {
+    const archive = view.workspace.databaseBasePath === ':memory:'
+      ? '当前为内存运行；重置后旧状态不会持久保留。'
+      : `上一运行保留在 ${view.workspace.databaseBasePath}，日志保留在 ${view.workspace.runtimeLogPath}。`;
+    resetSummary.textContent = `${view.workspace.name} · 种子 ${view.workspace.seed} · ${view.workspace.worldCount} 个世界。${archive}`;
+  }
   if (!populate) return;
   const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
   if (!form) return;
@@ -1349,21 +1370,26 @@ async function loadWorkspaceConfiguration(populate: boolean): Promise<void> {
   } catch {
     workspaceEndpointAvailable = false;
     workspaceSafetyReady = false;
+    currentWorkspace = null;
     const summary = document.getElementById('workspace-summary');
     if (summary) summary.textContent = '当前后台需安全重启后启用工作空间管理';
     const safety = document.getElementById('workspace-create-safety');
     if (safety) { safety.classList.remove('ready'); safety.textContent = '当前内存世界保持运行；安全重启后可创建独立小镇实验。'; }
     const open = document.getElementById('workspace-create-open') as HTMLButtonElement | null;
+    const resetOpen = document.getElementById('workspace-reset-open') as HTMLButtonElement | null;
     const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
     if (open) open.disabled = true;
+    if (resetOpen) resetOpen.disabled = true;
     if (submit) submit.disabled = true;
   }
 }
 
 function bindWorkspaceConfiguration(): void {
   const dialog = document.getElementById('workspace-create-dialog') as HTMLDialogElement | null;
+  const resetDialog = document.getElementById('workspace-reset-dialog') as HTMLDialogElement | null;
+  const resetForm = document.getElementById('workspace-reset-form') as HTMLFormElement | null;
   const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
-  if (!dialog || !form) return;
+  if (!dialog || !form || !resetDialog || !resetForm) return;
   const refreshWorldOptions = () => {
     form.querySelectorAll<HTMLElement>('.workspace-world-option').forEach((option) => {
       const checkbox = option.querySelector<HTMLInputElement>('input[name="worldKinds"]');
@@ -1378,6 +1404,36 @@ function bindWorkspaceConfiguration(): void {
     if (!workspaceEndpointAvailable) return;
     void loadWorkspaceConfiguration(false);
     if (!dialog.open) dialog.showModal();
+  });
+  document.getElementById('workspace-reset-open')?.addEventListener('click', () => {
+    if (!workspaceEndpointAvailable) return;
+    void loadWorkspaceConfiguration(false);
+    if (!resetDialog.open) resetDialog.showModal();
+  });
+  resetForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!workspaceEndpointAvailable || workspaceCreateOperationActive || !currentWorkspace) return;
+    workspaceCreateOperationActive = true;
+    const submit = document.getElementById('workspace-reset-submit') as HTMLButtonElement;
+    submit.disabled = true;
+    try {
+      const response = await fetch('/api/workspace/reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: currentWorkspace.id }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const result = await response.json() as { workspace?: WorkspaceMetaView };
+      showToast(`小镇“${result.workspace?.name ?? currentWorkspace.name}”已从初始状态重新开始`, 'success');
+      resetDialog.close();
+      window.setTimeout(() => window.location.reload(), 250);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '小镇重置失败', 'error');
+      await loadWorkspaceConfiguration(false);
+    } finally {
+      workspaceCreateOperationActive = false;
+      submit.disabled = !workspaceEndpointAvailable || !workspaceSafetyReady;
+    }
   });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();

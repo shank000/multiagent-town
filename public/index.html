@@ -152,16 +152,22 @@
         </div>
       </header>
       <div class="inspector-scroll viewport-body">
-        <section class="world-card glass-card" aria-label="当前世界状态">
+        <section class="world-card glass-card is-compact" aria-label="当前世界状态">
           <div class="workspace-strip">
             <div><span class="section-kicker">EXPERIMENT WORKSPACE</span><strong id="workspace-summary">载入实验工作空间……</strong></div>
-            <button class="mini-action" id="workspace-create-open" type="button">＋ 新建小镇</button>
+            <details class="workspace-operations">
+              <summary class="mini-action">运行管理</summary>
+              <div>
+                <button class="mini-action" id="workspace-create-open" type="button">＋ 新建小镇</button>
+                <button class="mini-action danger" id="workspace-reset-open" type="button">↻ 重置当前小镇</button>
+              </div>
+            </details>
           </div>
           <div class="world-card-top">
             <div><span class="section-kicker">当前世界</span><div id="world-desc">载入世界状态……</div></div>
             <div class="card" id="run-status" role="status" aria-live="polite"><div class="dot"></div><span>实验</span><b>未运行</b></div>
           </div>
-          <div class="world-card-tools"><button class="mini-action" id="social-interaction-open" type="button">＋ 社会互动</button><button class="mini-action" id="world-card-toggle" type="button" aria-expanded="true">收起配置</button></div>
+          <div class="world-card-tools"><button class="mini-action" id="social-interaction-open" type="button">＋ 社会互动</button><button class="mini-action" id="world-card-toggle" type="button" aria-expanded="false">展开实验配置</button></div>
           <div id="world-badges" aria-label="当前世界实验配置"></div>
           <div class="experiment-grid">
             <label class="compact-field">关系记忆
@@ -179,12 +185,13 @@
           </div>
         </section>
 
-        <section id="llm-config-card" class="model-config-card glass-card" aria-labelledby="llm-config-title">
-          <div class="model-config-head">
+        <details id="llm-config-card" class="model-config-card glass-card" aria-labelledby="llm-config-title">
+          <summary class="model-config-head">
             <div><span class="section-kicker">AGENT MODEL RUNTIME</span><h3 id="llm-config-title">Agent 模型运行方式</h3></div>
             <span id="llm-config-status" class="model-runtime-badge" role="status" aria-live="polite">读取配置</span>
-          </div>
-          <p id="llm-config-summary" class="model-config-summary">统一控制居民的行动决策、日程规划、对话、摘要与反思。</p>
+          </summary>
+          <div class="model-config-body">
+            <p id="llm-config-summary" class="model-config-summary">统一控制居民的行动决策、日程规划、对话、摘要与反思。</p>
           <div class="model-mode-grid" role="radiogroup" aria-label="选择 Agent 模型运行方式">
             <label class="model-mode-option" data-llm-mode-option="mock">
               <input id="llm-mode-mock" type="radio" name="llm-mode" value="mock" />
@@ -220,7 +227,8 @@
             <button id="llm-config-test" class="icon-btn" type="button">测试连接</button>
             <button id="llm-config-apply" class="icon-btn primary" type="button">应用到全部 Agent</button>
           </div>
-        </section>
+          </div>
+        </details>
 
         <section id="character-card" class="character-summary glass-card">
           点击小镇居民，查看人物属性与当前状态
@@ -275,6 +283,16 @@
         </section>
       </div>
       <footer class="dialog-actions"><button type="button" class="icon-btn" data-close-dialog="workspace-create-dialog">取消</button><button id="workspace-create-submit" type="submit" class="icon-btn primary">创建独立工作空间</button></footer>
+    </form>
+  </dialog>
+  <dialog id="workspace-reset-dialog" class="workspace-dialog compact-dialog" aria-labelledby="workspace-reset-title">
+    <form id="workspace-reset-form">
+      <header class="dialog-head"><div class="dialog-symbol">↻</div><div><span class="section-kicker">SAFE WORLD RECOVERY</span><h2 id="workspace-reset-title">重新开始当前小镇</h2><p>使用相同的居民档案、随机种子、世界组合和模型设置创建全新运行。</p></div><button class="dialog-close" type="button" data-close-dialog="workspace-reset-dialog" aria-label="关闭">×</button></header>
+      <div class="dialog-body">
+        <section class="editor-section recovery-summary"><h3>恢复边界</h3><p id="workspace-reset-summary">正在读取当前工作空间……</p><ul><li>新运行从第 1 天 00:00 开始并保持暂停。</li><li>文件数据库与日志作为上一运行的研究档案保留。</li><li>内存运行无法持久留档，重置前请先导出指标与日志。</li></ul></section>
+        <div id="workspace-reset-safety" class="model-config-safety">重置前需要暂停当前小镇、停止正式实验并等待对话和推理任务结束。</div>
+      </div>
+      <footer class="dialog-actions"><button type="button" class="icon-btn" data-close-dialog="workspace-reset-dialog">取消</button><button id="workspace-reset-submit" type="submit" class="icon-btn danger">确认重新开始</button></footer>
     </form>
   </dialog>
   <dialog id="agent-editor" class="workspace-dialog" aria-labelledby="agent-editor-title">

@@ -126,3 +126,74 @@ test('运行中的世界拒绝替换工作空间', async () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('重置 API 以相同实验配置创建暂停的新运行并保留文件研究档案', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'town-workspace-reset-'));
+  const initialBase = join(directory, 'reset-initial.sqlite');
+  const nextBase = join(directory, 'reset-next.sqlite');
+  const runtimeLog = new BackendRuntimeLog(runtimeLogPathForDatabase(initialBase), { captureConsole: false });
+  const gateway = new LLMGateway({ provider: 'mock', expectedActiveAgents: 12 });
+  const workspace = await ExperimentWorkspaceRuntime.create({
+    name: '关系记忆稳健性', seed: 20260831, worldSpeed: 0.3, defaultExperimentDays: 60,
+    worldKinds: ['mem-on', 'mem-off'], startPaused: true,
+  }, { gateway, runtimeLog, nextDatabasePath: () => nextBase }, initialBase);
+  const first = workspace.current;
+  const primary = first.worlds[0];
+  const server = await createTownServer({
+    world: primary.world, time: primary.time, loop: primary.loop, log: primary.log, mind: primary.mind,
+    player: primary.player, experiment: primary.experiment ?? undefined, worlds: first.worlds, workspace,
+    llm: gateway, runtimeLog, port: 0,
+  });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const before = (await (await fetch(`${base}/api/workspace`)).json()) as {
+      workspace: { id: string; name: string; seed: number; worldSpeed: number; defaultExperimentDays: number; worldKinds: string[] };
+    };
+    const stale = await fetch(`${base}/api/workspace/reset`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'stale-workspace-id' }),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(workspace.current.meta.id, before.workspace.id);
+
+    const response = await fetch(`${base}/api/workspace/reset`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: before.workspace.id }),
+    });
+    assert.equal(response.status, 201, await response.clone().text());
+    const reset = await response.json() as {
+      workspace: typeof before.workspace & { startPaused: boolean; worldIds: string[] };
+      previous: { id: string; databaseBasePath: string; runtimeLogPath: string; persisted: boolean };
+    };
+    assert.notEqual(reset.workspace.id, before.workspace.id);
+    assert.equal(reset.workspace.name, before.workspace.name);
+    assert.equal(reset.workspace.seed, before.workspace.seed);
+    assert.equal(reset.workspace.worldSpeed, before.workspace.worldSpeed);
+    assert.equal(reset.workspace.defaultExperimentDays, before.workspace.defaultExperimentDays);
+    assert.deepEqual(reset.workspace.worldKinds, before.workspace.worldKinds);
+    assert.equal(reset.workspace.startPaused, true);
+    assert.deepEqual(reset.workspace.worldIds, ['w1', 'w2']);
+    assert.deepEqual(reset.previous, {
+      id: before.workspace.id,
+      databaseBasePath: initialBase,
+      runtimeLogPath: runtimeLogPathForDatabase(initialBase),
+      persisted: true,
+    });
+    assert.ok(existsSync(join(directory, 'reset-initial-w1.sqlite')));
+    assert.ok(existsSync(join(directory, 'reset-initial-w2.sqlite')));
+    assert.ok(existsSync(join(directory, 'reset-next-w1.sqlite')));
+    assert.ok(existsSync(join(directory, 'reset-next-w2.sqlite')));
+    assert.equal(runtimeLog.filePath, runtimeLogPathForDatabase(nextBase));
+    const state = await (await fetch(`${base}/api/state?worldId=w1`)).json() as {
+      paused: boolean; clock: { day: number; minutesOfDay: number; totalMinutes: number };
+    };
+    assert.equal(state.paused, true);
+    assert.deepEqual(state.clock, { day: 1, minutesOfDay: 0, totalMinutes: 0 });
+  } finally {
+    await server.close();
+    await workspace.dispose();
+    await gateway.drain();
+    runtimeLog.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

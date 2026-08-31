@@ -107,8 +107,7 @@ export function renderDetail(body: HTMLElement, a: AgentView): void {
     ${a.verb ? `<p><span class="label">正在</span> ${escapeHtml(a.verb)}</p>` : ''}
     ${a.thought ? `<p><span class="label">想法</span> ${escapeHtml(a.thought)}</p>` : ''}
     <p><span class="label">简介</span> ${escapeHtml(a.background)}</p>
-    <div class="panel-actions"><button id="profile-edit">编辑档案</button><button id="social-open">发起互动</button><button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button></div>`;
-  document.getElementById('profile-edit')!.addEventListener('click', () => deps?.editProfile(a.id));
+    <div class="panel-actions"><button id="social-open">发起互动</button><button id="play-toggle">${isPlaying ? '退出扮演' : '🎮 扮演'}</button></div>`;
   document.getElementById('social-open')!.addEventListener('click', () => deps?.openInteraction(a.id));
   document.getElementById('play-toggle')!.addEventListener('click', () => deps?.togglePlay(a.id));
 }

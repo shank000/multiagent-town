@@ -46,7 +46,11 @@ import {
 } from '../engine/agent-profile';
 import { saveAgentProfileConfig } from '../store/agent-profile-config';
 import { performSocialInteraction, socialInteractionDefinition } from '../engine/social-interactions';
-import { WORLD_TEMPLATE_CATALOG, type ExperimentWorkspaceRuntime } from '../engine/workspace';
+import {
+  WORLD_TEMPLATE_CATALOG,
+  type BuiltExperimentWorkspace,
+  type ExperimentWorkspaceRuntime,
+} from '../engine/workspace';
 
 export interface TownWebOptions {
   world: WorldState;
@@ -298,6 +302,28 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     }
   };
   bindHubResources();
+
+  const activateWorkspace = (built: BuiltExperimentWorkspace): HubAccess[] => {
+    const activatedWorlds = adaptWorlds(built.worlds);
+    hubWorlds = activatedWorlds;
+    activeId = activatedWorlds[0].meta.id;
+    seq = 0;
+    opts.llm?.setExpectedActiveAgents(
+      activatedWorlds.reduce((count, world) => count + world.world.allAgents().length, 0),
+    );
+    bindHubResources();
+    paused = built.meta.startPaused;
+    timelineGovernor?.setManual(built.meta.worldSpeed, timelineWorlds(), 'workspace_configuration');
+    if (!paused) startLoopGroup(activatedWorlds.map((world) => world.loop));
+    return activatedWorlds;
+  };
+
+  const restoreCurrentWorkspaceBindings = (): void => {
+    if (!opts.workspace) return;
+    hubWorlds = adaptWorlds(opts.workspace.current.worlds);
+    activeId = hubWorlds[0].meta.id;
+    bindHubResources();
+  };
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -950,16 +976,7 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         clearHubResources();
         try {
           const built = await opts.workspace.replace(body);
-          hubWorlds = adaptWorlds(built.worlds);
-          activeId = hubWorlds[0].meta.id;
-          seq = 0;
-          opts.llm?.setExpectedActiveAgents(
-            hubWorlds.reduce((count, world) => count + world.world.allAgents().length, 0),
-          );
-          bindHubResources();
-          paused = built.meta.startPaused;
-          timelineGovernor?.setManual(built.meta.worldSpeed, timelineWorlds(), 'workspace_configuration');
-          if (!paused) startLoopGroup(hubWorlds.map((world) => world.loop));
+          const activatedWorlds = activateWorkspace(built);
           opts.runtimeLog?.info(
             'workspace',
             `工作空间已加载 id=${built.meta.id} worlds=${built.meta.worldIds.join(',')} paused=${paused}`,
@@ -969,15 +986,61 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             ok: true,
             workspace: built.meta,
             active: activeId,
-            worlds: hubWorlds.map((world) => world.meta),
+            worlds: activatedWorlds.map((world) => world.meta),
           }));
         } catch (error) {
-          const current = opts.workspace.current;
-          hubWorlds = adaptWorlds(current.worlds);
-          activeId = hubWorlds[0].meta.id;
-          bindHubResources();
+          restoreCurrentWorkspaceBindings();
           res.writeHead(400);
           res.end(error instanceof Error ? error.message : '工作空间配置无效');
+        }
+        return;
+      }
+      if (url.pathname === '/api/workspace/reset' && req.method === 'POST') {
+        if (!opts.workspace) { res.writeHead(404); res.end('工作空间管理未启用'); return; }
+        await settlePausedCognition();
+        const safety = llmConfigurationSafety();
+        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
+        const body = (await readBody(req)) as { workspaceId?: unknown };
+        const previous = opts.workspace.current.meta;
+        if (typeof body.workspaceId !== 'string' || body.workspaceId !== previous.id) {
+          res.writeHead(409);
+          res.end('当前工作空间已经变化，请刷新状态后再重置');
+          return;
+        }
+        const resetConfig = {
+          name: previous.name,
+          seed: previous.seed,
+          worldSpeed: previous.worldSpeed,
+          defaultExperimentDays: previous.defaultExperimentDays,
+          worldKinds: [...previous.worldKinds],
+          startPaused: true,
+        };
+        clearHubResources();
+        try {
+          const built = await opts.workspace.replace(resetConfig);
+          const activatedWorlds = activateWorkspace(built);
+          const previousPersisted = previous.databaseBasePath !== ':memory:';
+          opts.runtimeLog?.info(
+            'workspace',
+            `工作空间已按同配置重新开始 previous=${previous.id} current=${built.meta.id} archived=${previousPersisted}`,
+          );
+          res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            ok: true,
+            workspace: built.meta,
+            active: activeId,
+            worlds: activatedWorlds.map((world) => world.meta),
+            previous: {
+              id: previous.id,
+              databaseBasePath: previous.databaseBasePath,
+              runtimeLogPath: previous.runtimeLogPath,
+              persisted: previousPersisted,
+            },
+          }));
+        } catch (error) {
+          restoreCurrentWorkspaceBindings();
+          res.writeHead(400);
+          res.end(error instanceof Error ? error.message : '工作空间重置失败');
         }
         return;
       }

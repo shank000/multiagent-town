@@ -154,6 +154,8 @@ test('resident editor, pixel identity and multi-channel social interactions are 
   assert.match(css, /\.pixel-avatar/);
   assert.match(server, /agent_profile_updated/);
   assert.match(server, /\/api\/social\/interact/);
+  assert.equal((panelClient.match(/id="profile-edit"/g) ?? []).length, 1);
+  assert.doesNotMatch(client, /data-edit-agent=/);
 });
 
 test('Agent 模型运行方式在 UI 明确提供 Mock、本地模型与 API 三种可执行配置', () => {
@@ -170,12 +172,15 @@ test('Agent 模型运行方式在 UI 明确提供 Mock、本地模型与 API 三
   assert.match(server, /llm_runtime_config_changed/);
   assert.match(server, /credentialPolicy: 'memory_only'/);
   assert.match(css, /\.model-mode-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
+  assert.match(html, /<details id="llm-config-card"/);
+  assert.match(html, /class="model-config-body"/);
 });
 
-test('experiment workspace UI creates a town from initial config and selects one to three world templates', () => {
+test('experiment workspace UI creates or safely resets a town and selects one to three world templates', () => {
   for (const id of [
     'workspace-summary', 'workspace-create-open', 'workspace-create-dialog', 'workspace-create-form',
     'workspace-world-options', 'workspace-create-safety', 'workspace-create-submit',
+    'workspace-reset-open', 'workspace-reset-dialog', 'workspace-reset-form', 'workspace-reset-submit',
   ]) assert.match(html, new RegExp(`id=["']${id}["']`));
   for (const kind of ['mem-on', 'mem-off', 'rumor']) assert.match(html, new RegExp(`value=["']${kind}["']`));
   assert.match(client, /fetch\('\/api\/workspace'/);
@@ -183,7 +188,10 @@ test('experiment workspace UI creates a town from initial config and selects one
   assert.match(client, /window\.location\.reload\(\)/);
   assert.match(server, /WORLD_TEMPLATE_CATALOG/);
   assert.match(server, /opts\.workspace\.replace\(body\)/);
+  assert.match(server, /\/api\/workspace\/reset/);
+  assert.match(server, /startPaused:\s*true/);
   assert.match(css, /\.workspace-world-options\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
+  assert.match(css, /\.workspace-operations\s*\{/);
 });
 
 test('timeline controls expose fractional manual speeds and continuous model-aware governance', () => {
