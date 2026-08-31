@@ -26,6 +26,87 @@ test('机械复述、问题回避和本轮重复均被拒绝', () => {
   assert.equal(repeat.ok, false);
 });
 
+test('首轮可以自然开场，后续台词必须语用承接并推进上一句', () => {
+  const opening = assessDialogueTurn({
+    ...base,
+    latestPrompt: '',
+    priorTurns: [],
+    evidence: [],
+    utterance: '早上好，今天店里还顺利吗？',
+  });
+  assert.equal(opening.ok, true);
+
+  const advancement = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我最近在准备画展，那幅雨天街道还没收尾。',
+    priorTurns: ['最近在忙什么？', '我最近在准备画展，那幅雨天街道还没收尾。'],
+    evidence: [],
+    utterance: '雨天街道的光线确实难处理，你准备先调整哪一处？',
+  });
+  assert.equal(advancement.ok, true);
+
+  const acknowledgement = assessDialogueTurn({
+    ...base,
+    latestPrompt: '今天事情很多，我有些累。',
+    priorTurns: ['今天事情很多，我有些累。'],
+    evidence: [],
+    utterance: '听起来很辛苦，你先休息一会儿吧。',
+  });
+  assert.equal(acknowledgement.ok, true);
+
+  const topicJump = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我最近在准备画展，那幅雨天街道还没收尾。',
+    priorTurns: ['我最近在准备画展，那幅雨天街道还没收尾。'],
+    evidence: [],
+    utterance: '湖边的咖啡香像夏天一样温柔。',
+  });
+  assert.equal(topicJump.ok, false);
+  assert.ok(topicJump.reasons.some((reason) => reason.includes('语用承接')));
+});
+
+test('连续替换意象的隐喻循环与主题词近义复写被拒绝', () => {
+  const turns = [
+    '那缕花香落进咖啡杯里，像夏天留下的一点温柔。',
+    '那缕花香落在湖边的风里，像夏天留下的一点温柔。',
+  ];
+  const loop = assessDialogueTurn({
+    ...base,
+    latestPrompt: turns[1],
+    priorTurns: turns,
+    evidence: [],
+    utterance: '那缕花香飘进咖啡馆，像夏天的温柔又回来了。',
+  });
+  assert.equal(loop.ok, false);
+  assert.ok(loop.reasons.some((reason) => reason.includes('高度重复')));
+
+  const paraphrase = assessDialogueTurn({
+    ...base,
+    latestPrompt: '花香、咖啡和夏日的暖意让人舍不得离开。',
+    priorTurns: ['咖啡杯边的花香，有一种夏天般的温柔。', '花香、咖啡和夏日的暖意让人舍不得离开。'],
+    evidence: [],
+    utterance: '温柔的夏天藏在咖啡和花香里。',
+  });
+  assert.equal(paraphrase.ok, false);
+  assert.ok(paraphrase.reasons.some((reason) => reason.includes('高度重复')));
+});
+
+test('第四句起缺少新贡献时必须收束，不能用短回应继续空转', () => {
+  const context = {
+    ...base,
+    latestPrompt: '雨天街道的光线确实很难处理。',
+    priorTurns: ['最近在忙什么？', '我在准备雨天街道的画。', '雨天街道的光线确实很难处理。'],
+    evidence: [],
+    utterance: '我明白了。',
+  };
+  const stalled = assessDialogueTurn({ ...context, endDialogue: false });
+  assert.equal(stalled.ok, false);
+  assert.ok(stalled.reasons.some((reason) => reason.includes('会话后半段')));
+
+  const closing = assessDialogueTurn({ ...context, endDialogue: true });
+  assert.equal(closing.ok, true);
+});
+
 test('无证据的第三方居民和作品名不能进入正式台词', () => {
   const resident = assessDialogueTurn({
     ...base,

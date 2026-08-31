@@ -1,4 +1,4 @@
-// 对话引擎：多轮对话（≤12 轮、每 2 游戏分钟一句）+ 结束摘要写回双方记忆流（spec §5.7）
+// 对话引擎：自然会话保持 4–6 句、每 2 游戏分钟一句，结束后摘要写回双方记忆流（spec §5.7）
 
 import { randomUUID } from 'node:crypto';
 import type { Agent, GameEvent, WorldObject } from '../core/types';
@@ -11,6 +11,9 @@ import type { LLMGateway } from '../llm/gateway';
 import { DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE, dialogueMessages, dialogueSummaryMessages } from '../llm/prompts';
 import { personalityOf } from './town-model';
 import { assessDialogueTurn, conservativeDialogueReply, dialogueRepairInstruction } from './dialogue-quality';
+
+const MIN_NATURAL_TURNS = 4;
+const MAX_NATURAL_TURNS = 6;
 
 const DIALOGUE_JSON_SCHEMA = {
   type: 'object',
@@ -120,7 +123,7 @@ export class DialogueEngine {
     private llm: LLMGateway,
     private store: MemoryStore,
     private log: EventLog,
-    private maxRounds = 12,
+    private maxRounds = MAX_NATURAL_TURNS,
     private rels?: RelationshipStore,
     private rumors?: RumorTracker,
     private options: DialogueEngineOptions = {},
@@ -136,6 +139,10 @@ export class DialogueEngine {
   private get turnQueueTimeoutMs(): number { return this.options.turnQueueTimeoutMs ?? 240_000; }
   private get summaryTimeoutMs(): number { return this.options.summaryTimeoutMs ?? 60_000; }
   private get summaryQueueTimeoutMs(): number { return this.options.summaryQueueTimeoutMs ?? 180_000; }
+  private get naturalTurnLimit(): number {
+    const configured = Number.isSafeInteger(this.maxRounds) ? this.maxRounds : MAX_NATURAL_TURNS;
+    return Math.min(MAX_NATURAL_TURNS, Math.max(MIN_NATURAL_TURNS, configured));
+  }
 
   isActive(aId: string, bId: string): boolean {
     return this.sessions.has(pairKey(aId, bId));
@@ -452,7 +459,7 @@ export class DialogueEngine {
           if (attempt > 1) messages[messages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
           const res = await this.llm.complete({
             tier: 'small', template: DIALOGUE_TEMPLATE, jsonMode: true, jsonSchema: DIALOGUE_JSON_SCHEMA,
-            maxTokens: 192, temperature: attempt === 1 ? 0.25 : 0.1,
+            maxTokens: 192, temperature: attempt === 1 ? 0.4 : 0.1,
             messages, agentId: speaker.id, reasoning: false,
             priority: 'dialogue', scopeId: this.scopeId,
             timeoutMs: this.turnTimeoutMs, queueTimeoutMs: this.turnQueueTimeoutMs,
@@ -471,11 +478,14 @@ export class DialogueEngine {
             speakerName: speaker.name,
             otherName: other.name,
             knownResidentNames: [...this.knownResidentNames],
+            endDialogue: !!parsed?.end_dialogue,
           });
           if (assessment.ok) {
+            const nextTurnCount = s.turns.length + 1;
             entry.resolved = {
               utterance,
-              end: !!parsed?.end_dialogue || s.turns.length + 1 >= this.maxRounds,
+              end: nextTurnCount >= this.naturalTurnLimit
+                || (!!parsed?.end_dialogue && nextTurnCount >= MIN_NATURAL_TURNS),
               quality: { status: 'validated', attempts: attempt, rejectedReasons, validator: 'dialogue-turn/v1' },
             };
             return;
@@ -489,7 +499,7 @@ export class DialogueEngine {
             speakerName: speaker.name,
             otherName: other.name,
           }),
-          end: s.turns.length + 1 >= Math.min(this.maxRounds, 4),
+          end: s.turns.length + 1 >= MIN_NATURAL_TURNS,
           quality: { status: 'safe_fallback', attempts: 2, rejectedReasons, validator: 'dialogue-turn/v1' },
         };
       } catch (err) {

@@ -6,6 +6,7 @@ export interface DialogueQualityContext {
   speakerName: string;
   otherName: string;
   knownResidentNames?: readonly string[];
+  endDialogue?: boolean;
 }
 
 export interface DialogueQualityAssessment {
@@ -27,6 +28,17 @@ const STOP_BIGRAMS = new Set([
   '今天', '最近', '什么', '怎么', '为何', '为什', '什么', '事情', '值得', '一下',
   '这个', '那个', '现在', '还是', '可以', '觉得', '知道', '没有', '一个', '我们', '你们',
 ]);
+const ACKNOWLEDGEMENT = /^(?:嗯|是啊|对|确实|原来如此|原来|明白了|我明白了|听起来|这样啊|那就好|谢谢|辛苦了|可惜|太好了|我也|我同意|我理解|没关系|抱歉)[，。！？!?\s]*/u;
+const INVITATION = /^(?:那(?:么)?[，,]?)?(?:要不要|不如|可以|愿不愿意|需不需要|我们可以|我可以|让我|下次一起)/u;
+const CONVERSATION_INVITATION = /(?:继续|接着)(?:聊|说)|再说说|愿意说说/u;
+const METAPHOR = /像|仿佛|如同|好似|一缕|一抹|一点|飘|落进|落在/u;
+const SEMANTIC_MOTIFS = [
+  /花|花瓣|花香|香气|芬芳|那缕香/u,
+  /咖啡|手冲|咖啡杯|咖啡馆|咖啡豆|烘焙/u,
+  /夏天|夏日|盛夏/u,
+  /温柔|柔软|暖意|温暖/u,
+  /湖边|湖面|风里|微风/u,
+] as const;
 
 /** 入库前的确定性质量门：检查承接、重复、套话和无证据的具体人名/书名。 */
 export function assessDialogueTurn(context: DialogueQualityContext): DialogueQualityAssessment {
@@ -39,10 +51,10 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
   }
   if (GENERIC_ANSWER.test(utterance) && QUESTION.test(context.latestPrompt)) reasons.push('用寒暄回避了明确问题');
 
-  const normalized = normalize(utterance);
-  for (const prior of context.priorTurns) {
+  for (const [index, prior] of context.priorTurns.entries()) {
     const priorNormalized = normalize(prior);
-    if (priorNormalized && (normalized === priorNormalized || diceSimilarity(normalized, priorNormalized) >= 0.86)) {
+    const isLatest = index === context.priorTurns.length - 1;
+    if (priorNormalized && nearRepeat(utterance, prior, isLatest)) {
       reasons.push('与本次会话已有台词高度重复');
       break;
     }
@@ -50,6 +62,11 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
 
   if (QUESTION.test(context.latestPrompt) && !directlyAddresses(context.latestPrompt, utterance, context.evidence)) {
     reasons.push('没有直接承接上一轮明确问题');
+  } else if (context.latestPrompt.trim() && !pragmaticallyContinues(context.latestPrompt, utterance, context.evidence)) {
+    reasons.push('没有语用承接对方上一轮发言');
+  }
+  if (context.priorTurns.length >= 3 && !context.endDialogue && !advancesConversationArc(context.latestPrompt, utterance, context.evidence)) {
+    reasons.push('会话后半段没有新增问题、事实、提议、回应或自然收束');
   }
 
   const evidenceText = [context.latestPrompt, ...context.priorTurns, ...context.evidence].join('\n');
@@ -393,6 +410,79 @@ function directlyAddresses(prompt: string, utterance: string, evidence: readonly
     if (setsOverlap(promptBigrams, factBigrams) && setsOverlap(factBigrams, meaningfulBigrams(utterance))) return true;
   }
   return false;
+}
+
+function pragmaticallyContinues(prompt: string, utterance: string, evidence: readonly string[]): boolean {
+  if (QUESTION.test(prompt)) return directlyAddresses(prompt, utterance, evidence);
+  if (topicOverlap(prompt, utterance) || evidenceBridge(prompt, utterance, evidence)) return true;
+  if (semanticBridge(prompt, utterance)) return true;
+
+  const acknowledgement = utterance.trim().match(ACKNOWLEDGEMENT);
+  if (acknowledgement) {
+    const remainder = utterance.trim().slice(acknowledgement[0].length).replace(/^[，。！？!?\s]+/u, '').trim();
+    if (normalize(remainder).length <= 8) return true;
+    return topicOverlap(prompt, remainder) || semanticBridge(prompt, remainder);
+  }
+
+  if (INVITATION.test(utterance.trim())) {
+    return CONVERSATION_INVITATION.test(utterance)
+      || topicOverlap(prompt, utterance)
+      || semanticBridge(prompt, utterance);
+  }
+  return false;
+}
+
+function topicOverlap(left: string, right: string): boolean {
+  return setsOverlap(meaningfulBigrams(left), meaningfulBigrams(right));
+}
+
+function evidenceBridge(prompt: string, utterance: string, evidence: readonly string[]): boolean {
+  return evidence.some((fact) => topicOverlap(prompt, fact) && topicOverlap(fact, utterance));
+}
+
+function semanticBridge(prompt: string, utterance: string): boolean {
+  const pairs: readonly [RegExp, RegExp][] = [
+    [/累|疲惫|困|忙|辛苦/u, /休息|歇一歇|坐坐|缓一缓|帮忙|陪你/u],
+    [/难过|担心|焦虑|害怕|生气|委屈/u, /听你说|陪你|别担心|慢慢说|理解/u],
+    [/开心|高兴|顺利|完成|做好/u, /太好了|庆祝|替你高兴|真不错/u],
+    [/饿|吃饭|饭菜|午饭|晚饭/u, /吃|饭|餐|做饭/u],
+    [/读书|阅读|书|作品/u, /读|书|书店|推荐/u],
+    [/画展|画画|速写|作品|构图/u, /画|展|颜色|光线|阴影|构图/u],
+    [/咖啡|手冲|烘焙/u, /咖啡|杯|豆|配方|口感/u],
+  ];
+  return pairs.some(([source, response]) => source.test(prompt) && response.test(utterance));
+}
+
+function advancesConversationArc(prompt: string, utterance: string, evidence: readonly string[]): boolean {
+  if (QUESTION.test(utterance)) return true;
+  if (QUESTION.test(prompt) && directlyAddresses(prompt, utterance, evidence)) return true;
+  if (/要不要|不如|可以试试|我们可以|我可以|打算|准备|下次|愿不愿意|需不需要/u.test(utterance)) return true;
+  if (/^(?:好|好啊|可以|行|当然|愿意|不了|不行|恐怕|抱歉|谢谢|没关系)[，。！？!?\s]/u.test(utterance.trim())) return true;
+  if (/先聊到这里|下次再聊|改天再聊|回头见|再见|我得先|我要先/u.test(utterance)) return true;
+  if (evidence.some((fact) => topicOverlap(fact, utterance))) return true;
+  return /今天|刚才|刚刚|上午|下午|晚上|明天|昨天|第\s*\d+\s*天|\d{1,2}[：:]\d{2}/u.test(utterance)
+    && /做|看|听|读|写|画|送|收到|完成|发现|遇到|处理|决定/u.test(utterance);
+}
+
+function nearRepeat(utterance: string, prior: string, isLatest: boolean): boolean {
+  const normalized = normalize(utterance);
+  const priorNormalized = normalize(prior);
+  if (!normalized || !priorNormalized) return false;
+  const similarity = diceSimilarity(normalized, priorNormalized);
+  if (normalized === priorNormalized || similarity >= 0.86) return true;
+  // 回答可以自然复用上一句问题的关键词，但不能复写陈述或更早的会话台词。
+  if (isLatest && QUESTION.test(prior)) return false;
+  if (similarity >= 0.66) return true;
+
+  const currentTerms = meaningfulBigrams(utterance);
+  const priorTerms = meaningfulBigrams(prior);
+  let overlap = 0;
+  for (const term of currentTerms) if (priorTerms.has(term)) overlap += 1;
+  const smaller = Math.min(currentTerms.size, priorTerms.size);
+  if (overlap >= 5 && smaller > 0 && overlap / smaller >= 0.62) return true;
+
+  const sharedMotifs = SEMANTIC_MOTIFS.filter((motif) => motif.test(utterance) && motif.test(prior)).length;
+  return sharedMotifs >= 3 || (sharedMotifs >= 2 && METAPHOR.test(utterance) && METAPHOR.test(prior));
 }
 
 function setsOverlap(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {

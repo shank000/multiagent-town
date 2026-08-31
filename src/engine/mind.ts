@@ -52,7 +52,7 @@ export class MindEngine {
     this.writer.attach(opts.log);
     this.rels = new RelationshipStore(opts.db);
     this.rumors = new RumorTracker(opts.db);
-    this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 12, this.rels, this.rumors, { scopeId });
+    this.dialogue = new DialogueEngine(opts.llm, this.store, opts.log, 6, this.rels, this.rumors, { scopeId });
     this.townModel = new TownModel(opts.log, this.rels, { seed: opts.townModelSeed ?? scopeId });
     this.townLife = new TownLifeEngine(opts.log);
   }

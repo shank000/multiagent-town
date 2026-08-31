@@ -41,7 +41,7 @@ function setup(agentCount: number, provider: LLMProvider = new ImmediateDialogue
     new LLMGateway({ provider, retries: 0, maxConcurrent: 2 }),
     store,
     log,
-    1,
+    6,
     rels,
   );
   const agents = Array.from({ length: agentCount }, (_, index) => makeAgent({
@@ -110,9 +110,10 @@ test('较早的冲突预留阻止后发会话插队，并在现有会话结束�
     });
     assert.equal(dialogue.dispatchReservations(world, 1), 0, '后发预留不能越过共享参与者的较早预留');
 
-    dialogue.tick(world, 0, 2);
-    await dialogue.drain();
-    dialogue.tick(world, 0, 3);
+    for (let now = 2; now <= 9; now += 1) {
+      dialogue.tick(world, 0, now);
+      await dialogue.drain();
+    }
     assert.deepEqual(
       dialogue.activeSessions().map((session) => session.conversationId),
       [earlier.conversationId],
@@ -191,7 +192,7 @@ test('六居民碰撞选择全部排队并最终形成可审计的完成生命�
     const uniqueConversationIds = new Set(choices.map((choice) => choice.payload?.conversationId));
     assert.equal(uniqueConversationIds.size, choices.length - 1, '一组互选合并为一个会话，其余定向选择各自履约');
 
-    for (let now = 1171; now <= 1200; now += 1) {
+    for (let now = 1171; now <= 1250; now += 1) {
       dialogue.tick(world, 1, now);
       await flush();
       await dialogue.drain();

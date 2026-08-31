@@ -144,6 +144,62 @@ test('多轮对话：交替 4 句后结束并摘要双写', async () => {
   assert.equal(dialogue.isActive('agent:a', 'agent:b'), false);
 });
 
+test('模型自然结束不得早于第 4 句，持续发言也不得超过第 6 句', async () => {
+  const runConversation = async (modelRequestsEnd: boolean): Promise<number> => {
+    const lines = [
+      '今天店里还顺利吗？',
+      '是，还算顺利，上午的工作已经处理完了。',
+      '那就好，处理完工作后你想先休息吗？',
+      '我想先休息一会儿，之后再整理桌面。',
+      '整理桌面后，要不要去门口走走？',
+      '可以，走一小圈再回来。',
+      '这句不应进入会话。',
+    ];
+    const provider: LLMProvider = {
+      name: modelRequestsEnd ? 'early-end' : 'never-end',
+      async complete(request: LLMRequest): Promise<LLMResponse> {
+        if (request.template === DIALOGUE_TEMPLATE) {
+          const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
+          const match = user.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/);
+          assert.ok(match);
+          const context = JSON.parse(match[1]) as { history?: unknown[] };
+          const index = context.history?.length ?? 0;
+          const parsed = { utterance: lines[index], end_dialogue: modelRequestsEnd };
+          return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+        }
+        const parsed = { summary: '双方完成了一段有起承转合的近况交流。', affection_delta: 0, respect_delta: 0 };
+        return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+      },
+    };
+    const db = openDb(':memory:');
+    const log = new EventLog(db);
+    const store = new MemoryStore(db);
+    const a = makeAgent({ id: 'agent:a', name: '甲', persona: persona({ name: '甲' }) });
+    const b = makeAgent({ id: 'agent:b', name: '乙', persona: persona({ name: '乙' }) });
+    const world = new WorldState(OBJS, [a, b]);
+    // 即使旧调用方仍传入 12，运行时也必须执行 6 句硬上限。
+    const dialogue = new DialogueEngine(new LLMGateway({ provider, retries: 0 }), store, log, 12);
+    try {
+      assert.equal(dialogue.start(a, b, 10), true);
+      await dialogue.drain();
+      for (let now = 12; now <= 50; now += 2) {
+        dialogue.tick(world, 2, now);
+        await dialogue.drain();
+        if (store.conversationsFor(a.id)[0]?.status === 'completed') break;
+      }
+      const conversation = store.conversationsFor(a.id)[0];
+      assert.equal(conversation.status, 'completed');
+      return conversation.turnCount;
+    } finally {
+      await dialogue.drain();
+      db.raw.close();
+    }
+  };
+
+  assert.equal(await runConversation(true), 4);
+  assert.equal(await runConversation(false), 6);
+});
+
 test('摘要写入双方记忆流', async () => {
   const { store, world, dialogue, a, b } = setup();
   dialogue.start(a, b, 10);
@@ -192,9 +248,11 @@ test('摘要缺失或返回无效关系增量时保持零漂移', async () => {
   try {
     assert.equal(dialogue.start(a, b, 10), true);
     await dialogue.drain();
-    dialogue.tick(world, 2, 12);
-    await dialogue.drain();
-    dialogue.tick(world, 0, 12);
+    for (let now = 12; now <= 24; now += 2) {
+      dialogue.tick(world, 2, now);
+      await dialogue.drain();
+    }
+    dialogue.tick(world, 0, 26);
 
     assert.equal(rels.getOrCreate(a.id, b.id).affection, 0);
     assert.equal(rels.getOrCreate(a.id, b.id).respect, 0);
@@ -299,7 +357,17 @@ test('会话仅在相邻时自然开始，摘要收尾期间锁定双方并在�
     async complete(request: LLMRequest): Promise<LLMResponse> {
       requests.push(request);
       if (request.template === DIALOGUE_TEMPLATE) {
-        const parsed = { utterance: '我们下次接着聊。', end_dialogue: true };
+        const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
+        const match = user.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/);
+        assert.ok(match);
+        const context = JSON.parse(match[1]) as { history?: unknown[] };
+        const lines = [
+          '今天过得还顺利吗？',
+          '是，今天还算顺利，手头的工作已经处理完了。',
+          '那就好，工作处理完后你准备休息吗？',
+          '我准备先休息一会儿，我们下次接着聊。',
+        ];
+        const parsed = { utterance: lines[context.history?.length ?? 0], end_dialogue: true };
         return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
       }
       assert.equal(request.template, DIALOGUE_SUMMARY_TEMPLATE);
@@ -330,7 +398,11 @@ test('会话仅在相邻时自然开始，摘要收尾期间锁定双方并在�
     assert.equal(dialogue.isParticipantActive(b.id), true);
     await dialogue.drain();
 
-    dialogue.tick(world, 2, 12);
+    for (let now = 12; now <= 22; now += 2) {
+      dialogue.tick(world, 2, now);
+      await dialogue.drain();
+    }
+    dialogue.tick(world, 2, 24);
     await summaryStarted;
     assert.deepEqual(dialogue.activeSessions().map((session) => session.speakerId), [null]);
     const before = { x: a.x, y: a.y, progress: a.pathProgress };
@@ -348,10 +420,10 @@ test('会话仅在相邻时自然开始，摘要收尾期间锁定双方并在�
     dialogue.tick(world, 0, 14);
     assert.equal(dialogue.isActive(a.id, b.id), false);
     assert.equal(store.conversationsFor(a.id)[0].status, 'completed');
-    assert.equal(requests[0].agentId, a.id);
-    assert.equal(requests[0].reasoning, false);
-    assert.equal(requests[1].agentId, a.id);
-    assert.equal(requests[1].reasoning, false);
+    assert.equal(requests.length, 5);
+    assert.deepEqual(requests.map((request) => request.agentId), [a.id, b.id, a.id, b.id, a.id]);
+    assert.ok(requests.every((request) => request.reasoning === false));
+    assert.equal(requests.at(-1)?.template, DIALOGUE_SUMMARY_TEMPLATE);
   } finally {
     releaseSummary();
     await dialogue.drain();
