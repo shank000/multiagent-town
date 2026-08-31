@@ -38,7 +38,7 @@ pnpm town-web --port 8787
 - 深度统计：<http://127.0.0.1:8787/stats.html>
 - 后端日志：<http://127.0.0.1:8787/logs.html>
 
-`town-web` 默认只加载 `w1`，每次使用带时间戳的新实验工作空间。主界面左侧实验资源管理器以工作空间树列出实际加载的世界；点击“新建实验工作空间”，可用单世界观察、双组对照、三世界并行预设或逐项勾选，从初始配置加载任意一个、两个或三个世界；也可在启动时选择：
+`town-web` 默认只加载 `w1`，每次使用带时间戳的新实验工作空间。主界面左侧实验资源管理器以工作空间树列出实际加载的世界；点击“新建实验工作空间”，可用单世界观察、双组对照、三世界并行预设或逐项勾选，从初始配置加载任意一个、两个或三个世界；“重启当前世界状态”会自动暂停时钟、停止正式实验并结算推理任务；“删除当前实验”要求逐字输入实验名称并确认数据导出。也可在启动时选择：
 
 ```bash
 pnpm town-web --port 8787 --worlds mem-on,mem-off,rumor --workspace-name "三组对照" --seed 42
@@ -50,7 +50,7 @@ pnpm town-web --port 8787 --worlds mem-on,mem-off,rumor --workspace-name "三组
 pnpm town-web --port 8787 --db :memory:
 ```
 
-人物互动、记忆、反思、关系证据等研究记录只写入本次加载世界对应的 `data/runs/town-…-w1.sqlite`、`-w2.sqlite` 或 `-w3.sqlite`。新建小镇使用新的数据库前缀和独立 `*.runtime.jsonl`；旧工作空间完整封存。后端日志与研究事件库分离，API Key、Authorization、密码和令牌在写入前会被脱敏。
+人物互动、记忆、反思、关系证据等研究记录只写入本次加载世界对应的 `data/runs/town-…-w1.sqlite`、`-w2.sqlite` 或 `-w3.sqlite`。新建小镇使用新的数据库前缀和独立 `*.runtime.jsonl`；旧工作空间完整封存。安全删除把文件型数据库、日志和 `workspace-deletion.json` 恢复清单迁入数据目录下的 `.multiagent-town-trash/`；内存实验在界面明确提示导出边界。后端日志与研究事件库分离，API Key、Authorization、密码和令牌在写入前会被脱敏。
 
 ## LLM 配置
 
@@ -125,7 +125,7 @@ pnpm test
 pnpm build:web
 ```
 
-当前工程基线为 346 项 `node:test`；AgentSociety² 工作区另有 22 项 Python 协议测试，并通过 2.8.4 SDK/Replay/checkpoint 冒烟。
+当前工程基线为 401 项 `node:test`；AgentSociety² 工作区另有 22 项 Python 协议测试，并通过 2.8.4 SDK/Replay/checkpoint 冒烟。
 
 AgentSociety² 适配验证：
 

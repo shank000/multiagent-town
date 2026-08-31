@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import type { LLMGateway } from '../llm/gateway';
 import type { BackendRuntimeLog } from '../runtime/backend-log';
 import { runtimeLogPathForDatabase } from '../runtime/backend-log';
-import { assertFreshSelectedWorldDbPaths, type TownWorldId } from '../cli/town-web-config';
+import { assertFreshSelectedWorldDbPaths, worldDbPath, type TownWorldId } from '../cli/town-web-config';
 import { profileSetHash } from './agent-profile';
 import {
   createManagedWorld,
@@ -55,6 +56,23 @@ export interface ExperimentWorkspaceRuntimeOptions {
   nextDatabasePath: () => string;
 }
 
+export interface WorkspaceArchiveFile {
+  originalPath: string;
+  archivedPath: string;
+}
+
+export interface WorkspaceDeletionArchive {
+  deletedWorkspaceId: string;
+  deletedWorkspaceName: string;
+  deletedAt: string;
+  archiveDirectory: string;
+  manifestPath: string;
+  recoverable: boolean;
+  archivedFiles: WorkspaceArchiveFile[];
+  missingFiles: string[];
+  failedFiles: Array<{ path: string; reason: string }>;
+}
+
 /** 当前进程只挂载一个实验工作空间；替换时旧数据库完整封存，新世界使用全新文件。 */
 export class ExperimentWorkspaceRuntime {
   private currentValue: BuiltExperimentWorkspace;
@@ -72,7 +90,13 @@ export class ExperimentWorkspaceRuntime {
     initialDatabasePath: string,
     checkBasePath = false,
   ): Promise<ExperimentWorkspaceRuntime> {
-    const initial = await buildWorkspace(input, options, initialDatabasePath, checkBasePath);
+    const initial = await buildWorkspace(
+      input,
+      options,
+      initialDatabasePath,
+      checkBasePath,
+      options.runtimeLog?.filePath,
+    );
     options.runtimeLog?.info('workspace', workspaceSummary(initial.meta, 'created'));
     return new ExperimentWorkspaceRuntime(initial, options);
   }
@@ -93,6 +117,37 @@ export class ExperimentWorkspaceRuntime {
     this.currentValue = next;
     this.options.runtimeLog?.info('workspace', workspaceSummary(next.meta, 'activated'));
     return next;
+  }
+
+  /** 将当前实验迁入本地回收区，并打开一个暂停的替代工作空间以保持服务可用。 */
+  async replaceAndArchive(input: unknown): Promise<{
+    built: BuiltExperimentWorkspace;
+    archive: WorkspaceDeletionArchive;
+  }> {
+    const config = normalizeWorkspaceConfig(input);
+    const next = await buildWorkspace(config, this.options, this.options.nextDatabasePath(), false);
+    const previous = this.currentValue;
+    let archiveDirectory: string;
+    try {
+      archiveDirectory = prepareWorkspaceArchiveDirectory(previous.meta);
+    } catch (error) {
+      await disposeManagedWorlds(next.worlds);
+      throw error;
+    }
+    try {
+      await disposeManagedWorlds(previous.worlds);
+    } catch (error) {
+      await disposeManagedWorlds(next.worlds);
+      throw error;
+    }
+    this.options.runtimeLog?.switchFile(next.meta.runtimeLogPath, next.meta.id);
+    this.currentValue = next;
+    const archive = archiveWorkspaceArtifacts(previous.meta, archiveDirectory, next.meta.runtimeLogPath);
+    this.options.runtimeLog?.info(
+      'workspace',
+      `workspace=${previous.meta.id} deleted=true recoverable=${archive.recoverable} archive=${JSON.stringify(archive.archiveDirectory)} failed=${archive.failedFiles.length}`,
+    );
+    return { built: next, archive };
   }
 
   async dispose(): Promise<void> {
@@ -135,6 +190,7 @@ async function buildWorkspace(
   options: ExperimentWorkspaceRuntimeOptions,
   databaseBasePath: string,
   checkBasePath: boolean,
+  currentRuntimeLogPath?: string,
 ): Promise<BuiltExperimentWorkspace> {
   const config = normalizeWorkspaceConfig(input);
   const worldIds = config.worldKinds.map((kind) => WORLD_ID_BY_KIND[kind]);
@@ -164,7 +220,7 @@ async function buildWorkspace(
     worldIds,
     worldCount: worlds.length,
     databaseBasePath,
-    runtimeLogPath: runtimeLogPathForDatabase(databaseBasePath),
+    runtimeLogPath: currentRuntimeLogPath ?? runtimeLogPathForDatabase(databaseBasePath),
     profileSetHash: profileSetHash(worlds[0].world),
   };
   for (const managed of worlds) {
@@ -180,6 +236,80 @@ async function buildWorkspace(
     });
   }
   return { meta, worlds };
+}
+
+function prepareWorkspaceArchiveDirectory(meta: ExperimentWorkspaceMeta): string {
+  const basis = meta.databaseBasePath === ':memory:' ? meta.runtimeLogPath : meta.databaseBasePath;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safeId = meta.id.replace(/[^A-Za-z0-9_.-]/g, '_');
+  const directory = join(dirname(basis), '.multiagent-town-trash', `${stamp}-${safeId}`);
+  mkdirSync(directory, { recursive: true });
+  return directory;
+}
+
+function archiveWorkspaceArtifacts(
+  meta: ExperimentWorkspaceMeta,
+  archiveDirectory: string,
+  protectedRuntimeLogPath: string,
+): WorkspaceDeletionArchive {
+  const deletedAt = new Date().toISOString();
+  const requiredDatabaseFiles = meta.databaseBasePath === ':memory:'
+    ? []
+    : meta.worldIds.map((worldId) => worldDbPath(meta.databaseBasePath, worldId));
+  const databaseFiles = meta.databaseBasePath === ':memory:'
+    ? []
+    : [
+        meta.databaseBasePath,
+        ...requiredDatabaseFiles.flatMap((path) => [path, `${path}-wal`, `${path}-shm`]),
+      ];
+  const candidates = [...new Set([
+    ...databaseFiles,
+    ...(meta.runtimeLogPath === protectedRuntimeLogPath ? [] : [meta.runtimeLogPath]),
+  ])];
+  const archivedFiles: WorkspaceArchiveFile[] = [];
+  const missingFiles: string[] = [];
+  const failedFiles: Array<{ path: string; reason: string }> = [];
+  for (const originalPath of candidates) {
+    if (!existsSync(originalPath)) {
+      missingFiles.push(originalPath);
+      continue;
+    }
+    const archivedPath = join(archiveDirectory, basename(originalPath));
+    try {
+      renameSync(originalPath, archivedPath);
+      archivedFiles.push({ originalPath, archivedPath });
+    } catch (error) {
+      failedFiles.push({
+        path: originalPath,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const manifestPath = join(archiveDirectory, 'workspace-deletion.json');
+  const archivedOriginalPaths = new Set(archivedFiles.map((file) => file.originalPath));
+  const archive: WorkspaceDeletionArchive = {
+    deletedWorkspaceId: meta.id,
+    deletedWorkspaceName: meta.name,
+    deletedAt,
+    archiveDirectory,
+    manifestPath,
+    recoverable: meta.databaseBasePath !== ':memory:'
+      && requiredDatabaseFiles.every((path) => archivedOriginalPaths.has(path))
+      && failedFiles.length === 0,
+    archivedFiles,
+    missingFiles,
+    failedFiles,
+  };
+  try {
+    writeFileSync(manifestPath, `${JSON.stringify({ schemaVersion: 1, workspace: meta, archive }, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    archive.recoverable = false;
+    archive.failedFiles.push({
+      path: manifestPath,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return archive;
 }
 
 export async function disposeManagedWorlds(worlds: readonly ManagedWorld[]): Promise<void> {

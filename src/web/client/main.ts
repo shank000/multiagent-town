@@ -1333,6 +1333,18 @@ function refreshWorkspaceCreateSubmit(): void {
     || selected < 1;
 }
 
+function refreshWorkspaceDeleteSubmit(): void {
+  const submit = document.getElementById('workspace-delete-submit') as HTMLButtonElement | null;
+  const confirmation = document.getElementById('workspace-delete-confirm-name') as HTMLInputElement | null;
+  const acknowledged = document.getElementById('workspace-delete-export-ack') as HTMLInputElement | null;
+  if (!submit) return;
+  const matches = Boolean(currentWorkspace && confirmation?.value === currentWorkspace.name);
+  submit.disabled = workspaceCreateOperationActive
+    || !workspaceEndpointAvailable
+    || !matches
+    || acknowledged?.checked !== true;
+}
+
 function syncWorkspaceExplorerActive(worldId: string): void {
   document.querySelectorAll<HTMLButtonElement>('[data-workspace-world-id]').forEach((button) => {
     const active = button.dataset.workspaceWorldId === worldId;
@@ -1373,14 +1385,23 @@ function renderWorkspaceSafety(safety: LLMConfigSafetyView): void {
   if (resetSafety) {
     resetSafety.classList.toggle('ready', safety.ready);
     resetSafety.textContent = safety.ready
-      ? '当前状态可安全重新开始；新运行会保持暂停，便于先核对初始配置。'
-      : `重置保护：${safety.reasons.join('；') || '当前暂不可重置'}。`;
+      ? '当前已经处于安全暂停状态，可以直接重新开始。'
+      : `确认后将自动处理：${safety.reasons.join('；') || '暂停世界并结算后台任务'}。`;
   }
   const resetSubmit = document.getElementById('workspace-reset-submit') as HTMLButtonElement | null;
-  if (resetSubmit) resetSubmit.disabled = workspaceCreateOperationActive || !workspaceEndpointAvailable || !safety.ready;
+  if (resetSubmit) resetSubmit.disabled = workspaceCreateOperationActive || !workspaceEndpointAvailable;
+  const deleteSafety = document.getElementById('workspace-delete-safety');
+  if (deleteSafety) {
+    deleteSafety.classList.toggle('ready', safety.ready);
+    deleteSafety.textContent = safety.ready
+      ? '当前已经处于安全暂停状态；删除确认后立即归档。'
+      : `删除确认后将自动处理：${safety.reasons.join('；') || '暂停世界并结算后台任务'}。`;
+  }
+  refreshWorkspaceDeleteSubmit();
 }
 
 function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): void {
+  const workspaceChanged = currentWorkspace?.id !== view.workspace.id;
   workspaceEndpointAvailable = true;
   currentWorkspace = view.workspace;
   loadedWorldCount = Math.max(1, view.workspace.worldCount);
@@ -1396,6 +1417,8 @@ function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): v
   if (open) open.disabled = false;
   const resetOpen = document.getElementById('workspace-reset-open') as HTMLButtonElement | null;
   if (resetOpen) resetOpen.disabled = false;
+  const deleteOpen = document.getElementById('workspace-delete-open') as HTMLButtonElement | null;
+  if (deleteOpen) deleteOpen.disabled = false;
   const resetSummary = document.getElementById('workspace-reset-summary');
   if (resetSummary) {
     const archive = view.workspace.databaseBasePath === ':memory:'
@@ -1403,6 +1426,23 @@ function renderWorkspaceConfiguration(view: WorkspaceView, populate: boolean): v
       : `上一运行保留在 ${view.workspace.databaseBasePath}，日志保留在 ${view.workspace.runtimeLogPath}。`;
     resetSummary.textContent = `${view.workspace.name} · 种子 ${view.workspace.seed} · ${view.workspace.worldCount} 个世界。${archive}`;
   }
+  const deleteSummary = document.getElementById('workspace-delete-summary');
+  if (deleteSummary) {
+    const storage = view.workspace.databaseBasePath === ':memory:'
+      ? '这是内存实验，世界状态不会进入回收区。'
+      : `数据库前缀 ${view.workspace.databaseBasePath} 与日志将迁入本地回收区。`;
+    deleteSummary.textContent = `${view.workspace.name} · ${view.workspace.worldCount} 个世界。${storage}`;
+  }
+  const deleteLabel = document.getElementById('workspace-delete-confirm-label');
+  if (deleteLabel) deleteLabel.textContent = view.workspace.name;
+  const deleteDialog = document.getElementById('workspace-delete-dialog') as HTMLDialogElement | null;
+  if (workspaceChanged || !deleteDialog?.open) {
+    const confirmation = document.getElementById('workspace-delete-confirm-name') as HTMLInputElement | null;
+    const acknowledged = document.getElementById('workspace-delete-export-ack') as HTMLInputElement | null;
+    if (confirmation) confirmation.value = '';
+    if (acknowledged) acknowledged.checked = false;
+  }
+  refreshWorkspaceDeleteSubmit();
   if (!populate) return;
   const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
   if (!form) return;
@@ -1432,19 +1472,32 @@ async function loadWorkspaceConfiguration(populate: boolean): Promise<void> {
     if (safety) { safety.classList.remove('ready'); safety.textContent = '当前内存世界保持运行；安全重启后可创建独立小镇实验。'; }
     const open = document.getElementById('workspace-create-open') as HTMLButtonElement | null;
     const resetOpen = document.getElementById('workspace-reset-open') as HTMLButtonElement | null;
+    const deleteOpen = document.getElementById('workspace-delete-open') as HTMLButtonElement | null;
     const submit = document.getElementById('workspace-create-submit') as HTMLButtonElement | null;
     if (open) open.disabled = true;
-    if (resetOpen) resetOpen.disabled = true;
+    if (resetOpen) resetOpen.disabled = false;
+    if (deleteOpen) deleteOpen.disabled = false;
     if (submit) submit.disabled = true;
+    const resetSafety = document.getElementById('workspace-reset-safety');
+    if (resetSafety) { resetSafety.classList.remove('ready'); resetSafety.textContent = '当前后台版本不支持重启；启动更新后的服务即可使用。'; }
+    const resetSubmit = document.getElementById('workspace-reset-submit') as HTMLButtonElement | null;
+    if (resetSubmit) resetSubmit.disabled = true;
+    const deleteSummary = document.getElementById('workspace-delete-summary');
+    if (deleteSummary) deleteSummary.textContent = '当前后台版本没有提供实验删除接口；现有小镇保持不变。';
+    const deleteSafety = document.getElementById('workspace-delete-safety');
+    if (deleteSafety) { deleteSafety.classList.remove('ready'); deleteSafety.textContent = '启动更新后的服务后才能执行安全删除。'; }
+    refreshWorkspaceDeleteSubmit();
   }
 }
 
 function bindWorkspaceConfiguration(): void {
   const dialog = document.getElementById('workspace-create-dialog') as HTMLDialogElement | null;
   const resetDialog = document.getElementById('workspace-reset-dialog') as HTMLDialogElement | null;
+  const deleteDialog = document.getElementById('workspace-delete-dialog') as HTMLDialogElement | null;
   const resetForm = document.getElementById('workspace-reset-form') as HTMLFormElement | null;
+  const deleteForm = document.getElementById('workspace-delete-form') as HTMLFormElement | null;
   const form = document.getElementById('workspace-create-form') as HTMLFormElement | null;
-  if (!dialog || !form || !resetDialog || !resetForm) return;
+  if (!dialog || !form || !resetDialog || !resetForm || !deleteDialog || !deleteForm) return;
   const setExplorerOpen = (open: boolean) => {
     document.body.dataset.workbenchExplorer = open ? 'open' : 'closed';
     const toggle = document.getElementById('workbench-explorer-toggle');
@@ -1511,9 +1564,25 @@ function bindWorkspaceConfiguration(): void {
     if (!dialog.open) dialog.showModal();
   });
   document.getElementById('workspace-reset-open')?.addEventListener('click', () => {
-    if (!workspaceEndpointAvailable) return;
     void loadWorkspaceConfiguration(false);
     if (!resetDialog.open) resetDialog.showModal();
+  });
+  document.getElementById('workspace-delete-open')?.addEventListener('click', () => {
+    void loadWorkspaceConfiguration(false);
+    if (!deleteDialog.open) deleteDialog.showModal();
+  });
+  document.getElementById('workspace-delete-confirm-name')?.addEventListener('input', refreshWorkspaceDeleteSubmit);
+  document.getElementById('workspace-delete-export-ack')?.addEventListener('change', refreshWorkspaceDeleteSubmit);
+  document.getElementById('workspace-delete-export-metrics')?.addEventListener('click', () => {
+    exportMetrics(metricsCache);
+    showToast('当前世界指标已导出；多世界实验请切换世界后分别保存', 'success');
+  });
+  document.getElementById('workspace-delete-export-logs')?.addEventListener('click', () => {
+    const anchor = document.createElement('a');
+    anchor.href = '/api/runtime-logs/download';
+    anchor.download = '';
+    anchor.click();
+    showToast('后端日志下载已开始', 'success');
   });
   resetForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1521,6 +1590,7 @@ function bindWorkspaceConfiguration(): void {
     workspaceCreateOperationActive = true;
     const submit = document.getElementById('workspace-reset-submit') as HTMLButtonElement;
     submit.disabled = true;
+    submit.textContent = '正在安全重启……';
     try {
       const response = await fetch('/api/workspace/reset', {
         method: 'POST',
@@ -1537,7 +1607,52 @@ function bindWorkspaceConfiguration(): void {
       await loadWorkspaceConfiguration(false);
     } finally {
       workspaceCreateOperationActive = false;
-      submit.disabled = !workspaceEndpointAvailable || !workspaceSafetyReady;
+      submit.textContent = '确认重新开始';
+      submit.disabled = !workspaceEndpointAvailable;
+    }
+  });
+  deleteForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!workspaceEndpointAvailable || workspaceCreateOperationActive || !currentWorkspace) return;
+    const deletingWorkspace = currentWorkspace;
+    const confirmation = document.getElementById('workspace-delete-confirm-name') as HTMLInputElement;
+    const acknowledged = document.getElementById('workspace-delete-export-ack') as HTMLInputElement;
+    if (confirmation.value !== deletingWorkspace.name || !acknowledged.checked) {
+      refreshWorkspaceDeleteSubmit();
+      return;
+    }
+    workspaceCreateOperationActive = true;
+    const submit = document.getElementById('workspace-delete-submit') as HTMLButtonElement;
+    submit.disabled = true;
+    submit.textContent = '正在安全归档……';
+    try {
+      const response = await fetch('/api/workspace', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: deletingWorkspace.id,
+          confirmationName: confirmation.value,
+          exportAcknowledged: acknowledged.checked,
+        }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const result = await response.json() as {
+        workspace?: WorkspaceMetaView;
+        archive?: { recoverable?: boolean; archiveDirectory?: string; failedFiles?: unknown[] };
+      };
+      const archiveMessage = result.archive?.recoverable
+        ? '研究文件已移入本地回收区'
+        : '内存状态已关闭，已打开暂停的空白实验';
+      showToast(`实验“${deletingWorkspace.name}”已删除；${archiveMessage}`, 'success');
+      deleteDialog.close();
+      window.setTimeout(() => window.location.reload(), 350);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '实验安全删除失败', 'error');
+      await loadWorkspaceConfiguration(false);
+    } finally {
+      workspaceCreateOperationActive = false;
+      submit.textContent = '确认删除当前实验';
+      refreshWorkspaceDeleteSubmit();
     }
   });
   form.addEventListener('submit', async (event) => {

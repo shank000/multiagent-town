@@ -48,6 +48,7 @@
     <div class="workspace-explorer-actions">
       <button id="workspace-create-open" class="workspace-primary-action" type="button"><span>＋</span> 新建实验工作空间</button>
       <button id="workspace-reset-open" class="workspace-secondary-action" type="button"><span>↻</span> 重启当前世界状态</button>
+      <button id="workspace-delete-open" class="workspace-danger-action" type="button"><span>⌫</span> 删除当前实验</button>
     </div>
     <section class="workspace-explorer-section" aria-label="当前工作空间">
       <div class="workspace-explorer-label"><span>当前工作空间</span><b id="workspace-loaded-count">— / 3</b></div>
@@ -327,10 +328,24 @@
     <form id="workspace-reset-form">
       <header class="dialog-head"><div class="dialog-symbol">↻</div><div><span class="section-kicker">SAFE WORLD RECOVERY</span><h2 id="workspace-reset-title">重新开始当前小镇</h2><p>使用相同的居民档案、随机种子、世界组合和模型设置创建全新运行。</p></div><button class="dialog-close" type="button" data-close-dialog="workspace-reset-dialog" aria-label="关闭">×</button></header>
       <div class="dialog-body">
-        <section class="editor-section recovery-summary"><h3>恢复边界</h3><p id="workspace-reset-summary">正在读取当前工作空间……</p><ul><li>新运行从第 1 天 00:00 开始并保持暂停。</li><li>文件数据库与日志作为上一运行的研究档案保留。</li><li>内存运行无法持久留档，重置前请先导出指标与日志。</li></ul></section>
-        <div id="workspace-reset-safety" class="model-config-safety">重置前需要暂停当前小镇、停止正式实验并等待对话和推理任务结束。</div>
+        <section class="editor-section recovery-summary"><h3>恢复边界</h3><p id="workspace-reset-summary">正在读取当前工作空间……</p><ul><li>确认后自动暂停时钟、停止正式实验并结算推理任务。</li><li>新运行从第 1 天 00:00 开始并保持暂停。</li><li>文件数据库与日志作为上一运行的研究档案保留。</li><li>内存运行无法持久留档，重置前请先导出指标与日志。</li></ul></section>
+        <div id="workspace-reset-safety" class="model-config-safety">重启会自动进入安全暂停状态，无需预先操作顶部时钟。</div>
       </div>
       <footer class="dialog-actions"><button type="button" class="icon-btn" data-close-dialog="workspace-reset-dialog">取消</button><button id="workspace-reset-submit" type="submit" class="icon-btn danger">确认重新开始</button></footer>
+    </form>
+  </dialog>
+  <dialog id="workspace-delete-dialog" class="workspace-dialog compact-dialog workspace-delete-dialog" aria-labelledby="workspace-delete-title">
+    <form id="workspace-delete-form">
+      <header class="dialog-head danger-head"><div class="dialog-symbol danger-symbol">⌫</div><div><span class="section-kicker">RECOVERABLE EXPERIMENT DELETE</span><h2 id="workspace-delete-title">删除当前实验</h2><p>关闭当前世界并把文件型研究数据迁入本地回收区。</p></div><button class="dialog-close" type="button" data-close-dialog="workspace-delete-dialog" aria-label="关闭">×</button></header>
+      <div class="dialog-body">
+        <section class="editor-section delete-summary"><h3>删除范围</h3><p id="workspace-delete-summary">正在读取当前工作空间……</p><ul><li>数据库和后端日志迁入同目录的 <code>.multiagent-town-trash</code>，并生成恢复清单。</li><li>内存实验没有可恢复的数据库状态，删除前必须导出所需结果。</li><li>完成后自动打开一个暂停的“未命名实验”，服务保持可用。</li></ul></section>
+        <section class="editor-section export-reminder"><h3>先保存研究资料</h3><p>多世界实验请依次切换世界导出指标；后端日志按当前工作空间下载。</p><div class="delete-export-actions"><button id="workspace-delete-export-metrics" type="button" class="icon-btn">导出当前世界指标</button><button id="workspace-delete-export-logs" type="button" class="icon-btn">保存后端日志</button></div></section>
+        <section class="editor-section delete-confirmation"><h3>实验名称二次确认</h3><p>请逐字输入 <strong id="workspace-delete-confirm-label">当前实验名称</strong></p><input id="workspace-delete-confirm-name" name="confirmationName" autocomplete="off" spellcheck="false" placeholder="输入完整实验名称" required />
+          <label><input id="workspace-delete-export-ack" name="exportAcknowledged" type="checkbox" /> 我已导出需要保留的数据，并理解内存实验状态无法恢复。</label>
+        </section>
+        <div id="workspace-delete-safety" class="model-config-safety">删除确认后会自动暂停世界、停止实验并等待模型任务落定。</div>
+      </div>
+      <footer class="dialog-actions"><span>安全删除不会直接永久擦除文件型研究数据。</span><button type="button" class="icon-btn" data-close-dialog="workspace-delete-dialog">取消</button><button id="workspace-delete-submit" type="submit" class="icon-btn danger" disabled>确认删除当前实验</button></footer>
     </form>
   </dialog>
   <dialog id="agent-editor" class="workspace-dialog" aria-labelledby="agent-editor-title">

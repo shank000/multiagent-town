@@ -35,6 +35,7 @@ test('运行日志路径与研究数据库同批次保存且脱敏器覆盖常�
     join('var', 'runs', 'town-1.runtime.jsonl'),
   );
   assert.equal(redactSecrets('Authorization=abc sk-1234567890 API_KEY: xyz'), 'Authorization=[REDACTED] sk-[REDACTED] API_KEY: [REDACTED]');
+  assert.notEqual(runtimeLogPathForDatabase(':memory:'), runtimeLogPathForDatabase(':memory:'));
 });
 
 test('新工作空间切换到独立日志文件并重置当前会话视图', () => {

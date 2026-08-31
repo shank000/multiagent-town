@@ -266,6 +266,20 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
     await Promise.all(controlledWorlds.map((world) => world.mind?.drain() ?? Promise.resolve()));
     await opts.llm?.drain();
   };
+  const quiesceWorkspaceForMutation = async () => {
+    const controlledWorlds = hubWorlds ?? [hub()];
+    paused = true;
+    if (controlledWorlds.length > 1) stopLoopGroup(controlledWorlds.map((world) => world.loop));
+    else controlledWorlds[0].loop.stop();
+    for (const world of controlledWorlds) world.experiment?.stop();
+    await Promise.all(controlledWorlds.map((world) => world.loop.drain()));
+    await Promise.all(controlledWorlds.map((world) => world.mind?.drain() ?? Promise.resolve()));
+    await opts.llm?.drain();
+    await Promise.all(controlledWorlds.map((world) => world.loop.settlePendingDecisions()));
+    await Promise.all(controlledWorlds.map((world) => world.mind?.drain() ?? Promise.resolve()));
+    await opts.llm?.drain();
+    return llmConfigurationSafety(false);
+  };
 
   function snapshotOf(selected: HubAccess): WorldSnapshot & { worldId: string } {
     return {
@@ -1002,9 +1016,6 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       }
       if (url.pathname === '/api/workspace/reset' && req.method === 'POST') {
         if (!opts.workspace) { res.writeHead(404); res.end('工作空间管理未启用'); return; }
-        await settlePausedCognition();
-        const safety = llmConfigurationSafety();
-        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
         const body = (await readBody(req)) as { workspaceId?: unknown };
         const previous = opts.workspace.current.meta;
         if (typeof body.workspaceId !== 'string' || body.workspaceId !== previous.id) {
@@ -1012,6 +1023,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           res.end('当前工作空间已经变化，请刷新状态后再重置');
           return;
         }
+        const safety = await quiesceWorkspaceForMutation();
+        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
         const resetConfig = {
           name: previous.name,
           seed: previous.seed,
@@ -1046,6 +1059,68 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           restoreCurrentWorkspaceBindings();
           res.writeHead(400);
           res.end(error instanceof Error ? error.message : '工作空间重置失败');
+        }
+        return;
+      }
+      if (url.pathname === '/api/workspace' && req.method === 'DELETE') {
+        if (!opts.workspace) { res.writeHead(404); res.end('工作空间管理未启用'); return; }
+        const body = (await readBody(req)) as {
+          workspaceId?: unknown;
+          confirmationName?: unknown;
+          exportAcknowledged?: unknown;
+        };
+        const previous = opts.workspace.current.meta;
+        if (typeof body.workspaceId !== 'string' || body.workspaceId !== previous.id) {
+          res.writeHead(409);
+          res.end('当前工作空间已经变化，请刷新状态后再删除');
+          return;
+        }
+        if (typeof body.confirmationName !== 'string' || body.confirmationName !== previous.name) {
+          res.writeHead(400);
+          res.end('请输入完整且完全一致的当前实验名称');
+          return;
+        }
+        if (body.exportAcknowledged !== true) {
+          res.writeHead(400);
+          res.end('请先确认需要保留的数据已经导出');
+          return;
+        }
+        const safety = await quiesceWorkspaceForMutation();
+        if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
+        const replacementConfig = {
+          name: '未命名实验',
+          seed: previous.seed,
+          worldSpeed: previous.worldSpeed,
+          defaultExperimentDays: previous.defaultExperimentDays,
+          worldKinds: ['mem-on'],
+          startPaused: true,
+        };
+        clearHubResources();
+        try {
+          const { built, archive } = await opts.workspace.replaceAndArchive(replacementConfig);
+          const activatedWorlds = activateWorkspace(built);
+          opts.runtimeLog?.info(
+            'workspace',
+            `实验已安全删除 previous=${previous.id} current=${built.meta.id} recoverable=${archive.recoverable} archive=${JSON.stringify(archive.archiveDirectory)}`,
+          );
+          res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            ok: true,
+            workspace: built.meta,
+            active: activeId,
+            worlds: activatedWorlds.map((world) => world.meta),
+            deleted: {
+              id: previous.id,
+              name: previous.name,
+              databaseBasePath: previous.databaseBasePath,
+              runtimeLogPath: previous.runtimeLogPath,
+            },
+            archive,
+          }));
+        } catch (error) {
+          restoreCurrentWorkspaceBindings();
+          res.writeHead(400);
+          res.end(error instanceof Error ? error.message : '实验安全删除失败');
         }
         return;
       }

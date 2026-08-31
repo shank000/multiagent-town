@@ -176,13 +176,16 @@ test('Agent 模型运行方式在 UI 明确提供 Mock、本地模型与 API 三
   assert.match(html, /class="model-config-body"/);
 });
 
-test('experiment workspace UI creates or safely resets a town and selects one to three world templates', () => {
+test('experiment workspace UI creates, resets, or safely deletes a town and selects one to three world templates', () => {
   for (const id of [
     'workbench-rail', 'workbench-explorer-toggle', 'workspace-explorer', 'workspace-tree',
     'workspace-loaded-count', 'workspace-explorer-status',
     'workspace-summary', 'workspace-create-open', 'workspace-create-dialog', 'workspace-create-form',
     'workspace-world-options', 'workspace-world-count', 'workspace-create-safety', 'workspace-create-submit',
     'workspace-reset-open', 'workspace-reset-dialog', 'workspace-reset-form', 'workspace-reset-submit',
+    'workspace-delete-open', 'workspace-delete-dialog', 'workspace-delete-form',
+    'workspace-delete-confirm-name', 'workspace-delete-export-ack', 'workspace-delete-submit',
+    'workspace-delete-export-metrics', 'workspace-delete-export-logs',
   ]) assert.match(html, new RegExp(`id=["']${id}["']`));
   for (const kind of ['mem-on', 'mem-off', 'rumor']) assert.match(html, new RegExp(`value=["']${kind}["']`));
   for (const count of ['1', '2', '3']) assert.match(html, new RegExp(`data-world-preset=["']${count}["']`));
@@ -199,6 +202,15 @@ test('experiment workspace UI creates or safely resets a town and selects one to
   assert.match(server, /opts\.llm\?\.drain\(\)/);
   assert.match(server, /\/api\/workspace\/reset/);
   assert.match(server, /startPaused:\s*true/);
+  assert.match(server, /req\.method === 'DELETE'/);
+  assert.match(server, /confirmationName !== previous\.name/);
+  assert.match(server, /exportAcknowledged !== true/);
+  assert.match(server, /replaceAndArchive\(replacementConfig\)/);
+  assert.match(server, /quiesceWorkspaceForMutation/);
+  assert.match(client, /method:\s*'DELETE'/);
+  assert.match(client, /confirmation\.value !== deletingWorkspace\.name/);
+  assert.match(client, /\/api\/runtime-logs\/download/);
+  assert.match(html, /\.multiagent-town-trash/);
   assert.match(css, /\.workspace-world-options\s*\{[^}]*grid-template-columns:\s*repeat\(3/s);
   assert.match(css, /#workbench-rail\s*\{/);
   assert.match(css, /#workspace-explorer\s*\{/);

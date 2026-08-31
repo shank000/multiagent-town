@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import { formatWithOptions } from 'node:util';
@@ -179,7 +180,12 @@ export class BackendRuntimeLog {
 
 export function runtimeLogPathForDatabase(databasePath: string): string {
   if (databasePath === ':memory:') {
-    return join(process.cwd(), 'data', 'runs', `town-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.runtime.jsonl`);
+    return join(
+      process.cwd(),
+      'data',
+      'runs',
+      `town-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}-${randomUUID().slice(0, 8)}.runtime.jsonl`,
+    );
   }
   const extension = extname(databasePath);
   const stem = basename(databasePath, extension);

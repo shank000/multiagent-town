@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -208,7 +208,7 @@ test('重置 API 以相同实验配置创建暂停的新运行并保留文件研
   const gateway = new LLMGateway({ provider: 'mock', expectedActiveAgents: 12 });
   const workspace = await ExperimentWorkspaceRuntime.create({
     name: '关系记忆稳健性', seed: 20260831, worldSpeed: 0.3, defaultExperimentDays: 60,
-    worldKinds: ['mem-on', 'mem-off'], startPaused: true,
+    worldKinds: ['mem-on', 'mem-off'], startPaused: false,
   }, { gateway, runtimeLog, nextDatabasePath: () => nextBase }, initialBase);
   const first = workspace.current;
   const primary = first.worlds[0];
@@ -219,6 +219,7 @@ test('重置 API 以相同实验配置创建暂停的新运行并保留文件研
   });
   const base = `http://127.0.0.1:${server.port}`;
   try {
+    primary.experiment?.start(3, primary.time.state.totalMinutes);
     const before = (await (await fetch(`${base}/api/workspace`)).json()) as {
       workspace: { id: string; name: string; seed: number; worldSpeed: number; defaultExperimentDays: number; worldKinds: string[] };
     };
@@ -257,6 +258,96 @@ test('重置 API 以相同实验配置创建暂停的新运行并保留文件研
     assert.ok(existsSync(join(directory, 'reset-next-w1.sqlite')));
     assert.ok(existsSync(join(directory, 'reset-next-w2.sqlite')));
     assert.equal(runtimeLog.filePath, runtimeLogPathForDatabase(nextBase));
+    const state = await (await fetch(`${base}/api/state?worldId=w1`)).json() as {
+      paused: boolean; clock: { day: number; minutesOfDay: number; totalMinutes: number };
+    };
+    assert.equal(state.paused, true);
+    assert.deepEqual(state.clock, { day: 1, minutesOfDay: 0, totalMinutes: 0 });
+  } finally {
+    await server.close();
+    await workspace.dispose();
+    await gateway.drain();
+    runtimeLog.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('删除 API 要求名称与导出二次确认，并将文件研究数据迁入本地回收区', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'town-workspace-delete-'));
+  const initialBase = join(directory, 'delete-initial.sqlite');
+  const nextBase = join(directory, 'delete-next.sqlite');
+  const initialLogPath = runtimeLogPathForDatabase(initialBase);
+  const runtimeLog = new BackendRuntimeLog(initialLogPath, { captureConsole: false });
+  const gateway = new LLMGateway({ provider: 'mock', expectedActiveAgents: 12 });
+  const workspace = await ExperimentWorkspaceRuntime.create({
+    name: '待删除的关系实验', seed: 91, worldSpeed: 0.2, defaultExperimentDays: 45,
+    worldKinds: ['mem-on', 'mem-off'], startPaused: false,
+  }, { gateway, runtimeLog, nextDatabasePath: () => nextBase }, initialBase);
+  const first = workspace.current;
+  const primary = first.worlds[0];
+  const server = await createTownServer({
+    world: primary.world, time: primary.time, loop: primary.loop, log: primary.log, mind: primary.mind,
+    player: primary.player, experiment: primary.experiment ?? undefined, worlds: first.worlds, workspace,
+    llm: gateway, runtimeLog, port: 0,
+  });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    primary.experiment?.start(5, primary.time.state.totalMinutes);
+    const wrongName = await fetch(`${base}/api/workspace`, {
+      method: 'DELETE', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: first.meta.id, confirmationName: '待删除实验', exportAcknowledged: true,
+      }),
+    });
+    assert.equal(wrongName.status, 400);
+    assert.equal(workspace.current.meta.id, first.meta.id);
+    const missingAcknowledgement = await fetch(`${base}/api/workspace`, {
+      method: 'DELETE', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: first.meta.id, confirmationName: first.meta.name, exportAcknowledged: false,
+      }),
+    });
+    assert.equal(missingAcknowledgement.status, 400);
+    assert.equal(workspace.current.meta.id, first.meta.id);
+
+    const response = await fetch(`${base}/api/workspace`, {
+      method: 'DELETE', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: first.meta.id, confirmationName: first.meta.name, exportAcknowledged: true,
+      }),
+    });
+    assert.equal(response.status, 201, await response.clone().text());
+    const deleted = await response.json() as {
+      workspace: { id: string; name: string; startPaused: boolean; worldIds: string[] };
+      archive: {
+        deletedWorkspaceId: string;
+        deletedWorkspaceName: string;
+        archiveDirectory: string;
+        manifestPath: string;
+        recoverable: boolean;
+        archivedFiles: Array<{ originalPath: string; archivedPath: string }>;
+        failedFiles: unknown[];
+      };
+    };
+    assert.notEqual(deleted.workspace.id, first.meta.id);
+    assert.equal(deleted.workspace.name, '未命名实验');
+    assert.equal(deleted.workspace.startPaused, true);
+    assert.deepEqual(deleted.workspace.worldIds, ['w1']);
+    assert.equal(deleted.archive.deletedWorkspaceId, first.meta.id);
+    assert.equal(deleted.archive.deletedWorkspaceName, first.meta.name);
+    assert.equal(deleted.archive.recoverable, true);
+    assert.deepEqual(deleted.archive.failedFiles, []);
+    assert.ok(existsSync(deleted.archive.archiveDirectory));
+    assert.ok(existsSync(deleted.archive.manifestPath));
+    assert.ok(deleted.archive.archivedFiles.some((file) => file.originalPath === initialLogPath));
+    assert.ok(deleted.archive.archivedFiles.every((file) => existsSync(file.archivedPath)));
+    assert.equal(existsSync(join(directory, 'delete-initial-w1.sqlite')), false);
+    assert.equal(existsSync(join(directory, 'delete-initial-w2.sqlite')), false);
+    const manifest = JSON.parse(readFileSync(deleted.archive.manifestPath, 'utf8')) as {
+      schemaVersion: number; workspace: { id: string };
+    };
+    assert.equal(manifest.schemaVersion, 1);
+    assert.equal(manifest.workspace.id, first.meta.id);
     const state = await (await fetch(`${base}/api/state?worldId=w1`)).json() as {
       paused: boolean; clock: { day: number; minutesOfDay: number; totalMinutes: number };
     };

@@ -1,6 +1,6 @@
 # 项目交接手册（multiagent-town → 涌现观测台）
 
-> 本文档供接手 agent 完整理解项目现状与后续任务。状态日期：2026-08-31；当前提交以 `git rev-parse HEAD` 为准，验收基线为 `pnpm typecheck`、339 项 `node:test`、前端构建与 AgentSociety² SDK 冒烟。
+> 本文档供接手 agent 完整理解项目现状与后续任务。状态日期：2026-08-31；当前提交以 `git rev-parse HEAD` 为准，验收基线为 `pnpm typecheck`、401 项 `node:test`、前端构建与 AgentSociety² SDK 冒烟。
 
 ## 一、项目是什么
 
@@ -37,7 +37,7 @@ src/web/client camera(相机) · console(社会关系/选择网络/指标曲线/
                effects(粒子) · hud/panel(气泡/结构化心智与会话卡) · main(三视窗编排)
                render/tiles/sprites(程序化场景、四向步态、坐卧/睡眠/对话姿态)
 src/cli/       town-web · experiment(2×2 CLI) · town-agent(协议) · run/replay/interview
-tests/         node:test 399 项（验收、单元、server、UI、会话、关系、反思、实验合同与 runtime）
+tests/         node:test 401 项（验收、单元、server、UI、会话、关系、反思、实验合同与 runtime）
 public/        index.html(小镇/结构/检查器三视窗) · style.css(深色仪器风) · assets/(许可素材)
 skills/town-agent/SKILL.md   外部 AI 接入文档
 docs/          交接/研究文档（见下）
@@ -45,14 +45,14 @@ docs/          交接/研究文档（见下）
 
 ## 四、实验工作空间与平行世界（当前主形态）
 
-`workspace.ts` 从名称、种子、速度、默认实验天数、居民档案和世界模板创建一个独立工作空间。默认只加载 `w1`；研究者可在左侧实验资源管理器进入工作空间配置编辑器，通过单世界观察、双组对照、三世界并行预设或逐项勾选任意选择 1–3 个模板，也可使用 `--worlds` 参数。资源树只列出实际加载的世界，并可直接切换当前观察世界。只有已选世界才创建数据库、引擎、日志订阅和模型任务；多世界共享调度器并同步时钟。创建与重置均要求世界暂停、正式实验停止、会话/决策/推理队列结算；重置以当前 workspaceId 为乐观锁，使用相同配置建立第 1 天 00:00 的暂停运行。文件数据库与日志作为独立研究档案保留，`:memory:` 运行在确认界面明确提示导出边界。
+`workspace.ts` 从名称、种子、速度、默认实验天数、居民档案和世界模板创建一个独立工作空间。默认只加载 `w1`；研究者可在左侧实验资源管理器进入工作空间配置编辑器，通过单世界观察、双组对照、三世界并行预设或逐项勾选任意选择 1–3 个模板，也可使用 `--worlds` 参数。资源树只列出实际加载的世界，并可直接切换当前观察世界。只有已选世界才创建数据库、引擎、日志订阅和模型任务；多世界共享调度器并同步时钟。重启与删除会在二次确认后自动暂停时钟、停止正式实验并结算会话/决策/推理队列。重启以当前 workspaceId 为乐观锁，使用相同配置建立第 1 天 00:00 的暂停运行并保留研究档案。删除同时校验 workspaceId、完整实验名称和导出确认；文件数据库与日志迁入同目录 `.multiagent-town-trash/` 并写入 `workspace-deletion.json` 恢复清单，随后打开单世界暂停的“未命名实验”。`:memory:` 运行在确认界面明确提示不可恢复的状态边界。
 
 `world-factory.ts` 提供三个彼此独立的世界模板：
 - `w1` mem-on：伙伴选择可访问历史（亲密度+近因打分）+ 馈礼交换；**关闭邻近闲聊**，隔离实验变量
 - `w2` mem-off：随机选择、无馈礼（零模型对照）
 - `w3` rumor：注入秘密（`seedRumor`），观察传播链（保留社交邻近闲聊）
 
-服务端：`GET/POST /api/workspace`（读取/创建工作空间）、`POST /api/workspace/reset`（同配置安全重置）、`/api/worlds`（已加载列表+active）、`/api/world/switch`；所有 `/api/state|narrative|experiment/*|guest/*|world/control` 作用于**当前活跃世界**；SSE 事件带 `worldId`（客户端 `activeWorldId` 过滤）。
+服务端：`GET/POST/DELETE /api/workspace`（读取/创建/可恢复删除工作空间）、`POST /api/workspace/reset`（同配置安全重启）、`/api/worlds`（已加载列表+active）、`/api/world/switch`；所有 `/api/state|narrative|experiment/*|guest/*|world/control` 作用于**当前活跃世界**；SSE 事件带 `worldId`（客户端 `activeWorldId` 过滤）。
 客户端：三视窗同时呈现小镇、关系结构与人物/世界检查器；世界切换重拉叙事、关系与指标，视窗均可独立聚焦。
 
 ## 五、实验机制（核心）
