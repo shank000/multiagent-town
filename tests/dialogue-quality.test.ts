@@ -59,11 +59,80 @@ test('无证据的第三方居民和作品名不能进入正式台词', () => {
 test('保守回答按问题类型回应且不引入新事实', () => {
   assert.match(conservativeDialogueReply('最近在读什么书？'), /没有.*阅读记录/);
   assert.match(conservativeDialogueReply('收信人是谁？'), /不能确认.*谁/);
-  assert.match(conservativeDialogueReply('你怎么看这件事？'), /判断/);
+  assert.match(conservativeDialogueReply('你怎么看这件事？'), /看法|判断/);
   assert.equal(
     conservativeDialogueReply('今天送信遇到了什么？', ['送信时发现一封信写着旧地址。']),
-    '我能确认的是：送信时发现一封信写着旧地址。',
+    '我记得，送信时发现一封信写着旧地址。',
   );
+});
+
+test('精确承接阅读问题，不引用人设或证据标签', () => {
+  const reply = conservativeDialogueReply(
+    '最近在读什么书？',
+    ['人物背景：沈屿是自由画家，平时喜欢速写。', '记忆记录：最近没有在读书，主要精力都放在画展作品。'],
+    { priorTurns: ['最近在读什么书？'] },
+  );
+  assert.equal(reply, '最近没在读书，我把精力放在画展作品上。');
+  assert.doesNotMatch(reply, /人物背景|记忆记录|你刚才提到|围绕我们的话题/);
+  assert.doesNotMatch(reply, /《[^》]+》/);
+});
+
+test('连续保底轮次保持确定性但不重复同一句', () => {
+  const prompt = '最近在读什么书？';
+  const first = conservativeDialogueReply(prompt, [], { priorTurns: [prompt] });
+  const second = conservativeDialogueReply(prompt, [], { priorTurns: [prompt, first] });
+  const repeat = conservativeDialogueReply(prompt, [], { priorTurns: [prompt, first] });
+  assert.notEqual(first, second);
+  assert.equal(second, repeat);
+  assert.match(first, /最近|读/);
+  assert.match(second, /最近|读/);
+});
+
+test('相关现场事实与传闻被自然保留，研究侧来源语法不进入台词', () => {
+  const verified = '活动现场（已核验）：沈屿、陈默在「湖边」实际到场参加「湖边派对」。';
+  const activityReply = conservativeDialogueReply('我们参加过湖边派对吗？', [verified]);
+  assert.match(activityReply, /^参加过，我们/);
+  assert.match(activityReply, /湖边派对/);
+  assert.doesNotMatch(activityReply, /活动现场|已核验|[「」]|memory|evidence/i);
+  assert.equal(assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们参加过湖边派对吗？',
+    priorTurns: ['我们参加过湖边派对吗？'],
+    evidence: [verified],
+    utterance: activityReply,
+  }).ok, true);
+
+  const rumor = '周岚准备下周离开邮局。';
+  const rumorReply = conservativeDialogueReply('周岚最近要离开邮局吗？', ['当前实际位置：小镇广场。', rumor], {
+    rumorEvidence: [rumor],
+  });
+  assert.match(rumorReply, /^我听说/);
+  assert.match(rumorReply, /周岚.*离开邮局/);
+  assert.doesNotMatch(rumorReply, /当前实际位置|系统|ID/);
+});
+
+test('功能、预告和他人经历不会被保底回答升级成自己的已完成事实', () => {
+  const prompt = '我们参加过湖边派对吗？';
+  const capabilityOnly = conservativeDialogueReply(prompt, [
+    '小镇功能「湖边服务点」：参加湖边派对（功能存在不代表事件已经发生）',
+  ], { speakerName: '沈屿', otherName: '陈默' });
+  assert.doesNotMatch(capabilityOnly, /参加过|确实参加|已经参加/);
+
+  const planned = conservativeDialogueReply(prompt, [
+    '活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。',
+  ], { speakerName: '沈屿', otherName: '陈默' });
+  assert.match(planned, /还没有参加|还没发生/);
+  assert.doesNotMatch(planned, /活动预告|尚未发生|[「」]/);
+
+  const otherPeople = conservativeDialogueReply(prompt, [
+    '活动现场（已核验）：周岚、老周在「湖边」实际到场参加「湖边派对」。',
+  ], { speakerName: '沈屿', otherName: '陈默' });
+  assert.doesNotMatch(otherPeople, /^参加过|我们确实|我们在/);
+
+  const otherGift = conservativeDialogueReply('你给我送过花吗？', [
+    '花店订单（已履约）：周岚购买一束鲜花并交给老周。',
+  ], { speakerName: '沈屿', otherName: '陈默' });
+  assert.doesNotMatch(otherGift, /^送过|已经送到|交到对方/);
 });
 
 test('问题可通过已知证据桥接到不复述问题词面的直接答案', () => {

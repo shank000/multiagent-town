@@ -368,6 +368,8 @@ export class DialogueEngine {
             .slice(0, 8)
             .map((item) => item.content)
           : this.store.recentMemories(speaker.id, 8).map((item) => item.content);
+        const relationshipHistory = relationship?.knowledge ?? [];
+        const worldFacts = world ? dialogueWorldFacts(world, speaker) : [];
         const ctx = {
           speakerName: speaker.name,
           speakerPool: speaker.persona.greetingPool ?? [],
@@ -380,9 +382,9 @@ export class DialogueEngine {
           speakerPersona: speaker.persona,
           otherPersona: other.persona,
           locationId: speaker.locationId,
-          relationshipHistory: relationship?.knowledge.slice(-3) ?? [],
+          relationshipHistory: relationshipHistory.slice(-3),
           speakerMemories,
-          worldFacts: world ? dialogueWorldFacts(world, speaker) : [],
+          worldFacts,
           conversationId: s.conversationId,
           participants: [s.a, s.b] as [string, string],
           history: s.turns.map((turn, turnIndex) => {
@@ -392,9 +394,11 @@ export class DialogueEngine {
           }),
         };
         const baseMessages = dialogueMessages(ctx);
+        const conversationalEvidence = [
+          ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), ...worldFacts,
+        ];
         const qualityEvidence = [
-          ...speakerMemories, ...(relationship?.knowledge ?? []), ...carried.map((item) => item.content),
-          speaker.persona.background,
+          ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), speaker.persona.background,
         ];
         let rejectedReasons: string[] = [];
         for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -436,7 +440,12 @@ export class DialogueEngine {
           rejectedReasons = assessment.reasons;
         }
         entry.resolved = {
-          utterance: conservativeDialogueReply(latestPrompt, qualityEvidence),
+          utterance: conservativeDialogueReply(latestPrompt, conversationalEvidence, {
+            priorTurns: s.turns.map((turn) => turn.content),
+            rumorEvidence: carried.map((item) => item.content),
+            speakerName: speaker.name,
+            otherName: other.name,
+          }),
           end: s.turns.length + 1 >= Math.min(this.maxRounds, 4),
           quality: { status: 'safe_fallback', attempts: 2, rejectedReasons, validator: 'dialogue-turn/v1' },
         };

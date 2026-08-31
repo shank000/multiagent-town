@@ -28,6 +28,56 @@ function setup() {
   return { db, log, store, world, dialogue, a, b };
 }
 
+test('两次模型台词不合格后，问题相关的自然保底回答才会进入正式会话', async () => {
+  let dialogueCalls = 0;
+  const provider: LLMProvider = {
+    name: 'invalid-then-fallback',
+    async complete(request): Promise<LLMResponse> {
+      assert.equal(request.template, DIALOGUE_TEMPLATE);
+      dialogueCalls += 1;
+      const parsed = dialogueCalls === 1
+        ? { utterance: '最近在读什么书？', end_dialogue: false }
+        : { utterance: '我认真想了想。你刚才提到「最近在读什么书？」。围绕我们的话题，我在画一张速写。', end_dialogue: false };
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const a = makeAgent({ id: 'agent:chen', name: '陈默', persona: persona({ name: '陈默' }) });
+  const b = makeAgent({ id: 'agent:shen', name: '沈屿', persona: persona({ name: '沈屿' }) });
+  const world = new WorldState(OBJS, [a, b]);
+  const dialogue = new DialogueEngine(new LLMGateway({ provider, retries: 0 }), store, log);
+  store.addMemory({
+    agentId: b.id,
+    kind: 'observation',
+    content: '记忆记录：最近没有在读书，主要精力都放在画展作品。',
+    importance: 7,
+    createdGameTime: 9,
+  });
+  try {
+    assert.equal(dialogue.start(a, b, 10), true);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 12);
+    dialogue.tick(world, 2, 14);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 16);
+
+    const messages = store.messagesFor(a.id, 10)
+      .sort((left, right) => (left.turnIndex ?? 0) - (right.turnIndex ?? 0));
+    assert.equal(dialogueCalls, 3);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[0].content, '最近在读什么书？');
+    assert.equal(messages[1].content, '最近没在读书，我把精力放在画展作品上。');
+    assert.doesNotMatch(messages[1].content, /记忆记录|你刚才提到|围绕我们的话题|我认真想了想/);
+    const fallbackEvent = log.eventsForDay(1).find((event) => event.payload?.line === messages[1].content);
+    assert.equal((fallbackEvent?.payload?.quality as { status?: string } | undefined)?.status, 'safe_fallback');
+  } finally {
+    await dialogue.drain();
+    db.raw.close();
+  }
+});
+
 test('多轮对话：交替 4 句后结束并摘要双写', async () => {
   const { log, world, dialogue, a, b } = setup();
   dialogue.start(a, b, 10);

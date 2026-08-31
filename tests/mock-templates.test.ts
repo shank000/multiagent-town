@@ -75,8 +75,8 @@ test('dialogue 与 summary：轮换台词、4 句后结束', async () => {
     }),
   });
   const responseLine = (response.parsed as { utterance: string }).utterance;
-  assert.match(responseLine, /你今天在咖啡馆忙吗/);
-  assert.match(responseLine, /咖啡很香/);
+  assert.match(responseLine, /今天.*忙/);
+  assert.doesNotMatch(responseLine, /你刚才提到|围绕我们的话题|我认真想了想/);
   const followUp = await g.complete({
     tier: 'large', template: DIALOGUE_TEMPLATE, jsonMode: true, maxTokens: 256,
     messages: dialogueMessages({
@@ -89,9 +89,19 @@ test('dialogue 与 summary：轮换台词、4 句后结束', async () => {
     }),
   });
   const followUpLine = (followUp.parsed as { utterance: string }).utterance;
-  assert.match(followUpLine, /你刚才提到「咖啡很香/);
-  assert.match(followUpLine, /围绕我们的话题「你今天在咖啡馆忙吗/);
   assert.match(followUpLine, /常来坐坐/);
+  assert.doesNotMatch(followUpLine, /你刚才提到|围绕我们的话题|我认真想了想/);
+  const reading = await g.complete({
+    tier: 'large', template: DIALOGUE_TEMPLATE, jsonMode: true, maxTokens: 256,
+    messages: dialogueMessages({
+      ...ctx,
+      turns: 1,
+      history: [{ turnIndex: 0, speakerName: '陈默', listenerName: '林晚晴', content: '最近在读什么书？' }],
+    }),
+  });
+  const readingLine = (reading.parsed as { utterance: string }).utterance;
+  assert.match(readingLine, /最近.*读.*书/);
+  assert.doesNotMatch(readingLine, /你刚才提到|围绕我们的话题|我认真想了想|《[^》]+》/);
   const r3 = await g.complete({ tier: 'large', template: DIALOGUE_SUMMARY_TEMPLATE, jsonMode: true, maxTokens: 256, messages: dialogueSummaryMessages(['你好呀！', '咖啡很香。']) });
   assert.match((r3.parsed as { summary: string }).summary, /你好呀/);
 });

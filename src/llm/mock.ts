@@ -228,23 +228,30 @@ function dialogueTurn(ctx: Record<string, unknown>): { utterance: string; end_di
   const history = Array.isArray(ctx.history) ? ctx.history as { content?: unknown }[] : [];
   const last = history.at(-1)?.content;
   if (turns > 0 && typeof last === 'string' && last.trim()) {
-    const carriedTopic = last.match(/(?:关于你刚才说的|围绕我们的话题)「([^」]+)」/)?.[1];
-    const topic = (carriedTopic ?? last)
-      .replace(/[「」“”]/g, '')
-      .replace(/^(?:嗯|是呀|我明白|我想了想)[，,。！!\s]*/u, '')
-      .trim()
-      .slice(0, 18);
-    const topicTail = last.lastIndexOf('」，');
-    const immediate = (topicTail >= 0 ? last.slice(topicTail + 2) : last)
-      .replace(/[「」“”]/g, '')
-      .replace(/^(?:嗯|是呀|我明白|我想了想|我认真想了想|我听明白了)[，,。！!\s]*/u, '')
-      .trim()
-      .slice(0, 24);
-    const acknowledgement = /[？?]|吗|呢/u.test(immediate) ? '我认真想了想' : '我听明白了';
     return {
-      utterance: `${acknowledgement}。你刚才提到「${immediate || '这件事'}」。围绕我们的话题「${topic || '这件事'}」，${base}`.slice(0, 120),
+      utterance: deterministicDialogueResponse(last.trim(), base, turns).slice(0, 120),
       end_dialogue: turns >= 3,
     };
   }
   return { utterance: base, end_dialogue: turns >= 3 };
+}
+
+function deterministicDialogueResponse(prompt: string, base: string, turns: number): string {
+  if (/读.{0,4}(?:什么|哪本|书)|什么书/u.test(prompt)) {
+    return turns % 2 === 0 ? '最近没有特别在读哪本书，有合适的我再告诉你。' : '我最近没在读什么书，暂时不想随口编一个书名。';
+  }
+  if (/咖啡馆.{0,6}(?:忙|累)|(?:忙|累).{0,6}咖啡馆/u.test(prompt)) {
+    return turns % 2 === 0 ? '今天还算忙，不过现在能和你聊两句。' : '今天不算太忙，手头的事情还应付得来。';
+  }
+  if (/谁|哪位/u.test(prompt)) return '具体是谁我还不能确定，先不乱猜。';
+  if (/为什么|为何/u.test(prompt)) return '原因我还没有想清楚，暂时不能确定。';
+  if (/怎么看|如何看|你觉得/u.test(prompt)) return '我现在还没有形成明确看法。';
+  if (/[？?]|吗|呢/u.test(prompt)) return turns % 2 === 0 ? '这件事我现在还说不准。' : '我暂时没有把握回答。';
+  const acknowledgements = ['听起来确实如此。', '这件事我记住了。', '嗯，我明白你的意思。'];
+  const acknowledgement = acknowledgements[(turns - 1) % acknowledgements.length];
+  return normalizeMockLine(base) === normalizeMockLine(prompt) ? acknowledgement : `${acknowledgement}${base}`;
+}
+
+function normalizeMockLine(value: string): string {
+  return value.replace(/[\s\p{P}\p{S}]/gu, '').toLocaleLowerCase('zh-CN');
 }
