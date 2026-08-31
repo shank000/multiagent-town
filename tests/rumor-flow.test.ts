@@ -33,3 +33,20 @@ test('选择性披露：关系 ≥0.3 且带谣言时传播并失真', async () 
   assert.ok(carriers.includes('agent:b'), `乙应听到谣言：${carriers.join(',')}`);
   assert.ok(rumors.rows().some((r) => r.content.includes('宝藏') && r.carrierAgent === 'agent:b'));
 });
+
+test('同一源传闻不会回传给既有携带者，转述标记也不会逐跳叠加', () => {
+  const db = openDb(':memory:');
+  const rumors = new RumorTracker(db);
+  try {
+    const rootId = rumors.seed('agent:a', '湖边埋着宝藏', 100);
+    assert.equal(rumors.spread('agent:a', 'agent:b', rootId, '听说听说湖边埋着宝藏。', 110), true);
+    const received = rumors.rows().find((row) => row.carrierAgent === 'agent:b');
+    assert.ok(received);
+    assert.equal(received.content, '湖边埋着宝藏');
+    assert.equal(rumors.spread('agent:b', 'agent:a', received.id, '我听说，我听说，听说湖边埋着宝藏。', 120), false);
+    assert.deepEqual(rumors.carriersOf(rootId), ['agent:a', 'agent:b']);
+    assert.equal(rumors.rows().length, 2);
+  } finally {
+    db.raw.close();
+  }
+});

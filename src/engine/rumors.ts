@@ -32,9 +32,16 @@ export class RumorTracker {
     return id;
   }
 
-  spread(from: string, to: string, rumorId: string, distorted: string, now: number): void {
+  spread(from: string, to: string, rumorId: string, distorted: string, now: number): boolean {
     const prev = this.db.raw.prepare('SELECT * FROM rumors WHERE id = ?').get(rumorId) as unknown as RawRumor;
-    this.db.raw.prepare('INSERT INTO rumors(id, origin_agent, carrier_agent, content, hops, created_game_time, prev_rumor_id) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), prev.origin_agent, to, distorted, prev.hops + 1, now, rumorId);
+    if (!prev) return false;
+    const alreadyCarries = this.db.raw.prepare(
+      'SELECT 1 AS found FROM rumors WHERE origin_agent = ? AND carrier_agent = ? LIMIT 1',
+    ).get(prev.origin_agent, to) as { found: number } | undefined;
+    if (alreadyCarries) return false;
+    const content = normalizeRumorContent(distorted, prev.content);
+    this.db.raw.prepare('INSERT INTO rumors(id, origin_agent, carrier_agent, content, hops, created_game_time, prev_rumor_id) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), prev.origin_agent, to, content, prev.hops + 1, now, rumorId);
+    return true;
   }
 
   rows(): RumorRow[] {
@@ -65,4 +72,15 @@ export class RumorTracker {
     const rows = this.db.raw.prepare('SELECT * FROM rumors WHERE carrier_agent = ? AND hops = (SELECT MAX(hops) FROM rumors r2 WHERE r2.origin_agent = rumors.origin_agent AND r2.carrier_agent = ?)').all(agentId, agentId) as unknown as RawRumor[];
     return rows.map(toRow);
   }
+}
+
+function normalizeRumorContent(distorted: string, fallback: string): string {
+  let content = distorted.replace(/\s+/gu, ' ').trim();
+  for (let pass = 0; pass < 6; pass += 1) {
+    const next = content.replace(/^(?:我听说|我听到的消息是|听说)[，,:：\s]*/u, '').trim();
+    if (next === content) break;
+    content = next;
+  }
+  content = content.replace(/[。！？!?]+$/u, '').trim();
+  return (content || fallback.trim()).slice(0, 240);
 }

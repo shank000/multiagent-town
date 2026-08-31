@@ -9,7 +9,7 @@ import type { RelationshipStore } from '../store/relationships';
 
 export interface SocialConfig {
   minProximityMinutes?: number; // 相邻累计多少游戏分钟触发（默认 3）
-  cooldownMinutes?: number;     // 同一对完整会话后的冷却（默认 180）
+  cooldownMinutes?: number;     // 同一对完整会话后的冷却（默认 90）
   residentCooldownMinutes?: number; // 单个居民结束一次发起后多久可再次主动发起（默认 45）
   cueRetentionMinutes?: number; // 可用于开启话题的现场观察保留时长（默认 180）
   enabled?: () => boolean;      // 正式受控实验运行时可暂停自然接触，避免污染处理效应
@@ -47,7 +47,7 @@ export class SocialTicker {
       return;
     }
     const min = this.cfg.minProximityMinutes ?? 3;
-    const cooldown = this.cfg.cooldownMinutes ?? 180;
+    const cooldown = this.cfg.cooldownMinutes ?? 90;
     const residentCooldown = this.cfg.residentCooldownMinutes ?? 45;
     const cueRetention = this.cfg.cueRetentionMinutes ?? 180;
     this.cues = this.cues.filter((cue) => now - cue.gameTime <= cueRetention);

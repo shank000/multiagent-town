@@ -41,7 +41,7 @@ test('M3 验收：关系/活动/谣言/声望', async () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: '湖边埋着宝藏', sourceId: lin.id }),
     });
-    await loop.runUntil(2880); // 两天：第一天建立关系，第二天对话披露谣言
+    await loop.runUntil(5760); // 四天：先形成正向熟悉关系，再在后续自发会话中选择性披露
 
     // ① 关系：总 |affection| > 0.1 且逐对 ≤ 0.7（渐进由单次 ±0.2 夹紧保证，Task 1 单测；此处防两天内爆炸）
     const rels = mind.rels.allPairs();
@@ -58,6 +58,7 @@ test('M3 验收：关系/活动/谣言/声望', async () => {
     const seedRow = mind.rumors.rows().find((r) => r.hops === 0)!;
     const carriers = mind.rumors.carriersOf(seedRow.id);
     assert.ok(carriers.length >= 2, `谣言传播不足: ${carriers.join(',')}`);
+    assert.equal(new Set(carriers).size, carriers.length, '同一源传闻不应回传给已有携带者');
 
     // ④ 声望榜：6 项有限值
     const st = (await (await fetch(`${base}/api/status`)).json()) as { id: string; score: number }[];
