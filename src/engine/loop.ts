@@ -25,6 +25,7 @@ export class WorldLoop {
   private activeRealtimeStep: Promise<void> | null = null;
   private lastDay = 1;
   private checkpointWriter: (() => void) | null = null;
+  private coordinatedCheckpointing = false;
 
   constructor(
     public time: TimeEngine,
@@ -50,6 +51,14 @@ export class WorldLoop {
 
   setCheckpointWriter(writer: (() => void) | null): void {
     this.checkpointWriter = writer;
+  }
+
+  setCoordinatedCheckpointing(enabled: boolean): void {
+    this.coordinatedCheckpointing = enabled;
+  }
+
+  flushCheckpointRequest(): void {
+    this.checkpointWriter?.();
   }
 
   /** 推进一步（虚拟时钟下可连续调用）；默认 flush 一个宏任务让进行中的决策落定 */
@@ -81,7 +90,7 @@ export class WorldLoop {
       }
     }
     this.db.setMeta('game_time', String(clock.totalMinutes));
-    this.checkpointWriter?.();
+    if (!this.coordinatedCheckpointing) this.checkpointWriter?.();
     this.hooks.onTick?.(clock);
   }
 
@@ -139,7 +148,6 @@ export class WorldLoop {
       if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
     }
     this.mind?.tick(this.world, 0, now, true);
-    this.checkpointWriter?.();
     this.hooks.onTick?.(this.time.state);
   }
 
@@ -163,7 +171,6 @@ export class WorldLoop {
     for (const agent of this.world.allAgents()) {
       if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
     }
-    this.checkpointWriter?.();
     this.hooks.onTick?.(this.time.state);
   }
 }
@@ -183,15 +190,18 @@ export function startLoopGroup(loops: readonly WorldLoop[]): void {
   const existing = LOOP_GROUPS.get(unique[0]);
   if (existing) return;
   for (const loop of unique) loop.stop();
+  for (const loop of unique) loop.setCoordinatedCheckpointing(true);
   const state: LoopGroupState = {
     loops: unique,
     activeBatch: null,
     timer: setInterval(() => {
       if (state.activeBatch) return;
       const advance = !state.loops.some((loop) => loop.isCognitivelyBackpressured());
-      const task = Promise.allSettled(state.loops.map((loop) => loop.realtimeCycle(advance))).then(() => undefined);
+      const task = Promise.allSettled(state.loops.map((loop) => loop.realtimeCycle(advance))).then((results) => {
+        if (results.every((result) => result.status === 'fulfilled')) state.loops[0].flushCheckpointRequest();
+      });
       state.activeBatch = task;
-      void task.finally(() => {
+      void task.catch((error) => console.error('[loop-group]', error)).finally(() => {
         if (state.activeBatch === task) state.activeBatch = null;
       });
     }, 500),
@@ -207,7 +217,10 @@ export function stopLoopGroup(loops: readonly WorldLoop[]): void {
     return;
   }
   clearInterval(state.timer);
-  for (const loop of state.loops) LOOP_GROUPS.delete(loop);
+  for (const loop of state.loops) {
+    loop.setCoordinatedCheckpointing(false);
+    LOOP_GROUPS.delete(loop);
+  }
 }
 
 function systemEvent(gameTime: number, description: string): GameEvent {

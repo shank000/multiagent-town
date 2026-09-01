@@ -123,18 +123,19 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
       giftExchange: kind === 'mem-on' ? 'on' : 'off',
     }, { seed });
   }
-  if (options.runtimeCheckpoint) {
-    try {
-      restoreManagedWorldCheckpoint({ world, time, experiment }, options.runtimeCheckpoint);
-    } catch (error) {
-      socialSafeCloseDb(db);
-      throw error;
-    }
-  }
   // 浏览与自然主义观察阶段允许居民自发交谈；正式伙伴选择实验运行时暂停环境闲聊，保持处理边界洁净。
   const social = new SocialTicker(log, {
     enabled: () => !(experiment?.state().running ?? false),
   }, mind.dialogue, mind.rels);
+  if (options.runtimeCheckpoint) {
+    try {
+      restoreManagedWorldCheckpoint({ world, time, experiment, mind, social }, options.runtimeCheckpoint);
+    } catch (error) {
+      social.dispose();
+      socialSafeCloseDb(db);
+      throw error;
+    }
+  }
   if (experiment) {
     const loop = new WorldLoop(
       time, world, executor, log, db, {}, social, mind, experiment, gateway,

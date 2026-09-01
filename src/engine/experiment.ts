@@ -6,7 +6,7 @@ import type { Agent } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { EventLog } from '../store/events';
 import type { MindEngine } from './mind';
-import { Economy, ITEMS } from './economy';
+import { Economy, ITEMS, validateEconomyCheckpoint, type EconomyCheckpoint } from './economy';
 
 export interface PartnerExperimentConfig {
   /** 因子1：on = 按关系记忆（亲密度 + 最近互动时间）打分选伙伴；off = 均匀随机选 */
@@ -28,6 +28,7 @@ export interface PartnerChoiceExperimentCheckpoint {
   schemaVersion: 1;
   lastMinute: number;
   manualDecisionIndices: Array<{ agentId: string; index: number }>;
+  economy: EconomyCheckpoint;
 }
 
 export const RECENCY_WINDOW_MINUTES = 2400;
@@ -106,6 +107,7 @@ export class PartnerChoiceExperiment {
       manualDecisionIndices: [...this.manualDecisionIndex]
         .map(([agentId, index]) => ({ agentId, index }))
         .sort((a, b) => a.agentId.localeCompare(b.agentId)),
+      economy: this.economy.checkpoint(),
     };
   }
 
@@ -116,6 +118,7 @@ export class PartnerChoiceExperiment {
     this.manualDecisionIndex = new Map(
       checkpoint.manualDecisionIndices.map(({ agentId, index }) => [agentId, index]),
     );
+    this.economy.restore(checkpoint.economy, new Set(this.world.allAgents().map((agent) => agent.id)));
   }
 
   /** 当日一轮：先冻结全员候选状态并独立选择，再执行馈礼与一对一对话。 */
@@ -277,10 +280,12 @@ export function validatePartnerChoiceCheckpoint(
     ids.add(entry.agentId);
     return { agentId: entry.agentId, index: entry.index as number };
   });
+  const economy = validateEconomyCheckpoint(value.economy, new Set(world.allAgents().map((agent) => agent.id)));
   return {
     schemaVersion: 1,
     lastMinute: value.lastMinute as number,
     manualDecisionIndices,
+    economy,
   };
 }
 

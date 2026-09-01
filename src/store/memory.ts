@@ -416,6 +416,26 @@ export class MemoryStore {
     return Number(result.changes) > 0;
   }
 
+  /** 进程崩溃遗留会话没有可恢复的 LLM 上下文；在恢复激活前以单事务统一收口。 */
+  interruptActiveConversations(endedGameTime: number, reason: string): number {
+    if (!Number.isSafeInteger(endedGameTime) || endedGameTime < 0) throw new Error('会话恢复时间无效');
+    const errorText = reason.trim().slice(0, 240);
+    if (!errorText) throw new Error('会话恢复原因不能为空');
+    this.db.raw.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.db.raw.prepare(
+        `UPDATE conversations
+         SET status = 'interrupted', ended_game_time = ?, error_text = ?, updated_game_time = ?
+         WHERE status = 'active'`
+      ).run(endedGameTime, errorText, endedGameTime);
+      this.db.raw.exec('COMMIT');
+      return Number(result.changes);
+    } catch (error) {
+      try { this.db.raw.exec('ROLLBACK'); } catch { /* 原始恢复错误优先 */ }
+      throw error;
+    }
+  }
+
   addMessage(m: {
     id?: string; eventId?: string | null; conversationId?: string | null; turnIndex?: number | null;
     fromAgent: string; toAgent: string; content: string; gameTime: number;

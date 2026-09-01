@@ -13,6 +13,7 @@ export function personalityOf(p: Persona): Personality {
 }
 
 interface CatalogEvent {
+  id: 'lake-party' | 'book-club' | 'plaza-market';
   name: string;
   announcement: string;
   trait: keyof Personality;
@@ -32,6 +33,18 @@ interface PlannedEvent {
   stagedTiles: Map<string, Tile>;
 }
 
+export interface TownModelCheckpoint {
+  schemaVersion: 1;
+  lastNow: number;
+  plans: Array<{
+    day: number;
+    eventId: CatalogEvent['id'];
+    interestedIds: string[];
+    selectedIds: string[];
+    stagedTiles: Array<{ agentId: string; tile: Tile }>;
+  }>;
+}
+
 export interface TownModelOptions {
   /** 同一世界种子、日期、居民和活动得到相同出席排序；不消费伙伴选择 RNG。 */
   seed?: number | string;
@@ -43,17 +56,17 @@ const START_MINUTE = 1170;
 
 const CATALOG: readonly CatalogEvent[] = [
   {
-    name: '湖边派对', announcement: '计划今晚在湖边举办小型聚会；只有实际到场才算参加。',
+    id: 'lake-party', name: '湖边派对', announcement: '计划今晚在湖边举办小型聚会；只有实际到场才算参加。',
     trait: 'extraversion', venueId: 'obj:lake', attendanceRadius: 2, activityVerb: '参加湖边派对',
     sensoryCues: ['湖风与水声', '居民在湖边交谈的声音'], durationMinutes: 60, capacity: 3,
   },
   {
-    name: '书店读书会', announcement: '计划今晚在默语书店举行读书会；只有实际到场才算参加。',
+    id: 'book-club', name: '书店读书会', announcement: '计划今晚在默语书店举行读书会；只有实际到场才算参加。',
     trait: 'curiosity', venueId: 'obj:bookstore_counter', attendanceRadius: 2, activityVerb: '参加书店读书会',
     sensoryCues: ['翻动书页的声音', '书店木架与纸张的气味'], durationMinutes: 60, capacity: 3,
   },
   {
-    name: '广场集市', announcement: '计划今晚开放广场集市摊位；只有实际到场才算参加。',
+    id: 'plaza-market', name: '广场集市', announcement: '计划今晚开放广场集市摊位；只有实际到场才算参加。',
     trait: 'extraversion', venueId: 'obj:market_stall', attendanceRadius: 3, activityVerb: '参加广场集市',
     sensoryCues: ['篮筐与零钱碰撞声', '果蔬、面包和干草的气味'], durationMinutes: 60, capacity: 3,
   },
@@ -90,6 +103,37 @@ export class TownModel {
     }
     for (const day of this.plans.keys()) if (day < lastDay - 1) this.plans.delete(day);
     this.lastNow = now;
+  }
+
+  checkpoint(): TownModelCheckpoint {
+    return {
+      schemaVersion: 1,
+      lastNow: this.lastNow,
+      plans: [...this.plans.values()].sort((left, right) => left.day - right.day).map((plan) => ({
+        day: plan.day,
+        eventId: plan.event.id,
+        interestedIds: [...plan.interestedIds],
+        selectedIds: [...plan.selectedIds],
+        stagedTiles: [...plan.stagedTiles]
+          .map(([agentId, tile]) => ({ agentId, tile: { ...tile } }))
+          .sort((left, right) => left.agentId.localeCompare(right.agentId)),
+      })),
+    };
+  }
+
+  restore(input: unknown, world: WorldState, now: number): void {
+    const checkpoint = validateTownModelCheckpoint(input, world, now);
+    this.lastNow = now;
+    this.plans = new Map(checkpoint.plans.map((plan) => {
+      const event = CATALOG.find((candidate) => candidate.id === plan.eventId)!;
+      return [plan.day, {
+        day: plan.day,
+        event,
+        interestedIds: [...plan.interestedIds],
+        selectedIds: [...plan.selectedIds],
+        stagedTiles: new Map(plan.stagedTiles.map(({ agentId, tile }) => [agentId, { ...tile }])),
+      }];
+    }));
   }
 
   private plan(world: WorldState, day: number, now: number): void {
@@ -274,6 +318,63 @@ export class TownModel {
     ));
     return candidates.find((tile) => world.findPath({ x: agent.x, y: agent.y }, tile) !== null) ?? null;
   }
+}
+
+export function validateTownModelCheckpoint(input: unknown, world: WorldState, now: number): TownModelCheckpoint {
+  if (!Number.isSafeInteger(now) || now < 0) throw new Error('小镇活动恢复时刻无效');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('小镇活动检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.lastNow)
+      || (value.lastNow as number) < 0 || (value.lastNow as number) > now || !Array.isArray(value.plans)) {
+    throw new Error('小镇活动检查点版本或水位线无效');
+  }
+  const knownAgents = new Set(world.allAgents().map((agent) => agent.id));
+  const seenDays = new Set<number>();
+  const plans = value.plans.map((raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('小镇活动计划检查点无效');
+    const plan = raw as Record<string, unknown>;
+    if (!Number.isSafeInteger(plan.day) || (plan.day as number) < 1 || seenDays.has(plan.day as number)) {
+      throw new Error('小镇活动计划日期无效或重复');
+    }
+    const day = plan.day as number;
+    seenDays.add(day);
+    const expectedEvent = CATALOG[(day - 1) % CATALOG.length];
+    if (plan.eventId !== expectedEvent.id) throw new Error('小镇活动目录身份错配');
+    const interestedIds = validateAgentIdList(plan.interestedIds, knownAgents, '活动意向居民');
+    const selectedIds = validateAgentIdList(plan.selectedIds, knownAgents, '活动入选居民');
+    const interested = new Set(interestedIds);
+    if (selectedIds.length > expectedEvent.capacity || selectedIds.some((id) => !interested.has(id))) {
+      throw new Error('小镇活动入选居民超出目录容量或意向集合');
+    }
+    if (!Array.isArray(plan.stagedTiles)) throw new Error('小镇活动已安排位置无效');
+    const stagedIds = new Set<string>();
+    const selected = new Set(selectedIds);
+    const stagedTiles = plan.stagedTiles.map((rawTile) => {
+      if (!rawTile || typeof rawTile !== 'object' || Array.isArray(rawTile)) throw new Error('小镇活动已安排位置无效');
+      const entry = rawTile as Record<string, unknown>;
+      const tile = entry.tile as Record<string, unknown> | null;
+      if (typeof entry.agentId !== 'string' || !selected.has(entry.agentId) || stagedIds.has(entry.agentId)
+          || !tile || typeof tile !== 'object' || Array.isArray(tile)
+          || !Number.isSafeInteger(tile.x) || !Number.isSafeInteger(tile.y)
+          || !world.walkable(tile.x as number, tile.y as number)) {
+        throw new Error('小镇活动已安排居民或坐标无效');
+      }
+      stagedIds.add(entry.agentId);
+      return { agentId: entry.agentId, tile: { x: tile.x as number, y: tile.y as number } };
+    });
+    return { day, eventId: expectedEvent.id, interestedIds, selectedIds, stagedTiles };
+  });
+  return { schemaVersion: 1, lastNow: value.lastNow as number, plans };
+}
+
+function validateAgentIdList(input: unknown, knownAgents: ReadonlySet<string>, label: string): string[] {
+  if (!Array.isArray(input)) throw new Error(`${label}检查点无效`);
+  const seen = new Set<string>();
+  return input.map((id) => {
+    if (typeof id !== 'string' || !knownAgents.has(id) || seen.has(id)) throw new Error(`${label}包含未知或重复 ID`);
+    seen.add(id);
+    return id;
+  });
 }
 
 function distanceToObject(agent: Agent, object: WorldObject): number {

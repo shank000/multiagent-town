@@ -31,6 +31,8 @@ import {
   validateExperimentRunnerCheckpoint,
   type ExperimentRunnerCheckpoint,
 } from './experiment-runner';
+import { validateMindRuntimeCheckpoint, type MindRuntimeCheckpoint } from './mind';
+import { validateSocialTickerCheckpoint, type SocialTickerCheckpoint } from './social';
 import { buildTown, DEFAULT_SEED } from './seed';
 import type { ExperimentWorkspaceMeta } from './workspace';
 import type { ManagedWorld, WorldKind } from './world-factory';
@@ -72,6 +74,8 @@ export interface WorldRuntimeCheckpoint {
   agents: AgentRuntimeCheckpoint[];
   objects: ObjectRuntimeCheckpoint[];
   experiment: ExperimentRunnerCheckpoint | null;
+  mind: MindRuntimeCheckpoint;
+  social: SocialTickerCheckpoint;
 }
 
 export interface WorkspaceManifest {
@@ -112,6 +116,10 @@ export function workspaceConfigurationHash(meta: ExperimentWorkspaceMeta): strin
 /** 同一 set id 先事务写入全部世界，再原子替换清单；中途崩溃会在恢复预检中整体拒绝。 */
 export function saveWorkspaceCheckpoint(meta: ExperimentWorkspaceMeta, worlds: readonly ManagedWorld[]): void {
   if (meta.databaseBasePath === ':memory:') return;
+  const clockValues = worlds.map((managed) => managed.time.checkpoint().elapsedMinutes);
+  if (!clockValues.length || clockValues.some((value) => value !== clockValues[0])) {
+    throw new Error('平行世界精确时钟不一致，拒绝保存检查点');
+  }
   const currentProfileHashes = new Set(worlds.map((managed) => profileSetHash(managed.world)));
   if (currentProfileHashes.size !== 1) throw new Error('平行世界档案指纹不一致，拒绝保存检查点');
   meta.profileSetHash = [...currentProfileHashes][0];
@@ -205,7 +213,7 @@ export function readWorkspaceResumePlan(
 }
 
 export function restoreManagedWorldCheckpoint(
-  managed: Pick<ManagedWorld, 'world' | 'time' | 'experiment'>,
+  managed: Pick<ManagedWorld, 'world' | 'time' | 'experiment' | 'mind' | 'social'>,
   input: unknown,
 ): void {
   const checkpoint = input as WorldRuntimeCheckpoint;
@@ -233,6 +241,12 @@ export function restoreManagedWorldCheckpoint(
   if (managed.experiment && checkpoint.experiment) {
     managed.experiment.restore(checkpoint.experiment, managed.time.state.totalMinutes);
   }
+  managed.mind.restore(checkpoint.mind, managed.world, managed.time.state.totalMinutes);
+  managed.social.restore(
+    checkpoint.social,
+    new Set(managed.world.allAgents().map((agent) => agent.id)),
+    managed.time.state.totalMinutes,
+  );
 }
 
 function captureWorldCheckpoint(
@@ -260,6 +274,8 @@ function captureWorldCheckpoint(
       state: object.state ? { ...object.state } : null,
     })),
     experiment: managed.experiment?.checkpoint() ?? null,
+    mind: managed.mind.checkpoint(),
+    social: managed.social.checkpoint(),
   };
 }
 
@@ -427,9 +443,9 @@ function validateWorldCheckpoint(
   const clockEngine = new TimeEngine(expected.worldSpeed * 0.5);
   clockEngine.restore(value.clock);
   const clock = clockEngine.checkpoint();
-  const agents = validateAgents(value.agents, expected.template);
-  const objects = validateObjects(value.objects, expected.template);
   const now = Math.floor(clock.elapsedMinutes);
+  const agents = validateAgents(value.agents, expected.template, now);
+  const objects = validateObjects(value.objects, expected.template, now);
   let experiment: ExperimentRunnerCheckpoint | null = null;
   if (expected.kind === 'rumor') {
     if (value.experiment !== null) throw new Error('谣言世界不应包含伙伴实验检查点');
@@ -437,6 +453,12 @@ function validateWorldCheckpoint(
     experiment = validateExperimentRunnerCheckpoint(value.experiment);
     validatePartnerChoiceCheckpoint(experiment.partner, expected.template, now);
   }
+  const mind = validateMindRuntimeCheckpoint(value.mind, now, expected.template);
+  const social = validateSocialTickerCheckpoint(
+    value.social,
+    new Set(expected.template.allAgents().map((agent) => agent.id)),
+    now,
+  );
   return {
     schemaVersion: 1,
     checkpointSetId: expected.checkpointSetId,
@@ -452,23 +474,25 @@ function validateWorldCheckpoint(
     agents,
     objects,
     experiment,
+    mind,
+    social,
   };
 }
 
-function validateAgents(input: unknown, world: WorldState): AgentRuntimeCheckpoint[] {
+function validateAgents(input: unknown, world: WorldState, now: number): AgentRuntimeCheckpoint[] {
   const expectedIds = world.allAgents().map((agent) => agent.id).sort();
   if (!Array.isArray(input) || input.length !== 6 || input.length !== expectedIds.length) {
     throw new Error('运行检查点必须包含完整的 6 位居民');
   }
   const seen = new Set<string>();
-  const agents = input.map((item) => validateAgent(item, world, seen));
+  const agents = input.map((item) => validateAgent(item, world, seen, now));
   if (agents.map((agent) => agent.id).sort().some((id, index) => id !== expectedIds[index])) {
     throw new Error('运行检查点居民 ID 集合错配');
   }
   return agents;
 }
 
-function validateAgent(input: unknown, world: WorldState, seen: Set<string>): AgentRuntimeCheckpoint {
+function validateAgent(input: unknown, world: WorldState, seen: Set<string>, now: number): AgentRuntimeCheckpoint {
   const value = record(input, '居民运行检查点');
   const id = boundedString(value.id, '居民 ID', 1, 200);
   if (!world.hasAgent(id) || seen.has(id)) throw new Error(`居民检查点包含未知或重复 ID：${id}`);
@@ -485,9 +509,15 @@ function validateAgent(input: unknown, world: WorldState, seen: Set<string>): Ag
   const pathProgress = finiteNumber(value.pathProgress, `居民 ${id} 路径进度`, 0, GRID_W * GRID_H * 100);
   const action = validateDecision(value.action, world, id);
   if ((state === 'moving' || state === 'acting') && action === null) throw new Error(`居民 ${id} 活动态缺少动作`);
+  if (state === 'idle' && action !== null) throw new Error(`居民 ${id} idle 状态不能保留动作`);
   if (state === 'moving' && path.length === 0) throw new Error(`居民 ${id} 移动态缺少路径`);
+  if (state === 'moving') {
+    if (pathProgress >= path.length - 1) throw new Error(`居民 ${id} 移动态路径进度超出未完成路径`);
+    const currentTile = path[Math.floor(pathProgress)];
+    if (!currentTile || currentTile.x !== x || currentTile.y !== y) throw new Error(`居民 ${id} 移动态坐标与路径进度错配`);
+  }
   const actionEndsAt = finiteNumber(value.actionEndsAt, `居民 ${id} 动作结束时间`, 0, Number.MAX_SAFE_INTEGER);
-  const lastDecisionAt = finiteNumber(value.lastDecisionAt, `居民 ${id} 决策时间`, 0, Number.MAX_SAFE_INTEGER);
+  const lastDecisionAt = finiteNumber(value.lastDecisionAt, `居民 ${id} 决策时间`, 0, now);
   const thought = nullableBoundedString(value.thought, `居民 ${id} 思考`, 20_000);
   return {
     id, state, locationId, x, y, path, pathProgress, action, actionEndsAt, lastDecisionAt, thought,
@@ -532,11 +562,11 @@ function validateDecision(input: unknown, world: WorldState, agentId: string): D
       target,
       verb: boundedString(action.verb, `居民 ${agentId} 动作描述`, 1, 500),
     },
-    durationMinutes: finiteNumber(value.durationMinutes, `居民 ${agentId} 动作时长`, 1, 120),
+    durationMinutes: finiteNumber(value.durationMinutes, `居民 ${agentId} 动作时长`, 1, 1440),
   };
 }
 
-function validateObjects(input: unknown, world: WorldState): ObjectRuntimeCheckpoint[] {
+function validateObjects(input: unknown, world: WorldState, now: number): ObjectRuntimeCheckpoint[] {
   const expectedIds = world.allObjects().map((object) => object.id).sort();
   if (!Array.isArray(input) || input.length !== expectedIds.length) throw new Error('动态物件检查点数量错配');
   const seen = new Set<string>();
@@ -547,7 +577,7 @@ function validateObjects(input: unknown, world: WorldState): ObjectRuntimeCheckp
     seen.add(id);
     if (value.state === null) return { id, state: null };
     const state = record(value.state, `物件 ${id} 状态`);
-    const updatedGameTime = finiteNumber(state.updatedGameTime, `物件 ${id} 更新时间`, 0, Number.MAX_SAFE_INTEGER);
+    const updatedGameTime = finiteNumber(state.updatedGameTime, `物件 ${id} 更新时间`, 0, now);
     const expiresGameTime = finiteNumber(state.expiresGameTime, `物件 ${id} 过期时间`, updatedGameTime, Number.MAX_SAFE_INTEGER);
     return {
       id,

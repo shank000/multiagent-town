@@ -83,6 +83,8 @@ export interface WorkspaceDeletionArchive {
 /** 当前进程只挂载一个实验工作空间；替换时旧数据库完整封存，新世界使用全新文件。 */
 export class ExperimentWorkspaceRuntime {
   private currentValue: BuiltExperimentWorkspace;
+  private checkpointWriteCount = 0;
+  private lastAutomaticCheckpointMinutes: number | null = null;
 
   private constructor(
     initial: BuiltExperimentWorkspace,
@@ -90,6 +92,7 @@ export class ExperimentWorkspaceRuntime {
   ) {
     this.currentValue = initial;
     this.attachCheckpointWriters(initial);
+    this.lastAutomaticCheckpointMinutes = alignedClockMinutes(initial.worlds);
   }
 
   static async create(
@@ -133,9 +136,17 @@ export class ExperimentWorkspaceRuntime {
           gameMinutesPerTick: plan.meta.worldSpeed * 0.5,
           gateway: options.gateway,
           dbPath: worldDbPath(plan.meta.databaseBasePath, id),
-          profileOverrides,
+          profileOverrides: plan.profileOverrides,
           runtimeCheckpoint: plan.checkpoints.get(id),
         }));
+      }
+    } catch (error) {
+      closeUnactivatedWorlds(worlds);
+      throw error;
+    }
+    try {
+      for (const world of worlds) {
+        world.mind.store.interruptActiveConversations(world.time.state.totalMinutes, '进程恢复');
       }
     } catch (error) {
       closeUnactivatedWorlds(worlds);
@@ -164,6 +175,7 @@ export class ExperimentWorkspaceRuntime {
     this.detachCheckpointWriters(previous);
     this.options.runtimeLog?.switchFile(next.meta.runtimeLogPath, next.meta.id);
     this.currentValue = next;
+    this.lastAutomaticCheckpointMinutes = alignedClockMinutes(next.worlds);
     this.attachCheckpointWriters(next);
     this.options.runtimeLog?.info('workspace', workspaceSummary(next.meta, 'activated'));
     return next;
@@ -194,6 +206,7 @@ export class ExperimentWorkspaceRuntime {
     this.detachCheckpointWriters(previous);
     this.options.runtimeLog?.switchFile(next.meta.runtimeLogPath, next.meta.id);
     this.currentValue = next;
+    this.lastAutomaticCheckpointMinutes = alignedClockMinutes(next.worlds);
     this.attachCheckpointWriters(next);
     const archive = archiveWorkspaceArtifacts(previous.meta, archiveDirectory, next.meta.runtimeLogPath);
     this.options.runtimeLog?.info(
@@ -213,14 +226,27 @@ export class ExperimentWorkspaceRuntime {
     this.saveCheckpointNow();
   }
 
+  checkpointStats(): { writes: number; lastAutomaticGameMinutes: number | null } {
+    return { writes: this.checkpointWriteCount, lastAutomaticGameMinutes: this.lastAutomaticCheckpointMinutes };
+  }
+
   private saveCheckpointNow(): void {
     saveWorkspaceCheckpoint(this.currentValue.meta, this.currentValue.worlds);
+    this.checkpointWriteCount += 1;
+    this.lastAutomaticCheckpointMinutes = alignedClockMinutes(this.currentValue.worlds);
+  }
+
+  private saveCheckpointIfDue(): void {
+    const now = alignedClockMinutes(this.currentValue.worlds);
+    if (now === null) return;
+    if (this.lastAutomaticCheckpointMinutes !== null && now - this.lastAutomaticCheckpointMinutes < 5) return;
+    this.saveCheckpointNow();
   }
 
   private attachCheckpointWriters(built: BuiltExperimentWorkspace): void {
     for (const world of built.worlds) {
       world.loop.setCheckpointWriter(() => {
-        if (this.currentValue === built) this.saveCheckpointNow();
+        if (this.currentValue === built) this.saveCheckpointIfDue();
       });
     }
   }
@@ -228,6 +254,12 @@ export class ExperimentWorkspaceRuntime {
   private detachCheckpointWriters(built: BuiltExperimentWorkspace): void {
     for (const world of built.worlds) world.loop.setCheckpointWriter(null);
   }
+}
+
+function alignedClockMinutes(worlds: readonly ManagedWorld[]): number | null {
+  const values = worlds.map((world) => world.time.checkpoint().elapsedMinutes);
+  if (!values.length || values.some((value) => value !== values[0])) return null;
+  return values[0];
 }
 
 export function normalizeWorkspaceConfig(input: unknown): ExperimentWorkspaceConfig {
@@ -395,7 +427,7 @@ export async function disposeManagedWorlds(
 ): Promise<void> {
   if (!worlds.length) return;
   stopAllWorlds([...worlds]);
-  for (const world of worlds) world.social.dispose();
+  for (const world of worlds) world.social.dispose(!!beforeClose);
   await Promise.all(worlds.map((world) => world.loop.drain()));
   await Promise.all(worlds.map((world) => world.mind.dispose({
     gameTime: world.time.state.totalMinutes,

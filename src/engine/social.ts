@@ -15,6 +15,14 @@ export interface SocialConfig {
   enabled?: () => boolean;      // 正式受控实验运行时可暂停自然接触，避免污染处理效应
 }
 
+export interface SocialTickerCheckpoint {
+  schemaVersion: 1;
+  proximity: Array<[string, number]>;
+  nextAt: Array<[string, number]>;
+  residentNextAt: Array<[string, number]>;
+  cues: SocialCue[];
+}
+
 const GENERIC_GREETINGS = ['你好呀！', '今天天气真不错。', '最近忙什么呢？', '有阵子没见啦。'];
 
 export class SocialTicker {
@@ -33,11 +41,35 @@ export class SocialTicker {
     this.unsubscribe = this.log.subscribe((event) => this.observe(event));
   }
 
-  dispose(): void {
+  dispose(preserveCheckpointState = false): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    if (preserveCheckpointState) return;
     this.cues = [];
     this.proximity.clear();
+    this.nextAt.clear();
+    this.residentNextAt.clear();
+  }
+
+  checkpoint(): SocialTickerCheckpoint {
+    const ordered = (source: ReadonlyMap<string, number>): Array<[string, number]> => (
+      [...source].sort(([left], [right]) => left.localeCompare(right))
+    );
+    return {
+      schemaVersion: 1,
+      proximity: ordered(this.proximity),
+      nextAt: ordered(this.nextAt),
+      residentNextAt: ordered(this.residentNextAt),
+      cues: this.cues.map((cue) => ({ ...cue, observerIds: [...cue.observerIds] })),
+    };
+  }
+
+  restore(input: unknown, validAgentIds: ReadonlySet<string>, now: number): void {
+    const checkpoint = validateSocialTickerCheckpoint(input, validAgentIds, now);
+    this.proximity = new Map(checkpoint.proximity);
+    this.nextAt = new Map(checkpoint.nextAt);
+    this.residentNextAt = new Map(checkpoint.residentNextAt);
+    this.cues = checkpoint.cues.map((cue) => ({ ...cue, observerIds: [...cue.observerIds] }));
   }
 
   /** 每 tick 调用一次；dt = 本次推进的游戏分钟数 */
@@ -119,7 +151,8 @@ export class SocialTicker {
       eventId: event.id,
       gameTime: event.gameTime,
       actorId: event.actorId,
-      observerIds: [...new Set([...payloadObservers, ...memoryObservers, ...event.targetIds])],
+      // targetIds 也可能是柜台、长椅等物件；只有显式观察者字段才具有居民语义。
+      observerIds: [...new Set([...payloadObservers, ...memoryObservers])],
       description: event.description.slice(0, 180),
     });
     while (this.cues.length > 64) this.cues.shift();
@@ -133,12 +166,89 @@ export class SocialTicker {
   }
 }
 
-interface SocialCue {
+export interface SocialCue {
   eventId: string;
   gameTime: number;
   actorId: string | null;
   observerIds: string[];
   description: string;
+}
+
+export function validateSocialTickerCheckpoint(
+  input: unknown,
+  validAgentIds: ReadonlySet<string>,
+  now: number,
+): SocialTickerCheckpoint {
+  if (!Number.isSafeInteger(now) || now < 0) throw new Error('社交冷却恢复时刻无效');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('社交冷却检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== 1 || !Array.isArray(value.proximity) || !Array.isArray(value.nextAt)
+      || !Array.isArray(value.residentNextAt) || !Array.isArray(value.cues)) {
+    throw new Error('社交冷却检查点版本或结构无效');
+  }
+  const proximity = validatePairMap(value.proximity, validAgentIds, '相邻累计', 0, 10_000);
+  const nextAt = validatePairMap(value.nextAt, validAgentIds, '配对冷却', 0, Number.MAX_SAFE_INTEGER);
+  const residentNextAt = validateResidentMap(value.residentNextAt, validAgentIds);
+  const cueIds = new Set<string>();
+  const cues = value.cues.map((raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('社交线索检查点无效');
+    const cue = raw as Record<string, unknown>;
+    if (typeof cue.eventId !== 'string' || !cue.eventId || cue.eventId.length > 200 || cueIds.has(cue.eventId)
+        || !Number.isSafeInteger(cue.gameTime) || (cue.gameTime as number) < 0 || (cue.gameTime as number) > now
+        || (cue.actorId !== null && (typeof cue.actorId !== 'string' || !validAgentIds.has(cue.actorId)))
+        || !Array.isArray(cue.observerIds) || typeof cue.description !== 'string' || cue.description.length > 180) {
+      throw new Error('社交线索检查点引用未知居民或非法时间');
+    }
+    const observers = new Set<string>();
+    const observerIds = cue.observerIds.map((id) => {
+      if (typeof id !== 'string' || !validAgentIds.has(id) || observers.has(id)) throw new Error('社交线索观察者无效');
+      observers.add(id);
+      return id;
+    });
+    cueIds.add(cue.eventId);
+    return {
+      eventId: cue.eventId,
+      gameTime: cue.gameTime as number,
+      actorId: cue.actorId as string | null,
+      observerIds,
+      description: cue.description,
+    };
+  });
+  return { schemaVersion: 1, proximity, nextAt, residentNextAt, cues };
+}
+
+function validatePairMap(
+  input: unknown[],
+  validAgentIds: ReadonlySet<string>,
+  label: string,
+  min: number,
+  max: number,
+): Array<[string, number]> {
+  const seen = new Set<string>();
+  return input.map((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string'
+        || seen.has(entry[0]) || typeof entry[1] !== 'number' || !Number.isFinite(entry[1])
+        || entry[1] < min || entry[1] > max) throw new Error(`社交${label}检查点无效`);
+    const ids = entry[0].split('|');
+    if (ids.length !== 2 || ids[0] >= ids[1] || !validAgentIds.has(ids[0]) || !validAgentIds.has(ids[1])) {
+      throw new Error(`社交${label}检查点包含未知配对`);
+    }
+    seen.add(entry[0]);
+    return [entry[0], entry[1]] as [string, number];
+  });
+}
+
+function validateResidentMap(input: unknown[], validAgentIds: ReadonlySet<string>): Array<[string, number]> {
+  const seen = new Set<string>();
+  return input.map((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string'
+        || !validAgentIds.has(entry[0]) || seen.has(entry[0])
+        || !Number.isSafeInteger(entry[1]) || entry[1] < 0) {
+      throw new Error('社交居民冷却检查点无效');
+    }
+    seen.add(entry[0]);
+    return [entry[0], entry[1]] as [string, number];
+  });
 }
 
 function pairKey(idA: string, idB: string): string {

@@ -7,6 +7,12 @@ export const ITEMS: Record<string, ItemDef> = {
   coffee: { name: '咖啡', cost: 3, affectionDelta: 0.05 },
 };
 
+export interface EconomyCheckpoint {
+  schemaVersion: 1;
+  money: Array<[string, number]>;
+  items: Array<[string, Record<string, number>]>;
+}
+
 const DAILY_WAGE = 10; // 每日工作收入
 
 export class Economy {
@@ -49,4 +55,56 @@ export class Economy {
   inventoryOf(agentId: string): Record<string, number> {
     return { ...(this.items.get(agentId) ?? {}) };
   }
+
+  checkpoint(): EconomyCheckpoint {
+    return {
+      schemaVersion: 1,
+      money: [...this.money].map(([agentId, balance]) => [agentId, balance] as [string, number])
+        .sort(([left], [right]) => left.localeCompare(right)),
+      items: [...this.items].map(([agentId, inventory]) => [agentId, { ...inventory }] as [string, Record<string, number>])
+        .sort(([left], [right]) => left.localeCompare(right)),
+    };
+  }
+
+  restore(input: unknown, validAgentIds: ReadonlySet<string>): void {
+    const checkpoint = validateEconomyCheckpoint(input, validAgentIds);
+    this.money = new Map(checkpoint.money);
+    this.items = new Map(checkpoint.items.map(([agentId, inventory]) => [agentId, { ...inventory }]));
+  }
+}
+
+export function validateEconomyCheckpoint(input: unknown, validAgentIds: ReadonlySet<string>): EconomyCheckpoint {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('经济检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== 1 || !Array.isArray(value.money) || !Array.isArray(value.items)) {
+    throw new Error('经济检查点版本或结构无效');
+  }
+  const moneyIds = new Set<string>();
+  const money = value.money.map((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string'
+        || !validAgentIds.has(entry[0]) || moneyIds.has(entry[0])
+        || !Number.isSafeInteger(entry[1]) || entry[1] < 0) {
+      throw new Error('经济检查点包含未知居民、重复余额或非法金额');
+    }
+    moneyIds.add(entry[0]);
+    return [entry[0], entry[1]] as [string, number];
+  });
+  const itemIds = new Set<string>();
+  const items = value.items.map((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string'
+        || !validAgentIds.has(entry[0]) || itemIds.has(entry[0])
+        || !entry[1] || typeof entry[1] !== 'object' || Array.isArray(entry[1])) {
+      throw new Error('经济检查点包含未知居民、重复库存或非法库存');
+    }
+    itemIds.add(entry[0]);
+    const inventory: Record<string, number> = {};
+    for (const [itemKey, rawCount] of Object.entries(entry[1] as Record<string, unknown>)) {
+      if (!Object.hasOwn(ITEMS, itemKey) || !Number.isSafeInteger(rawCount) || (rawCount as number) < 0) {
+        throw new Error('经济检查点包含未知物品或非法库存数量');
+      }
+      inventory[itemKey] = rawCount as number;
+    }
+    return [entry[0], inventory] as [string, Record<string, number>];
+  });
+  return { schemaVersion: 1, money, items };
 }

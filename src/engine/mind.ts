@@ -13,8 +13,8 @@ import { MemoryWriter } from './memory-writer';
 import { ReflectionEngine } from './reflection';
 import { DialogueEngine } from './dialogue';
 import { RumorTracker } from './rumors';
-import { TownModel } from './town-model';
-import { TownLifeEngine } from './town-life';
+import { TownModel, validateTownModelCheckpoint, type TownModelCheckpoint } from './town-model';
+import { TownLifeEngine, validateTownLifeCheckpoint, type TownLifeCheckpoint } from './town-life';
 
 export interface MindEngineOptions {
   db: DbHandle;
@@ -27,6 +27,16 @@ export interface MindEngineOptions {
 export interface MindDisposeOptions {
   gameTime?: number;
   reason?: string;
+}
+
+export interface MindRuntimeCheckpoint {
+  schemaVersion: 1;
+  lastGameTime: number;
+  lastDailyPlanBoundary: number | null;
+  lastHourPlanBoundary: number | null;
+  lastDailyReflectionBoundary: number | null;
+  townModel: TownModelCheckpoint;
+  townLife: TownLifeCheckpoint;
 }
 
 export class MindEngine {
@@ -42,6 +52,7 @@ export class MindEngine {
   private pendingDaily = new Set<Promise<void>>();
   private lastDailyPlanBoundary = Number.NEGATIVE_INFINITY;
   private lastHourPlanBoundary = Number.NEGATIVE_INFINITY;
+  private lastDailyReflectionBoundary = Number.NEGATIVE_INFINITY;
   private lastGameTime = 0;
   private disposePromise: Promise<void> | null = null;
 
@@ -69,6 +80,8 @@ export class MindEngine {
       boundary <= now;
       boundary += MINUTES_PER_DAY
     ) {
+      if (boundary <= this.lastDailyReflectionBoundary) continue;
+      this.lastDailyReflectionBoundary = boundary;
       const completedDay = boundary / MINUTES_PER_DAY;
       for (const agent of world.allAgents()) this.scheduleDailyReflection(agent, completedDay, boundary - 1);
     }
@@ -111,6 +124,28 @@ export class MindEngine {
     this.townModel.tick(world, dt, now);
   }
 
+  checkpoint(): MindRuntimeCheckpoint {
+    return {
+      schemaVersion: 1,
+      lastGameTime: this.lastGameTime,
+      lastDailyPlanBoundary: finiteBoundaryOrNull(this.lastDailyPlanBoundary),
+      lastHourPlanBoundary: finiteBoundaryOrNull(this.lastHourPlanBoundary),
+      lastDailyReflectionBoundary: finiteBoundaryOrNull(this.lastDailyReflectionBoundary),
+      townModel: this.townModel.checkpoint(),
+      townLife: this.townLife.checkpoint(),
+    };
+  }
+
+  restore(input: unknown, world: WorldState, now: number): void {
+    const checkpoint = validateMindRuntimeCheckpoint(input, now, world);
+    this.lastGameTime = now;
+    this.lastDailyPlanBoundary = checkpoint.lastDailyPlanBoundary ?? Number.NEGATIVE_INFINITY;
+    this.lastHourPlanBoundary = checkpoint.lastHourPlanBoundary ?? Number.NEGATIVE_INFINITY;
+    this.lastDailyReflectionBoundary = checkpoint.lastDailyReflectionBoundary ?? Number.NEGATIVE_INFINITY;
+    this.townModel.restore(checkpoint.townModel, world, now);
+    this.townLife.restore(checkpoint.townLife, world, now);
+  }
+
   private scheduleDailyReflection(agent: Agent, day: number, now: number): void {
     let task: Promise<void>;
     task = this.writer.flush()
@@ -148,6 +183,53 @@ export class MindEngine {
     })();
     return this.disposePromise;
   }
+}
+
+export function validateMindRuntimeCheckpoint(input: unknown, now: number, world?: WorldState): MindRuntimeCheckpoint {
+  if (!Number.isSafeInteger(now) || now < 0) throw new Error('认知运行态恢复时刻无效');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('认知运行态检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.lastGameTime)
+      || (value.lastGameTime as number) < 0 || (value.lastGameTime as number) > now) {
+    throw new Error('认知运行态检查点版本或 lastGameTime 无效');
+  }
+  const lastDailyPlanBoundary = validateBoundary(value.lastDailyPlanBoundary, now, (boundary) => boundary % MINUTES_PER_DAY === 300, '每日规划');
+  const lastHourPlanBoundary = validateBoundary(value.lastHourPlanBoundary, now, (boundary) => boundary % 60 === 0, '整点规划');
+  const lastDailyReflectionBoundary = validateBoundary(
+    value.lastDailyReflectionBoundary, now, (boundary) => boundary > 0 && boundary % MINUTES_PER_DAY === 0, '日反思',
+  );
+  const townModel = world
+    ? validateTownModelCheckpoint(value.townModel, world, now)
+    : value.townModel as TownModelCheckpoint;
+  const townLife = world
+    ? validateTownLifeCheckpoint(value.townLife, world, now)
+    : value.townLife as TownLifeCheckpoint;
+  return {
+    schemaVersion: 1,
+    lastGameTime: value.lastGameTime as number,
+    lastDailyPlanBoundary,
+    lastHourPlanBoundary,
+    lastDailyReflectionBoundary,
+    townModel,
+    townLife,
+  };
+}
+
+function validateBoundary(
+  input: unknown,
+  now: number,
+  predicate: (boundary: number) => boolean,
+  label: string,
+): number | null {
+  if (input === null) return null;
+  if (!Number.isSafeInteger(input) || (input as number) < 0 || (input as number) > now || !predicate(input as number)) {
+    throw new Error(`认知运行态${label}水位线无效`);
+  }
+  return input as number;
+}
+
+function finiteBoundaryOrNull(value: number): number | null {
+  return Number.isFinite(value) ? value : null;
 }
 
 function nextDailyBoundary(previousTotal: number, minuteOfDay: number): number {

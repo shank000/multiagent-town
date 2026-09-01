@@ -92,13 +92,25 @@ export const TOWN_LIFE_SLOTS: readonly (readonly TownLifeEventDefinition[])[] = 
   ],
 ] as const;
 
+export interface TownLifeCheckpoint {
+  schemaVersion: 1;
+  lastNow: number;
+  fired: string[];
+}
+
 export class TownLifeEngine {
   private fired = new Set<string>();
+  private lastNow = 0;
 
   constructor(private log: EventLog) {}
 
   tick(world: WorldState, dt: number, now: number): void {
-    const previous = now - Math.max(1, dt);
+    if (now < this.lastNow) {
+      this.fired.clear();
+      this.lastNow = now;
+      return;
+    }
+    const previous = Math.max(this.lastNow, now - Math.max(1, dt));
     const firstDay = Math.max(1, Math.floor(Math.max(0, previous) / MINUTES_PER_DAY) + 1);
     const lastDay = Math.floor(now / MINUTES_PER_DAY) + 1;
     for (let day = firstDay; day <= lastDay; day++) {
@@ -117,6 +129,17 @@ export class TownLifeEngine {
       const oldestDayToKeep = Math.max(1, lastDay - 7);
       this.fired = new Set([...this.fired].filter((key) => Number(key.split(':', 1)[0]) >= oldestDayToKeep));
     }
+    this.lastNow = now;
+  }
+
+  checkpoint(): TownLifeCheckpoint {
+    return { schemaVersion: 1, lastNow: this.lastNow, fired: [...this.fired].sort() };
+  }
+
+  restore(input: unknown, world: WorldState, now: number): void {
+    const checkpoint = validateTownLifeCheckpoint(input, world, now);
+    this.lastNow = now;
+    this.fired = new Set(checkpoint.fired);
   }
 
   private fire(world: WorldState, definition: TownLifeEventDefinition, day: number, now: number): void {
@@ -163,4 +186,33 @@ export class TownLifeEngine {
       if (object.state && object.state.expiresGameTime <= now) object.state = undefined;
     }
   }
+}
+
+export function validateTownLifeCheckpoint(input: unknown, world: WorldState, now: number): TownLifeCheckpoint {
+  if (!Number.isSafeInteger(now) || now < 0) throw new Error('小镇生活恢复时刻无效');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('小镇生活检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.lastNow)
+      || (value.lastNow as number) < 0 || (value.lastNow as number) > now || !Array.isArray(value.fired)) {
+    throw new Error('小镇生活检查点版本或水位线无效');
+  }
+  const seen = new Set<string>();
+  const fired = value.fired.map((rawKey) => {
+    if (typeof rawKey !== 'string' || seen.has(rawKey)) throw new Error('小镇生活检查点 fired key 无效');
+    const match = /^(\d+):([a-z0-9-]+)$/.exec(rawKey);
+    if (!match) throw new Error('小镇生活检查点 fired key 无效');
+    const day = Number(match[1]);
+    const definition = TOWN_LIFE_SLOTS.flat().find((item) => item.id === match[2]);
+    if (!Number.isSafeInteger(day) || day < 1 || !definition || !world.hasObject(definition.objectId)) {
+      throw new Error('小镇生活检查点引用未知目录项或物件');
+    }
+    const expected = TOWN_LIFE_SLOTS.some((variants, slotIndex) => (
+      variants[(day - 1 + slotIndex) % variants.length].id === definition.id
+    ));
+    const boundary = (day - 1) * MINUTES_PER_DAY + definition.minuteOfDay;
+    if (!expected || boundary > now) throw new Error('小镇生活检查点目录身份或触发边界无效');
+    seen.add(rawKey);
+    return rawKey;
+  });
+  return { schemaVersion: 1, lastNow: value.lastNow as number, fired };
 }
