@@ -270,6 +270,25 @@ test('保守回答按问题类型回应且不引入新事实', () => {
   );
 });
 
+test('无馈礼履约证据时，单项送花问题的保底回答明确表达花事不确定', () => {
+  const prompt = '你给我送过花吗？';
+  const reply = conservativeDialogueReply(prompt, [], {
+    priorTurns: [prompt],
+    speakerName: '沈屿',
+    otherName: '陈默',
+  });
+  assert.match(reply, /花|花束/);
+  assert.match(reply, /记不清|想不起来|说不准|不确定/);
+  const assessed = assessDialogueTurn({
+    ...base,
+    latestPrompt: prompt,
+    priorTurns: [prompt],
+    evidence: [],
+    utterance: reply,
+  });
+  assert.equal(assessed.ok, true, assessed.reasons.join('；'));
+});
+
 test('首轮保底从真实观察发起话题，无观察时使用自然问候', () => {
   const grounded = conservativeDialogueReply('', [
     '第3天日记：我在内部总结关系。',
@@ -659,6 +678,77 @@ test('共享虚假前提语义要求否定未成行事件，并识别自然否�
   for (const utterance of ['我没送。', '你没收到。', '配送取消了。']) {
     assert.deepEqual(falsePremiseDenialReasons({ ...giftContext, utterance }), [], utterance);
   }
+});
+
+test('复合虚假前提必须逐项纠正活动与馈礼，不能只否定其中一项', () => {
+  const context = {
+    latestPrompt: '我们昨天一起参加了湖边派对，还互相送了鲜花，你记得吗？',
+    evidence: [
+      '「湖边派对」现场核验未达到两人：无人实际到场，活动取消。',
+      '活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。',
+    ],
+    speakerName: '沈屿',
+    otherName: '陈默',
+  };
+
+  const activityOnly = falsePremiseDenialReasons({
+    ...context,
+    utterance: '湖边派对那天我没去，后来听说取消了，你记得吗？',
+  });
+  assert.equal(activityOnly.length, 1);
+  assert.match(activityOnly[0] ?? '', /送花|收花|馈礼/);
+
+  for (const utterance of [
+    '没参加，派对后来取消了；鲜花我也没送过，更没收到。',
+    '派对没办成；送花这件事我也想不起来了。',
+    '我没去成派对，花束有没有互相送过，我现在也说不准。',
+  ]) {
+    assert.deepEqual(falsePremiseDenialReasons({ ...context, utterance }), [], utterance);
+  }
+
+  for (const utterance of [
+    '派对没办成，不过湖边的野花倒是开了。',
+    '派对没办成，鲜花开得很漂亮，我对派对也没印象。',
+  ]) {
+    const unrelatedFlowers = falsePremiseDenialReasons({ ...context, utterance });
+    assert.equal(unrelatedFlowers.length, 1, utterance);
+    assert.match(unrelatedFlowers[0] ?? '', /送花|收花|馈礼/, utterance);
+  }
+
+  const fulfilled = falsePremiseDenialReasons({
+    ...context,
+    evidence: [
+      ...context.evidence,
+      '花店订单（已履约）：沈屿与陈默互相赠送的鲜花均已配送并交给对方。',
+    ],
+    utterance: '湖边派对那天我没去，后来已经取消了。',
+  });
+  assert.deepEqual(fulfilled, []);
+});
+
+test('统一质量门拒绝只纠正活动的复合回答，完整自然保底回答通过', () => {
+  const context = {
+    ...base,
+    latestPrompt: '我们昨天一起参加了湖边派对，还互相送了鲜花，你记得吗？',
+    priorTurns: ['我们昨天一起参加了湖边派对，还互相送了鲜花，你记得吗？'],
+    evidence: [
+      '「湖边派对」现场核验未达到两人：无人实际到场，活动取消。',
+      '活动预告（尚未发生）：「湖边派对」计划今晚在湖边举办小型聚会。',
+    ],
+    answerEvidence: ['「湖边派对」现场核验未达到两人：无人实际到场，活动取消。'],
+  };
+  const incomplete = assessDialogueTurn({
+    ...context,
+    utterance: '湖边派对那天我没去，后来听说取消了，你记得吗？',
+  });
+  assert.equal(incomplete.ok, false);
+  assert.ok(incomplete.reasons.some((reason) => /送花|收花|馈礼/u.test(reason)));
+
+  const complete = assessDialogueTurn({
+    ...context,
+    utterance: '没参加，湖边派对后来取消了；送花这件事我也想不起来了。',
+  });
+  assert.equal(complete.ok, true, complete.reasons.join('；'));
 });
 
 test('未纠正被证据否定的共同经历会被统一质量门拒绝', () => {

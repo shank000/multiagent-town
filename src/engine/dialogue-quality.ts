@@ -335,6 +335,12 @@ function uncertainReplies(prompt: string): string[] {
   if (/读.{0,4}(?:什么|哪本|书)|什么书/u.test(prompt)) {
     return ['我一下想不起最近读过什么了。', '最近读的书名我记不清了，先不瞎说。', '这阵子读过什么，我一时真想不起来。'];
   }
+  if (/鲜花|花束|送花|收花|送过花|收到花/u.test(prompt)) {
+    if (/收到|收过|收花/u.test(prompt)) {
+      return ['有没有收到那束花，我记不清了。', '收花这件事我现在想不起来了。', '那束花我是否收到过，现在说不准。'];
+    }
+    return ['送花这件事我记不清了。', '我想不起来有没有送过那束花。', '那束花是否送过，我现在说不准。'];
+  }
   if (/谁|哪位/u.test(prompt)) return ['我想不起是谁了，别让我瞎猜。', '具体名字我记不清了。', '是哪一位，我现在说不准。'];
   if (/为什么|为何/u.test(prompt)) return ['原因我还没想明白。', '我现在也解释不了，还是别瞎猜了。', '为什么会这样，我一时说不上来。'];
   if (/怎么看|如何看|你觉得/u.test(prompt)) return ['我现在还没有形成明确看法。', '我的判断还不成熟，暂时说不准。', '我想再了解一些情况，眼下还不能下结论。'];
@@ -388,7 +394,7 @@ export function selectDialogueAnswerEvidence(prompt: string, evidence: readonly 
     if (!fact) return false;
     return evidenceRelevance(prompt, fact) >= 2
       || topicOverlapCount(prompt, fact) >= 2
-      || contradictedFalsePremises(prompt, [raw]).length > 0;
+      || falsePremiseObligations(prompt, [raw]).some((item) => item.basis === 'contradicted');
   });
 }
 
@@ -397,23 +403,38 @@ export function selectDialogueAnswerEvidence(prompt: string, evidence: readonly 
  * 回答必须明确否定该事件。运行时与真实居民验收都通过 assessDialogueTurn 复用它。
  */
 export function falsePremiseDenialReasons(
-  context: Pick<DialogueQualityContext, 'utterance' | 'latestPrompt' | 'evidence'>,
+  context: Pick<DialogueQualityContext, 'utterance' | 'latestPrompt' | 'evidence'>
+    & Partial<Pick<DialogueQualityContext, 'speakerName' | 'otherName'>>,
 ): string[] {
-  const contradictions = contradictedFalsePremises(context.latestPrompt, context.evidence);
-  return contradictions
-    .filter((contradiction) => !explicitlyDeniesContradiction(context.utterance, contradiction.kind))
-    .map((contradiction) => `没有明确否定被事实证据推翻的虚假前提「${contradiction.label}」`);
+  const obligations = falsePremiseObligations(
+    context.latestPrompt,
+    context.evidence,
+    context.speakerName,
+    context.otherName,
+  );
+  return obligations
+    .filter((obligation) => !correctsFalsePremise(context.utterance, obligation.kind))
+    .map((obligation) => obligation.basis === 'unsupported'
+      ? `没有纠正缺少履约证据的送花或收花前提「${obligation.label}」`
+      : `没有明确否定被事实证据推翻的虚假前提「${obligation.label}」`);
 }
 
 type FalsePremiseKind = 'activity' | 'gift';
+type FalsePremiseBasis = 'contradicted' | 'unsupported';
 
-interface FalsePremiseContradiction {
+interface FalsePremiseObligation {
   kind: FalsePremiseKind;
   label: string;
+  basis: FalsePremiseBasis;
 }
 
-function contradictedFalsePremises(prompt: string, evidence: readonly string[]): FalsePremiseContradiction[] {
-  const contradictions: FalsePremiseContradiction[] = [];
+function falsePremiseObligations(
+  prompt: string,
+  evidence: readonly string[],
+  speakerName?: string,
+  otherName?: string,
+): FalsePremiseObligation[] {
+  const obligations: FalsePremiseObligation[] = [];
   const activity = activityNameIn(prompt);
   const assertsCompletedActivity = !!activity
     && /我们|咱们|一起|共同|互相/u.test(prompt)
@@ -422,24 +443,54 @@ function contradictedFalsePremises(prompt: string, evidence: readonly string[]):
     activityNameIn(item) === activity
     && /取消|未举办|没有举办|没举办|没办|派对没办|没成行|未成行|尚未发生|无人实际到场|没有人到场|无人参加|未参加/u.test(item)
   ))) {
-    contradictions.push({ kind: 'activity', label: `${activity}未成行` });
+    obligations.push({ kind: 'activity', label: `${activity}未成行`, basis: 'contradicted' });
   }
 
   const assertsCompletedGift = /(?:送给|送了|送过|赠送|收到|收下|拿到).{0,12}(?:鲜花|花束|花)|(?:鲜花|花束).{0,10}(?:送了|送过|收到)/u.test(prompt);
-  if (assertsCompletedGift && evidence.some((item) => (
+  const giftFulfilled = assertsCompletedGift && fulfilledFlowerEvidence(evidence, speakerName, otherName);
+  if (assertsCompletedGift && !giftFulfilled) {
+    const explicitlyUnfulfilled = evidence.some((item) => (
     /鲜花|花束|送花|花店订单/u.test(item)
     && /未履约|没有履约|取消|未送达|没有送达|没送达|没送|未送|没收到|未收到/u.test(item)
-  ))) {
-    contradictions.push({ kind: 'gift', label: '送花或收花未履约' });
+    ));
+    obligations.push({
+      kind: 'gift',
+      label: explicitlyUnfulfilled ? '送花或收花未履约' : '送花或收花没有履约记录',
+      basis: explicitlyUnfulfilled ? 'contradicted' : 'unsupported',
+    });
   }
-  return contradictions;
+  return obligations;
 }
 
-function explicitlyDeniesContradiction(utterance: string, kind: FalsePremiseKind): boolean {
+function fulfilledFlowerEvidence(
+  evidence: readonly string[],
+  speakerName?: string,
+  otherName?: string,
+): boolean {
+  const requiredNames = [speakerName, otherName].filter((name): name is string => !!name);
+  return evidence.some((item) => (
+    /鲜花|花束|送花|花店订单/u.test(item)
+    && /花店订单（已履约）|(?:配送|送达).{0,24}(?:交给|收到)|(?:交给|赠送|送给|收到|收下).{0,12}(?:鲜花|花束|花)|(?:鲜花|花束).{0,12}(?:已送达|已经送达|交给|赠送|送给|收到)/u.test(item)
+    && requiredNames.every((name) => item.includes(name))
+  ));
+}
+
+function correctsFalsePremise(utterance: string, kind: FalsePremiseKind): boolean {
   if (kind === 'activity') {
-    return /没(?:有)?办(?:成)?(?:.{0,6}(?:派对|聚会|活动))?|(?:派对|聚会|活动).{0,6}没(?:有)?办|哪有(?:.{0,6}(?:派对|聚会|活动))?|没(?:有)?参加|未参加|不曾参加|从未参加|取消|没成行|未成行|没举行|未举行|没有人到场|无人到场|没去|没到场/u.test(utterance);
+    const explicitActivityDenial = /没(?:有)?办(?:成)?(?:.{0,6}(?:派对|聚会|活动))?|(?:派对|聚会|活动).{0,6}没(?:有)?办|哪有(?:.{0,6}(?:派对|聚会|活动))?|没(?:有)?参加|未参加|不曾参加|从未参加|没成行|未成行|没举行|未举行|没有人到场|无人到场|没去|没到场/u.test(utterance);
+    const giftOnlyCancellation = /配送.{0,6}取消|(?:鲜花|花束|送花).{0,8}取消/u.test(utterance);
+    return explicitActivityDenial || (!giftOnlyCancellation && /取消/u.test(utterance));
   }
-  return /没(?:有)?送|未送|没(?:有)?收到|未收到|取消|未履约|没有履约|没送达|未送达|没有送达/u.test(utterance);
+  if (
+    /没(?:有)?送(?:过)?(?=$|[，,。！？!?；\s]|鲜花|花束|花|给)|没(?:有)?收到(?:过)?(?=$|[，,。！？!?；\s]|鲜花|花束|花)|未送|未收到|没送达|未送达|没有送达/u.test(utterance)
+    || /(?:花店|花束|鲜花|送花|配送).{0,10}(?:未履约|没有履约|取消|没送达|未送达|没有送达)/u.test(utterance)
+  ) {
+    return true;
+  }
+  return /(?:送花|收花)(?:这件|那件)?事.{0,14}(?:想不起来|不记得|记不清|没印象|说不准|不确定|不清楚|不知道|不敢说)/u.test(utterance)
+    || /(?:鲜花|花束|那束花).{0,14}(?:送|收).{0,14}(?:想不起来|不记得|记不清|没印象|说不准|不确定|不清楚|不知道|不敢说)/u.test(utterance)
+    || /至于(?:鲜花|花束|送花|收花|花).{0,14}(?:想不起来|不记得|记不清|没印象|说不准|不确定|不清楚|不知道|不敢说)/u.test(utterance)
+    || /(?:想不起来|不记得|记不清|没印象|说不准|不确定|不清楚|不知道|不敢说).{0,14}(?:有没有|是否).{0,8}(?:送花|收花|送过|收到)/u.test(utterance);
 }
 
 function requiresAnswerEvidence(prompt: string, answerEvidence: readonly string[] | undefined): boolean {
@@ -454,8 +505,8 @@ function isExplicitFactualQuestion(prompt: string): boolean {
 }
 
 function coversAnswerEvidence(utterance: string, answerEvidence: readonly string[], prompt: string): boolean {
-  const contradictions = contradictedFalsePremises(prompt, answerEvidence);
-  if (contradictions.length && contradictions.every((item) => explicitlyDeniesContradiction(utterance, item.kind))) return true;
+  const obligations = falsePremiseObligations(prompt, answerEvidence);
+  if (obligations.length && obligations.every((item) => correctsFalsePremise(utterance, item.kind))) return true;
   const normalizedPrompt = normalizeAnswerSemantics(prompt);
   const normalizedUtterance = normalizeAnswerSemantics(utterance);
   const utteranceConcepts = answerConcepts(normalizedUtterance);
@@ -660,8 +711,8 @@ function claimParticipants(text: string, speakerName: string, otherName: string)
 }
 
 function directlyAddresses(prompt: string, utterance: string, evidence: readonly string[]): boolean {
-  const contradictions = contradictedFalsePremises(prompt, evidence);
-  if (contradictions.length && contradictions.every((item) => explicitlyDeniesContradiction(utterance, item.kind))) return true;
+  const obligations = falsePremiseObligations(prompt, evidence);
+  if (obligations.length && obligations.every((item) => correctsFalsePremise(utterance, item.kind))) return true;
   if (/^(?:是|不是|有|没有|没在|会|不会|能|不能|挺|还好|很好|不太|我(?:今天|也|会|不会|有|没有|没|想|认为|觉得|更|最|还)|因为)/.test(utterance.trim())) return true;
   const promptBigrams = meaningfulBigrams(prompt);
   if (promptBigrams.size === 0) return utterance.trim().length >= 4;
