@@ -40,6 +40,8 @@ export class MindEngine {
   readonly townLife: TownLifeEngine;
   private writer: MemoryWriter;
   private pendingDaily = new Set<Promise<void>>();
+  private lastDailyPlanBoundary = Number.NEGATIVE_INFINITY;
+  private lastHourPlanBoundary = Number.NEGATIVE_INFINITY;
   private lastGameTime = 0;
   private disposePromise: Promise<void> | null = null;
 
@@ -76,17 +78,27 @@ export class MindEngine {
     }
     const latestDailyBoundary = dailyPlanBoundaries.at(-1);
     if (latestDailyBoundary !== undefined) {
-      const planDay = Math.floor(latestDailyBoundary / MINUTES_PER_DAY) + 1;
-      for (const agent of world.allAgents()) {
-        void this.planner.scheduleDailyAndHour(agent, planDay, 5, now)
-          .catch((error) => console.error('[planner] daily', error));
+      if (latestDailyBoundary > this.lastDailyPlanBoundary) {
+        this.lastDailyPlanBoundary = latestDailyBoundary;
+        this.lastHourPlanBoundary = Math.max(this.lastHourPlanBoundary, latestDailyBoundary);
+        const planDay = Math.floor(latestDailyBoundary / MINUTES_PER_DAY) + 1;
+        for (const agent of world.allAgents()) {
+          void this.planner.scheduleDailyAndHour(agent, planDay, 5, now)
+            .catch((error) => console.error('[planner] daily', error));
+        }
       }
     } else {
       const previousHour = Math.floor(previousTotal / 60);
       const currentHour = Math.floor(now / 60);
       const hourOfDay = Math.floor(minute / 60);
       const stride = realtimeSampling ? (dt >= 30 ? 6 : dt >= 5 ? 3 : 1) : 1;
-      if (currentHour !== previousHour && hourOfDay % stride === 0) {
+      const hourBoundary = currentHour * 60;
+      if (
+        currentHour !== previousHour
+        && hourOfDay % stride === 0
+        && hourBoundary > this.lastHourPlanBoundary
+      ) {
+        this.lastHourPlanBoundary = hourBoundary;
         for (const agent of world.allAgents()) {
           void this.planner.scheduleHour(agent, day, hourOfDay, now)
             .catch((error) => console.error('[planner] hour', error));
