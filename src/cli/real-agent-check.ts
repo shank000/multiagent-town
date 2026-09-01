@@ -21,7 +21,6 @@ import { gatewayConfigFromEnv, providerNameFromEnv } from '../llm/provider-confi
 interface AgentScenario {
   question: string;
   dialogueFacts: string[];
-  dialogueRelevance: RegExp;
   personaSignal: RegExp;
   evidence: [string, string, string];
   evidenceSignal: RegExp;
@@ -46,7 +45,6 @@ const SCENARIOS: Readonly<Record<string, AgentScenario>> = {
   '林晚晴': {
     question: '今天第一位客人说手冲偏酸，你调整配方后最在意什么？',
     dialogueFacts: ['今天早上第一位客人说手冲偏酸，我据此调整了配方。'],
-    dialogueRelevance: /最在意|在意的是|第一位客人|手冲|偏酸|调整.{0,8}配方|咖啡.{0,20}(?:客人|暖)|客人.{0,12}暖|让人.{0,12}暖|味道|口感/,
     personaSignal: /手冲|咖啡|客人|配方|倾听/,
     evidence: ['早上为第一位客人调整了手冲配方。', '陈默中午来送了一本新书。', '打烊前发现两位陌生客人因咖啡聊成了朋友。'],
     evidenceSignal: /手冲|陈默|陌生客人|咖啡/,
@@ -54,7 +52,6 @@ const SCENARIOS: Readonly<Record<string, AgentScenario>> = {
   '陈默': {
     question: '最近在读什么书？你为什么喜欢它？',
     dialogueFacts: ['最近在读费孝通的《乡土中国》，喜欢其中对熟人社会的观察。'],
-    dialogueRelevance: /乡土中国|费孝通|熟人社会/,
     personaSignal: /书|读|乡土中国|熟人社会|观察/,
     evidence: ['早上整理书架时发现三本新书放错了分类。', '林晚晴借走了一本人物传记。', '傍晚有学生说他按黑板上的推荐找到了喜欢的书。'],
     evidenceSignal: /书架|林晚晴|学生|黑板/,
@@ -62,7 +59,6 @@ const SCENARIOS: Readonly<Record<string, AgentScenario>> = {
   '沈屿': {
     question: '你最近在读什么书？如果没有在读就直说没有；请先回答书名或没有，再说它是否让你想到画画。',
     dialogueFacts: ['最近没有在读书，主要精力都放在为画展补一幅雨天作品。'],
-    dialogueRelevance: /没.{0,5}读|没有.{0,5}书|最近没有/,
     personaSignal: /画|颜色|光|速写|画布|素描/,
     evidence: ['清晨在公园画架前重画了湖面的反光。', '午后在咖啡馆完成了一张林晚晴的侧影速写。', '回家后发现画展还缺一幅表现雨天的作品。'],
     evidenceSignal: /湖面|林晚晴|画展|雨天/,
@@ -70,7 +66,6 @@ const SCENARIOS: Readonly<Record<string, AgentScenario>> = {
   '周岚': {
     question: '今天送信路上遇到什么值得留意的事？',
     dialogueFacts: ['今天送信时发现一封信写着旧地址，后来在广场找到了收信人并核对姓名。'],
-    dialogueRelevance: /旧地址|广场.{0,12}收信人|核对.{0,6}姓名/,
     personaSignal: /信|送|地址|广场|收信人|姓名/,
     evidence: ['分拣时发现一封寄往旧地址的信。', '在广场找到了收信人并当面核对姓名。', '下午骑车经过花店时帮白露捎了一束花。'],
     evidenceSignal: /旧地址|收信人|白露|花店/,
@@ -78,7 +73,6 @@ const SCENARIOS: Readonly<Record<string, AgentScenario>> = {
   '白露': {
     question: '湖边那片野花现在怎么样了？',
     dialogueFacts: ['傍晚查看时，湖边新播的野花种子已经发芽，但还没有开花。'],
-    dialogueRelevance: /发芽|冒芽|还没.{0,4}开|没有.{0,4}开花/,
     personaSignal: /野花|种子|发芽|开花|湖边/,
     evidence: ['早上剪掉了一批受损的花枝。', '中午为周岚包了一束便于骑车携带的小花。', '傍晚去湖边看见新播的野花种子已经发芽。'],
     evidenceSignal: /花枝|周岚|野花种子|发芽/,
@@ -86,7 +80,6 @@ const SCENARIOS: Readonly<Record<string, AgentScenario>> = {
   '老周': {
     question: '你怎么看年轻人总是匆匆忙忙这件事？',
     dialogueFacts: ['傍晚在广场看见两个年轻人匆忙赶路。'],
-    dialogueRelevance: /年轻|忙|慢|急|日子|时间/,
     personaSignal: /鱼|湖|船|风|码头|慢工|年轻人/,
     evidence: ['清晨看风向后决定把船留在码头附近。', '中午修好了小船一块松动的木板。', '傍晚在广场给两个年轻人讲了湖上旧桥的故事。'],
     evidenceSignal: /风向|码头|木板|旧桥/,
@@ -206,6 +199,7 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
       latestPrompt: scenario.question,
       priorTurns: [scenario.question],
       evidence: assessmentEvidence,
+      answerEvidence: scenario.dialogueFacts,
       speakerName: agent.name,
       otherName: other.name,
       knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
@@ -220,18 +214,17 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
     latestPrompt: scenario.question,
     priorTurns: [scenario.question],
     evidence: assessmentEvidence,
+    answerEvidence: scenario.dialogueFacts,
     speakerName: agent.name,
     otherName: other.name,
     knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
   });
   const schemaOk = utterance.length > 0 && utterance.length <= 120 && (typeof endDialogue === 'boolean' || attempts > 2);
-  const relevant = scenario.dialogueRelevance.test(utterance);
   const personalized = scenario.personaSignal.test(utterance);
   const natural = !FORBIDDEN_FORMULAS.test(utterance) && utterance !== scenario.question;
-  const ok = schemaOk && relevant && personalized && natural && finalAssessment.ok;
+  const ok = schemaOk && personalized && natural && finalAssessment.ok;
   const failures = [
     schemaOk ? '' : '结构或长度非法',
-    relevant ? '' : '未直接回应问题',
     personalized ? '' : '人物信号不足',
     natural ? '' : '出现机械复述',
     finalAssessment.ok ? '' : finalAssessment.reasons.join('；'),
@@ -291,6 +284,7 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
       latestPrompt: prompt,
       priorTurns: [prompt],
       evidence: assessmentEvidence,
+      answerEvidence: evidence,
       speakerName: agent.name,
       otherName: other.name,
       knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
@@ -304,19 +298,18 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
     latestPrompt: prompt,
     priorTurns: [prompt],
     evidence: assessmentEvidence,
+    answerEvidence: evidence,
     speakerName: agent.name,
     otherName: other.name,
     knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
   });
-  const deniesFalsePremise = /取消|尚未发生|没有|根本没|不曾|不能确认|实际到场|没印象|哪有/u.test(utterance)
-    || /(?:不|没|未|无).{0,6}(?:记得|去|到|参加|参与|看到|见到|送|收到)/u.test(utterance);
   return {
     name: '世界事实',
-    ok: finalAssessment.ok && deniesFalsePremise,
+    ok: finalAssessment.ok,
     latencyMs: Math.round(performance.now() - started),
-    detail: finalAssessment.ok && deniesFalsePremise
+    detail: finalAssessment.ok
       ? `拒绝把预告、取消和馈礼意向写成已发生（${Math.min(attempts, 2)} 次生成）`
-      : [...finalAssessment.reasons, deniesFalsePremise ? '' : '没有否定虚假共同经历'].filter(Boolean).join('；'),
+      : finalAssessment.reasons.join('；'),
     sample: utterance,
   };
 }

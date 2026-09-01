@@ -78,6 +78,57 @@ test('两次模型台词不合格后，问题相关的自然保底回答才会�
   }
 });
 
+test('运行时把事实问题的相关记忆交给质量门，题外观察会重试并回退', async () => {
+  let dialogueCalls = 0;
+  const provider: LLMProvider = {
+    name: 'factual-answer-evidence',
+    async complete(request): Promise<LLMResponse> {
+      assert.equal(request.template, DIALOGUE_TEMPLATE);
+      dialogueCalls += 1;
+      const parsed = dialogueCalls === 1
+        ? { utterance: '今天送信路上遇到什么值得留意的事？', end_dialogue: false }
+        : { utterance: '我今天路过湖边时，留意到野花发芽了，不过还没有开花。', end_dialogue: false };
+      return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
+    },
+  };
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const store = new MemoryStore(db);
+  const asker = makeAgent({ id: 'agent:asker', name: '陈默', persona: persona({ name: '陈默' }) });
+  const courier = makeAgent({ id: 'agent:courier', name: '周岚', persona: persona({ name: '周岚' }) });
+  const world = new WorldState(OBJS, [asker, courier]);
+  const dialogue = new DialogueEngine(new LLMGateway({ provider, retries: 0 }), store, log);
+  store.addMemory({
+    agentId: courier.id,
+    kind: 'observation',
+    content: '今天送信时发现一封信写着旧地址，后来在广场找到了收信人并核对姓名。',
+    importance: 8,
+    createdGameTime: 9,
+  });
+  try {
+    assert.equal(dialogue.start(asker, courier, 10), true);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 12);
+    dialogue.tick(world, 2, 14);
+    await dialogue.drain();
+    dialogue.tick(world, 2, 16);
+
+    const messages = store.messagesFor(asker.id, 10)
+      .sort((left, right) => (left.turnIndex ?? 0) - (right.turnIndex ?? 0));
+    assert.equal(dialogueCalls, 3);
+    assert.equal(messages.length, 2);
+    assert.match(messages[1].content, /旧地址|旧住址/);
+    assert.doesNotMatch(messages[1].content, /野花|发芽|开花/);
+    const fallbackEvent = log.eventsForDay(1).find((event) => event.payload?.line === messages[1].content);
+    const quality = fallbackEvent?.payload?.quality as { status?: string; rejectedReasons?: string[] } | undefined;
+    assert.equal(quality?.status, 'safe_fallback');
+    assert.ok(quality?.rejectedReasons?.some((reason) => reason.includes('答案证据')));
+  } finally {
+    await dialogue.drain();
+    db.raw.close();
+  }
+});
+
 test('内部心智记录与审计事件不会在模型失败后成为居民台词', async () => {
   let dialogueCalls = 0;
   const provider: LLMProvider = {

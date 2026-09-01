@@ -3,6 +3,8 @@ export interface DialogueQualityContext {
   latestPrompt: string;
   priorTurns: readonly string[];
   evidence: readonly string[];
+  /** 与当前明确事实问题直接相关、回答应当覆盖的事实子集。 */
+  answerEvidence?: readonly string[];
   speakerName: string;
   otherName: string;
   knownResidentNames?: readonly string[];
@@ -16,6 +18,8 @@ export interface DialogueQualityAssessment {
 
 const FORMULA = /你刚才提到|围绕我们的话题|我认真想了想|我听明白了/;
 const QUESTION = /[？?]|(?:什么|怎么|为何|为什么|谁|哪(?:个|里|些)?|多少|是否|有没有|吗|呢)(?:[，。！？?]|$)/;
+const SUBJECTIVE_QUESTION = /怎么看|如何看|你觉得|你认为|你的看法|有什么看法|什么感受|感受如何|最在意|更在意|为什么喜欢/u;
+const FACTUAL_QUESTION = /(?:谁|哪(?:个|位|里|儿|些|本)?|多少|几(?:个|点|次|天)?|什么时候|何时|哪里|哪儿|有没有|是否|是不是|发生(?:了)?什么|遇到(?:了)?什么|做(?:了|过)?什么|读(?:的|过|了|在读)?什么|什么书|现在怎么样(?:了)?|后来怎么样(?:了)?|记得吗|对吧)/u;
 const EMPTY_OR_FILLER = /^(?:[嗯啊哦唔…\.，。！？!?\s]|不知道|没什么|随便)+$/;
 const GENERIC_ANSWER = /^(?:早上好|早啊|你好|嗨)[！!。\s]*(?:今天也要加油[！!。\s]*)?$/;
 const NON_CONVERSATIONAL_EVIDENCE = /^(?:人物设定|人物档案|人物背景|角色背景|背景|系统提示|系统消息|日记|计划|反思|洞察|实验记录|选择记录|事件记录|对话记录|会话记录|聊天记录|关系分析|关系报告|研究分析|小镇功能[^：:]*|现场物件[^：:]*|system|persona|prompt)[：:]/iu;
@@ -81,6 +85,10 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
   } else if (context.latestPrompt.trim() && !pragmaticallyContinues(context.latestPrompt, utterance, context.evidence)) {
     reasons.push('没有语用承接对方上一轮发言');
   }
+  if (requiresAnswerEvidence(context.latestPrompt, context.answerEvidence)
+    && !coversAnswerEvidence(utterance, context.answerEvidence ?? [], context.latestPrompt)) {
+    reasons.push('明确事实回答没有覆盖提供的答案证据');
+  }
   if (context.priorTurns.length >= 3 && !context.endDialogue && !advancesConversationArc(context.latestPrompt, utterance, context.evidence)) {
     reasons.push('会话后半段没有新增问题、事实、提议、回应或自然收束');
   }
@@ -127,6 +135,7 @@ export function assessDialogueTurn(context: DialogueQualityContext): DialogueQua
     reasons.push('替对方生成了发言');
   }
   reasons.push(...worldClaimReasons(context));
+  reasons.push(...falsePremiseDenialReasons(context));
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
@@ -368,7 +377,124 @@ function chooseFreshReply(replies: readonly string[], priorTurns: readonly strin
 }
 
 export function dialogueRepairInstruction(reasons: readonly string[]): string {
-  return `\n\n<QUALITY_REPAIR>上一版台词未通过入库检查：${reasons.join('；')}。请直接重写台词，只使用已提供事实，不增加具体人名、作品名、时间或事件；活动预告不能写成已经参加，馈礼意向不能写成已经送达；明确问题必须先回答。必须像居民当面说话，不得朗读日期编号、记录标签、证据依据，也不得用“双方”“情感升温”等研究总结口吻。</QUALITY_REPAIR>`;
+  return `\n\n<QUALITY_REPAIR>上一版台词未通过入库检查：${reasons.join('；')}。请直接重写台词，只使用已提供事实，不增加具体人名、作品名、时间或事件；活动预告不能写成已经参加，馈礼意向不能写成已经送达；明确事实问题必须用相关事实回答，被取消或未履约事实推翻的共同经历必须自然地明确否定。必须像居民当面说话，不得朗读日期编号、记录标签、证据依据，也不得用“双方”“情感升温”等研究总结口吻。</QUALITY_REPAIR>`;
+}
+
+/** 为运行时质量门筛出与明确事实问题直接相关的可回答证据。 */
+export function selectDialogueAnswerEvidence(prompt: string, evidence: readonly string[]): string[] {
+  if (!isExplicitFactualQuestion(prompt)) return [];
+  return evidence.filter((raw) => {
+    const fact = conversationalEvidence(raw);
+    if (!fact) return false;
+    return evidenceRelevance(prompt, fact) >= 2
+      || topicOverlapCount(prompt, fact) >= 2
+      || contradictedFalsePremises(prompt, [raw]).length > 0;
+  });
+}
+
+/**
+ * 共享的虚假前提语义：问题把共同事件说成已完成、证据却表明取消或未履约时，
+ * 回答必须明确否定该事件。运行时与真实居民验收都通过 assessDialogueTurn 复用它。
+ */
+export function falsePremiseDenialReasons(
+  context: Pick<DialogueQualityContext, 'utterance' | 'latestPrompt' | 'evidence'>,
+): string[] {
+  const contradictions = contradictedFalsePremises(context.latestPrompt, context.evidence);
+  return contradictions
+    .filter((contradiction) => !explicitlyDeniesContradiction(context.utterance, contradiction.kind))
+    .map((contradiction) => `没有明确否定被事实证据推翻的虚假前提「${contradiction.label}」`);
+}
+
+type FalsePremiseKind = 'activity' | 'gift';
+
+interface FalsePremiseContradiction {
+  kind: FalsePremiseKind;
+  label: string;
+}
+
+function contradictedFalsePremises(prompt: string, evidence: readonly string[]): FalsePremiseContradiction[] {
+  const contradictions: FalsePremiseContradiction[] = [];
+  const activity = activityNameIn(prompt);
+  const assertsCompletedActivity = !!activity
+    && /我们|咱们|一起|共同|互相/u.test(prompt)
+    && /参加(?:了|过)?|去(?:了|过)|到场(?:了|过)?|办(?:了|过)|举行(?:了|过)/u.test(prompt);
+  if (activity && assertsCompletedActivity && evidence.some((item) => (
+    activityNameIn(item) === activity
+    && /取消|未举办|没有举办|没举办|没办|派对没办|没成行|未成行|尚未发生|无人实际到场|没有人到场|无人参加|未参加/u.test(item)
+  ))) {
+    contradictions.push({ kind: 'activity', label: `${activity}未成行` });
+  }
+
+  const assertsCompletedGift = /(?:送给|送了|送过|赠送|收到|收下|拿到).{0,12}(?:鲜花|花束|花)|(?:鲜花|花束).{0,10}(?:送了|送过|收到)/u.test(prompt);
+  if (assertsCompletedGift && evidence.some((item) => (
+    /鲜花|花束|送花|花店订单/u.test(item)
+    && /未履约|没有履约|取消|未送达|没有送达|没送达|没送|未送|没收到|未收到/u.test(item)
+  ))) {
+    contradictions.push({ kind: 'gift', label: '送花或收花未履约' });
+  }
+  return contradictions;
+}
+
+function explicitlyDeniesContradiction(utterance: string, kind: FalsePremiseKind): boolean {
+  if (kind === 'activity') {
+    return /没(?:有)?办(?:成)?(?:.{0,6}(?:派对|聚会|活动))?|(?:派对|聚会|活动).{0,6}没(?:有)?办|哪有(?:.{0,6}(?:派对|聚会|活动))?|没(?:有)?参加|未参加|不曾参加|从未参加|取消|没成行|未成行|没举行|未举行|没有人到场|无人到场|没去|没到场/u.test(utterance);
+  }
+  return /没(?:有)?送|未送|没(?:有)?收到|未收到|取消|未履约|没有履约|没送达|未送达|没有送达/u.test(utterance);
+}
+
+function requiresAnswerEvidence(prompt: string, answerEvidence: readonly string[] | undefined): boolean {
+  return !!answerEvidence?.length && isExplicitFactualQuestion(prompt);
+}
+
+function isExplicitFactualQuestion(prompt: string): boolean {
+  if (!QUESTION.test(prompt)) return false;
+  if (FACTUAL_QUESTION.test(prompt)) return true;
+  return !SUBJECTIVE_QUESTION.test(prompt)
+    && /什么|怎么(?:样)?|谁|哪|多少|几|吗|呢|是否|有没有/u.test(prompt);
+}
+
+function coversAnswerEvidence(utterance: string, answerEvidence: readonly string[], prompt: string): boolean {
+  const contradictions = contradictedFalsePremises(prompt, answerEvidence);
+  if (contradictions.length && contradictions.every((item) => explicitlyDeniesContradiction(utterance, item.kind))) return true;
+  const normalizedUtterance = normalizeAnswerSemantics(utterance);
+  const utteranceConcepts = answerConcepts(normalizedUtterance);
+  return answerEvidence.some((raw) => {
+    const fact = conversationalEvidence(raw);
+    if (!fact) return false;
+    const normalizedFact = normalizeAnswerSemantics(fact);
+    const overlap = topicOverlapCount(normalizedFact, normalizedUtterance);
+    if (overlap >= 2) return true;
+    const factConcepts = answerConcepts(normalizedFact);
+    for (const concept of factConcepts) if (utteranceConcepts.has(concept)) return true;
+    return false;
+  });
+}
+
+function normalizeAnswerSemantics(text: string): string {
+  return text
+    .replace(/旧住址|原住址|原地址|以前的地址/gu, '旧地址')
+    .replace(/收件人|找到本人|找到对方/gu, '找到收信人')
+    .replace(/把?(?:名字|姓名)对(?:了)?一遍|确认(?:了)?(?:名字|姓名)|核实(?:了)?(?:名字|姓名)/gu, '核对姓名')
+    .replace(/名字/gu, '姓名')
+    .replace(/没(?:有)?办(?:成)?(?:派对|聚会|活动)?|(?:派对|聚会|活动)没(?:有)?办|没成行|未成行/gu, '活动取消')
+    .replace(/没有|尚未|未/gu, '没');
+}
+
+function answerConcepts(text: string): Set<string> {
+  const concepts = new Set<string>();
+  const patterns: readonly [string, RegExp][] = [
+    ['old-address', /旧地址/u],
+    ['recipient', /收信人/u],
+    ['verify-name', /核对姓名/u],
+    ['reading-none', /没.{0,6}(?:读书|阅读|在读|看书)|(?:读书|阅读).{0,4}没/u],
+    ['reading', /在读|读过|阅读|《[^》]+》/u],
+    ['sprouted', /发芽|冒芽/u],
+    ['not-bloomed', /没.{0,5}开花|还没开/u],
+    ['cancelled', /活动取消|取消/u],
+    ['gift-unfulfilled', /没.{0,5}(?:送|收到|送达)|未履约/u],
+  ];
+  for (const [concept, pattern] of patterns) if (pattern.test(text)) concepts.add(concept);
+  return concepts;
 }
 
 function worldClaimReasons(context: DialogueQualityContext): string[] {
@@ -504,10 +630,13 @@ function claimParticipants(text: string, speakerName: string, otherName: string)
 }
 
 function directlyAddresses(prompt: string, utterance: string, evidence: readonly string[]): boolean {
+  const contradictions = contradictedFalsePremises(prompt, evidence);
+  if (contradictions.length && contradictions.every((item) => explicitlyDeniesContradiction(utterance, item.kind))) return true;
   if (/^(?:是|不是|有|没有|没在|会|不会|能|不能|挺|还好|很好|不太|我(?:今天|也|会|不会|有|没有|没|想|认为|觉得|更|最|还)|因为)/.test(utterance.trim())) return true;
   const promptBigrams = meaningfulBigrams(prompt);
   if (promptBigrams.size === 0) return utterance.trim().length >= 4;
   if (setsOverlap(promptBigrams, meaningfulBigrams(utterance))) return true;
+  if (semanticBridge(prompt, utterance)) return true;
   for (const fact of evidence) {
     const factBigrams = meaningfulBigrams(fact);
     if (setsOverlap(promptBigrams, factBigrams) && setsOverlap(factBigrams, meaningfulBigrams(utterance))) return true;
@@ -570,6 +699,7 @@ function semanticBridge(prompt: string, utterance: string): boolean {
     [/读书|阅读|书|作品/u, /读|书|书店|推荐/u],
     [/画展|画画|速写|作品|构图/u, /画|展|颜色|光线|阴影|构图/u],
     [/咖啡|手冲|烘焙/u, /咖啡|杯|豆|配方|口感/u],
+    [/年轻|匆匆|忙|赶路|脚步/u, /年轻|匆匆|忙|慢|急|赶|脚步|日子|时间/u],
   ];
   return pairs.some(([source, response]) => source.test(prompt) && response.test(utterance));
 }

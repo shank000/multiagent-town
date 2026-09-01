@@ -10,7 +10,12 @@ import type { RumorTracker } from './rumors';
 import type { LLMGateway } from '../llm/gateway';
 import { DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE, dialogueMessages, dialogueSummaryMessages } from '../llm/prompts';
 import { personalityOf } from './town-model';
-import { assessDialogueTurn, conservativeDialogueReply, dialogueRepairInstruction } from './dialogue-quality';
+import {
+  assessDialogueTurn,
+  conservativeDialogueReply,
+  dialogueRepairInstruction,
+  selectDialogueAnswerEvidence,
+} from './dialogue-quality';
 
 const MIN_NATURAL_TURNS = 4;
 const MAX_NATURAL_TURNS = 6;
@@ -470,8 +475,9 @@ export class DialogueEngine {
         ];
         const qualityEvidence = [
           ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), speaker.persona.background,
-          ...s.openingEvidence,
+          ...worldFacts, ...s.openingEvidence,
         ];
+        const answerEvidence = selectDialogueAnswerEvidence(latestPrompt, qualityEvidence);
         let rejectedReasons: string[] = [];
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           entry.queuedAtMs = Date.now();
@@ -497,6 +503,7 @@ export class DialogueEngine {
             latestPrompt,
             priorTurns: s.turns.map((turn) => turn.content),
             evidence: qualityEvidence,
+            answerEvidence,
             speakerName: speaker.name,
             otherName: other.name,
             knownResidentNames: [...this.knownResidentNames],

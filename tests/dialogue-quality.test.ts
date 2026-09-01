@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessDialogueTurn, conservativeDialogueReply } from '../src/engine/dialogue-quality';
+import {
+  assessDialogueTurn,
+  conservativeDialogueReply,
+  falsePremiseDenialReasons,
+} from '../src/engine/dialogue-quality';
 
 const base = {
   latestPrompt: '最近在读什么书？',
@@ -428,6 +432,44 @@ test('问题可通过已知证据桥接到不复述问题词面的直接答案',
   assert.equal(result.ok, true);
 });
 
+test('明确事实问题必须覆盖答案证据，不能用同场景的题外观察蒙混过关', () => {
+  const context = {
+    ...base,
+    latestPrompt: '今天送信路上遇到什么值得留意的事？',
+    priorTurns: ['今天送信路上遇到什么值得留意的事？'],
+    evidence: [
+      '今天送信时发现一封信写着旧地址，后来在广场找到了收信人并核对姓名。',
+      '傍晚看见湖边新播的野花种子已经发芽，但还没有开花。',
+    ],
+    answerEvidence: ['今天送信时发现一封信写着旧地址，后来在广场找到了收信人并核对姓名。'],
+  };
+  const offTopic = assessDialogueTurn({
+    ...context,
+    utterance: '我今天路过湖边时，留意到野花已经发芽，不过还没有开花。',
+  });
+  assert.equal(offTopic.ok, false);
+  assert.ok(offTopic.reasons.some((reason) => reason.includes('答案证据')));
+
+  const groundedParaphrase = assessDialogueTurn({
+    ...context,
+    utterance: '有封信还写着旧住址，我到广场找到本人，又把名字对了一遍。',
+  });
+  assert.equal(groundedParaphrase.ok, true, groundedParaphrase.reasons.join('；'));
+});
+
+test('主观看法问题不要求复述观察证据', () => {
+  const result = assessDialogueTurn({
+    ...base,
+    latestPrompt: '老周，你怎么看年轻人总是匆匆忙忙这件事？',
+    priorTurns: ['老周，你怎么看年轻人总是匆匆忙忙这件事？'],
+    evidence: ['傍晚在广场看见两个年轻人匆忙赶路。'],
+    answerEvidence: ['傍晚在广场看见两个年轻人匆忙赶路。'],
+    speakerName: '老周',
+    utterance: '日子不是赛船，慢一点也能到岸。',
+  });
+  assert.equal(result.ok, true, result.reasons.join('；'));
+});
+
 test('活动预告不能支持已参加叙述，现场核验必须包含说话者与同伴', () => {
   const planned = assessDialogueTurn({
     ...base,
@@ -550,4 +592,36 @@ test('否定虚假共同经历时仍拒绝顺带编造无证据的过去事件',
   });
   assert.equal(groundedCancellation.ok, false);
   assert.ok(groundedCancellation.reasons.some((reason) => reason.includes('审计')));
+});
+
+test('共享虚假前提语义要求否定未成行事件，并识别自然否定说法', () => {
+  const context = {
+    latestPrompt: '我们昨天一起参加了湖边派对，你记得吗？',
+    evidence: ['活动现场核验：无人实际到场，湖边派对取消。'],
+  };
+  for (const utterance of ['派对没办。', '没办派对。', '哪有派对。', '我没参加。', '后来取消了。', '最后没成行。']) {
+    assert.deepEqual(falsePremiseDenialReasons({ ...context, utterance }), [], utterance);
+  }
+  assert.ok(falsePremiseDenialReasons({ ...context, utterance: '湖边昨晚很安静。' }).length > 0);
+
+  const giftContext = {
+    latestPrompt: '你昨天给我送了花，我也收到了，对吧？',
+    evidence: ['花店订单未履约：配送取消，没有送达。'],
+  };
+  for (const utterance of ['我没送。', '你没收到。', '配送取消了。']) {
+    assert.deepEqual(falsePremiseDenialReasons({ ...giftContext, utterance }), [], utterance);
+  }
+});
+
+test('未纠正被证据否定的共同经历会被统一质量门拒绝', () => {
+  const result = assessDialogueTurn({
+    ...base,
+    latestPrompt: '我们昨天一起参加了湖边派对，你记得吗？',
+    priorTurns: ['我们昨天一起参加了湖边派对，你记得吗？'],
+    evidence: ['活动现场核验：无人实际到场，湖边派对取消。'],
+    answerEvidence: ['活动现场核验：无人实际到场，湖边派对取消。'],
+    utterance: '湖边昨晚很安静，我还记得那阵风。',
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.some((reason) => reason.includes('虚假前提')));
 });
