@@ -6,6 +6,11 @@ export interface ClockState {
   totalMinutes: number; // 自纪元起分钟数（整数，用于事件时间戳）
 }
 
+export interface TimeCheckpoint {
+  schemaVersion: 1;
+  elapsedMinutes: number;
+}
+
 export const MINUTES_PER_DAY = 1440;
 
 export class TimeEngine {
@@ -28,6 +33,27 @@ export class TimeEngine {
       minutesOfDay: total % MINUTES_PER_DAY,
       totalMinutes: total,
     };
+  }
+
+  /** 保留内部小数分钟，避免重启后把亚分钟进度截断。 */
+  checkpoint(): TimeCheckpoint {
+    return { schemaVersion: 1, elapsedMinutes: this.minutes };
+  }
+
+  /** 只恢复受版本与数值边界约束的精确时钟。 */
+  restore(input: unknown): void {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new Error('时钟检查点必须是对象');
+    }
+    const value = input as Record<string, unknown>;
+    if (value.schemaVersion !== 1
+      || typeof value.elapsedMinutes !== 'number'
+      || !Number.isFinite(value.elapsedMinutes)
+      || value.elapsedMinutes < 0
+      || value.elapsedMinutes > Number.MAX_SAFE_INTEGER) {
+      throw new Error('时钟检查点版本或 elapsedMinutes 无效');
+    }
+    this.minutes = value.elapsedMinutes;
   }
 
   static format(clock: ClockState): string {

@@ -25,19 +25,22 @@ async function main(): Promise<void> {
     },
   });
   const profileStorePath = process.env.TOWN_PROFILE_PATH?.trim() || undefined;
-  const workspace = await ExperimentWorkspaceRuntime.create({
-    name: args.workspaceName,
-    seed: args.seed,
-    worldSpeed: args.speed,
-    defaultExperimentDays: 30,
-    worldKinds: args.worldKinds,
-    startPaused: false,
-  }, {
+  const workspaceOptions = {
     gateway,
     runtimeLog,
     profileOverrides: () => loadAgentProfileConfig(profileStorePath),
     nextDatabasePath: () => nextWorkspaceDatabasePath(args.dbPath),
-  }, args.dbPath, args.dbPathExplicit);
+  };
+  const workspace = args.resume
+    ? await ExperimentWorkspaceRuntime.resume(args.dbPath, workspaceOptions)
+    : await ExperimentWorkspaceRuntime.create({
+        name: args.workspaceName,
+        seed: args.seed,
+        worldSpeed: args.speed,
+        defaultExperimentDays: 30,
+        worldKinds: args.worldKinds,
+        startPaused: false,
+      }, workspaceOptions, args.dbPath, args.dbPathExplicit);
   const main = workspace.current.worlds[0];
   const server = await createTownServer({
     world: main.world, time: main.time, loop: main.loop, log: main.log, mind: main.mind,
@@ -45,7 +48,7 @@ async function main(): Promise<void> {
     experiment: main.experiment ?? undefined, worlds: workspace.current.worlds, workspace,
     port: args.port, llm: gateway, profileStorePath, runtimeLog,
   });
-  console.log(`[multiagent-town 像素小镇] provider=${provider} workspace=${workspace.current.meta.name} worlds=${workspace.current.meta.worldIds.join(',')} speed=${args.speed}游戏分钟/现实秒 db=${args.dbPath}`);
+  console.log(`[multiagent-town 像素小镇] provider=${provider} workspace=${workspace.current.meta.name} worlds=${workspace.current.meta.worldIds.join(',')} speed=${workspace.current.meta.worldSpeed}游戏分钟/现实秒 db=${args.dbPath} resumed=${args.resume}`);
   console.log(`后端日志：${runtimeLog.filePath}`);
   console.log(`浏览器打开：http://127.0.0.1:${server.port} （按 Ctrl+C 停止）`);
   startAllWorlds(workspace.current.worlds);

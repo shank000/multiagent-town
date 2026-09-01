@@ -9,6 +9,12 @@ CREATE TABLE IF NOT EXISTS world_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS runtime_checkpoint (
+  slot            INTEGER PRIMARY KEY CHECK (slot = 1),
+  schema_version  INTEGER NOT NULL,
+  checkpoint_json TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agents (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,

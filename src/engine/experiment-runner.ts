@@ -4,6 +4,7 @@ import type { EventLog } from '../store/events';
 import type { MindEngine } from './mind';
 import {
   PartnerChoiceExperiment,
+  type PartnerChoiceExperimentCheckpoint,
   type PartnerChoiceExperimentOptions,
   type PartnerExperimentConfig,
 } from './experiment';
@@ -13,6 +14,13 @@ export interface ExperimentState {
   remainingDays: number;
   mem: PartnerExperimentConfig['historyAccess'];
   gift: PartnerExperimentConfig['giftExchange'];
+}
+
+export interface ExperimentRunnerCheckpoint {
+  schemaVersion: 1;
+  remainingDays: number;
+  config: PartnerExperimentConfig;
+  partner: PartnerChoiceExperimentCheckpoint;
 }
 
 export class ExperimentRunner {
@@ -52,7 +60,47 @@ export class ExperimentRunner {
     this.remaining = 0;
   }
 
+  checkpoint(): ExperimentRunnerCheckpoint {
+    return {
+      schemaVersion: 1,
+      remainingDays: this.remaining,
+      config: { ...this.cfg },
+      partner: this.exp.checkpoint(),
+    };
+  }
+
+  restore(input: unknown, now: number): void {
+    const checkpoint = validateExperimentRunnerCheckpoint(input);
+    this.setConfig(checkpoint.config);
+    this.remaining = checkpoint.remainingDays;
+    this.exp.restore(checkpoint.partner, now);
+  }
+
   state(): ExperimentState {
     return { running: this.remaining > 0, remainingDays: this.remaining, mem: this.cfg.historyAccess, gift: this.cfg.giftExchange };
   }
+}
+
+export function validateExperimentRunnerCheckpoint(input: unknown): ExperimentRunnerCheckpoint {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('实验运行器检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  const config = value.config as Record<string, unknown> | null;
+  if (value.schemaVersion !== 1
+      || !Number.isSafeInteger(value.remainingDays)
+      || (value.remainingDays as number) < 0
+      || (value.remainingDays as number) > 365
+      || !config || typeof config !== 'object' || Array.isArray(config)
+      || (config.historyAccess !== 'on' && config.historyAccess !== 'off')
+      || (config.giftExchange !== 'on' && config.giftExchange !== 'off')) {
+    throw new Error('实验运行器检查点版本、剩余天数或配置无效');
+  }
+  return {
+    schemaVersion: 1,
+    remainingDays: value.remainingDays as number,
+    config: {
+      historyAccess: config.historyAccess,
+      giftExchange: config.giftExchange,
+    },
+    partner: value.partner as PartnerChoiceExperimentCheckpoint,
+  };
 }

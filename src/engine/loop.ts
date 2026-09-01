@@ -24,6 +24,7 @@ export class WorldLoop {
   private timer: ReturnType<typeof setInterval> | null = null;
   private activeRealtimeStep: Promise<void> | null = null;
   private lastDay = 1;
+  private checkpointWriter: (() => void) | null = null;
 
   constructor(
     public time: TimeEngine,
@@ -36,11 +37,19 @@ export class WorldLoop {
     private mind?: MindEngine,
     private experiment?: { tick(now: number): void },
     private backpressure?: CognitiveBackpressure,
+    options: { initializeFresh?: boolean } = {},
   ) {
     this.log.subscribe((e) => this.hooks.onEvent?.(e));
-    this.log.addEvent(systemEvent(0, '第1天开始，小镇从晨光中醒来。'));
-    // 世界名册落库：agents/objects 表与内存世界保持一致（统计/回放数据源）
-    hydrateWorld(this.db, this.world);
+    this.lastDay = this.time.state.day;
+    if (options.initializeFresh !== false) {
+      this.log.addEvent(systemEvent(0, '第1天开始，小镇从晨光中醒来。'));
+      // 世界名册落库：agents/objects 表与内存世界保持一致（统计/回放数据源）
+      hydrateWorld(this.db, this.world);
+    }
+  }
+
+  setCheckpointWriter(writer: (() => void) | null): void {
+    this.checkpointWriter = writer;
   }
 
   /** 推进一步（虚拟时钟下可连续调用）；默认 flush 一个宏任务让进行中的决策落定 */
@@ -72,6 +81,7 @@ export class WorldLoop {
       }
     }
     this.db.setMeta('game_time', String(clock.totalMinutes));
+    this.checkpointWriter?.();
     this.hooks.onTick?.(clock);
   }
 
@@ -129,6 +139,7 @@ export class WorldLoop {
       if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
     }
     this.mind?.tick(this.world, 0, now, true);
+    this.checkpointWriter?.();
     this.hooks.onTick?.(this.time.state);
   }
 
@@ -152,6 +163,7 @@ export class WorldLoop {
     for (const agent of this.world.allAgents()) {
       if (agent.state === 'thinking') this.executor.progress(agent, 0, now, true);
     }
+    this.checkpointWriter?.();
     this.hooks.onTick?.(this.time.state);
   }
 }

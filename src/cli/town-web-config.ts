@@ -10,6 +10,7 @@ export interface TownWebArgs {
   worldKinds: Array<'mem-on' | 'mem-off' | 'rumor'>;
   workspaceName: string;
   seed: number;
+  resume: boolean;
 }
 
 export const TOWN_WORLD_IDS = ['w1', 'w2', 'w3'] as const;
@@ -28,6 +29,7 @@ export function parseArgs(argv: string[]): TownWebArgs {
     worldKinds: ['mem-on'],
     workspaceName: 'AI 小镇实验',
     seed: 1,
+    resume: false,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--speed') args.speed = Number(argv[++i]);
@@ -42,6 +44,7 @@ export function parseArgs(argv: string[]): TownWebArgs {
     }
     else if (argv[i] === '--workspace-name') args.workspaceName = String(argv[++i] ?? '').trim();
     else if (argv[i] === '--seed') args.seed = Number(argv[++i]);
+    else if (argv[i] === '--resume') args.resume = true;
   }
   if (!Number.isFinite(args.speed) || args.speed <= 0 || args.speed > MAX_WORLD_SPEED) {
     throw new Error(`--speed must be a finite number in (0, ${MAX_WORLD_SPEED}]`);
@@ -59,6 +62,8 @@ export function parseArgs(argv: string[]): TownWebArgs {
   if (!Number.isSafeInteger(args.seed) || args.seed < 1 || args.seed > 2_147_483_647) {
     throw new Error('--seed must be an integer between 1 and 2147483647');
   }
+  if (args.resume && !args.dbPathExplicit) throw new Error('--resume requires an explicit --db base path');
+  if (args.resume && args.dbPath === ':memory:') throw new Error('--resume requires a persistent --db base path, not :memory:');
   return args;
 }
 

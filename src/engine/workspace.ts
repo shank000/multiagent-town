@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { LLMGateway } from '../llm/gateway';
 import type { BackendRuntimeLog } from '../runtime/backend-log';
 import { runtimeLogPathForDatabase } from '../runtime/backend-log';
@@ -12,6 +12,13 @@ import {
   type ManagedWorld,
   type WorldKind,
 } from './world-factory';
+import {
+  readWorkspaceResumePlan,
+  saveWorkspaceCheckpoint,
+  workspaceManifestPath,
+} from './workspace-persistence';
+
+export { workspaceManifestPath } from './workspace-persistence';
 
 export const WORLD_ID_BY_KIND: Readonly<Record<WorldKind, TownWorldId>> = {
   'mem-on': 'w1',
@@ -82,6 +89,7 @@ export class ExperimentWorkspaceRuntime {
     private readonly options: ExperimentWorkspaceRuntimeOptions,
   ) {
     this.currentValue = initial;
+    this.attachCheckpointWriters(initial);
   }
 
   static async create(
@@ -97,8 +105,47 @@ export class ExperimentWorkspaceRuntime {
       checkBasePath,
       options.runtimeLog?.filePath,
     );
+    const runtime = new ExperimentWorkspaceRuntime(initial, options);
+    try {
+      runtime.saveCheckpointNow();
+    } catch (error) {
+      await disposeManagedWorlds(initial.worlds);
+      throw error;
+    }
     options.runtimeLog?.info('workspace', workspaceSummary(initial.meta, 'created'));
-    return new ExperimentWorkspaceRuntime(initial, options);
+    return runtime;
+  }
+
+  /** 只从显式 base path 的原子清单恢复；所有世界先通过只读预检，再创建任何运行对象。 */
+  static async resume(
+    databaseBasePath: string,
+    options: ExperimentWorkspaceRuntimeOptions,
+  ): Promise<ExperimentWorkspaceRuntime> {
+    const profileOverrides = options.profileOverrides?.();
+    const plan = readWorkspaceResumePlan(databaseBasePath, profileOverrides);
+    const worlds: ManagedWorld[] = [];
+    try {
+      for (let index = 0; index < plan.meta.worldKinds.length; index++) {
+        const kind = plan.meta.worldKinds[index];
+        const id = plan.meta.worldIds[index];
+        worlds.push(createManagedWorld(id, kind, {
+          seed: plan.meta.seed,
+          gameMinutesPerTick: plan.meta.worldSpeed * 0.5,
+          gateway: options.gateway,
+          dbPath: worldDbPath(plan.meta.databaseBasePath, id),
+          profileOverrides,
+          runtimeCheckpoint: plan.checkpoints.get(id),
+        }));
+      }
+    } catch (error) {
+      closeUnactivatedWorlds(worlds);
+      throw error;
+    }
+    const built = { meta: plan.meta, worlds };
+    options.runtimeLog?.switchFile(plan.meta.runtimeLogPath, plan.meta.id);
+    const runtime = new ExperimentWorkspaceRuntime(built, options);
+    options.runtimeLog?.info('workspace', workspaceSummary(plan.meta, 'resumed'));
+    return runtime;
   }
 
   get current(): BuiltExperimentWorkspace { return this.currentValue; }
@@ -108,13 +155,16 @@ export class ExperimentWorkspaceRuntime {
     const next = await buildWorkspace(config, this.options, this.options.nextDatabasePath(), false);
     const previous = this.currentValue;
     try {
-      await disposeManagedWorlds(previous.worlds);
+      saveWorkspaceCheckpoint(next.meta, next.worlds);
+      await disposeManagedWorlds(previous.worlds, () => saveWorkspaceCheckpoint(previous.meta, previous.worlds));
     } catch (error) {
       await disposeManagedWorlds(next.worlds);
       throw error;
     }
+    this.detachCheckpointWriters(previous);
     this.options.runtimeLog?.switchFile(next.meta.runtimeLogPath, next.meta.id);
     this.currentValue = next;
+    this.attachCheckpointWriters(next);
     this.options.runtimeLog?.info('workspace', workspaceSummary(next.meta, 'activated'));
     return next;
   }
@@ -135,13 +185,16 @@ export class ExperimentWorkspaceRuntime {
       throw error;
     }
     try {
-      await disposeManagedWorlds(previous.worlds);
+      saveWorkspaceCheckpoint(next.meta, next.worlds);
+      await disposeManagedWorlds(previous.worlds, () => saveWorkspaceCheckpoint(previous.meta, previous.worlds));
     } catch (error) {
       await disposeManagedWorlds(next.worlds);
       throw error;
     }
+    this.detachCheckpointWriters(previous);
     this.options.runtimeLog?.switchFile(next.meta.runtimeLogPath, next.meta.id);
     this.currentValue = next;
+    this.attachCheckpointWriters(next);
     const archive = archiveWorkspaceArtifacts(previous.meta, archiveDirectory, next.meta.runtimeLogPath);
     this.options.runtimeLog?.info(
       'workspace',
@@ -151,7 +204,29 @@ export class ExperimentWorkspaceRuntime {
   }
 
   async dispose(): Promise<void> {
-    await disposeManagedWorlds(this.currentValue.worlds);
+    const current = this.currentValue;
+    await disposeManagedWorlds(current.worlds, () => saveWorkspaceCheckpoint(current.meta, current.worlds));
+    this.detachCheckpointWriters(current);
+  }
+
+  async saveCheckpoint(): Promise<void> {
+    this.saveCheckpointNow();
+  }
+
+  private saveCheckpointNow(): void {
+    saveWorkspaceCheckpoint(this.currentValue.meta, this.currentValue.worlds);
+  }
+
+  private attachCheckpointWriters(built: BuiltExperimentWorkspace): void {
+    for (const world of built.worlds) {
+      world.loop.setCheckpointWriter(() => {
+        if (this.currentValue === built) this.saveCheckpointNow();
+      });
+    }
+  }
+
+  private detachCheckpointWriters(built: BuiltExperimentWorkspace): void {
+    for (const world of built.worlds) world.loop.setCheckpointWriter(null);
   }
 }
 
@@ -193,6 +268,7 @@ async function buildWorkspace(
   currentRuntimeLogPath?: string,
 ): Promise<BuiltExperimentWorkspace> {
   const config = normalizeWorkspaceConfig(input);
+  databaseBasePath = databaseBasePath === ':memory:' ? databaseBasePath : resolve(databaseBasePath);
   const worldIds = config.worldKinds.map((kind) => WORLD_ID_BY_KIND[kind]);
   const paths = assertFreshSelectedWorldDbPaths(databaseBasePath, worldIds, checkBasePath);
   const profileOverrides = options.profileOverrides?.();
@@ -260,6 +336,7 @@ function archiveWorkspaceArtifacts(
     ? []
     : [
         meta.databaseBasePath,
+        workspaceManifestPath(meta.databaseBasePath),
         ...requiredDatabaseFiles.flatMap((path) => [path, `${path}-wal`, `${path}-shm`]),
       ];
   const candidates = [...new Set([
@@ -312,7 +389,10 @@ function archiveWorkspaceArtifacts(
   return archive;
 }
 
-export async function disposeManagedWorlds(worlds: readonly ManagedWorld[]): Promise<void> {
+export async function disposeManagedWorlds(
+  worlds: readonly ManagedWorld[],
+  beforeClose?: () => void,
+): Promise<void> {
   if (!worlds.length) return;
   stopAllWorlds([...worlds]);
   for (const world of worlds) world.social.dispose();
@@ -321,17 +401,35 @@ export async function disposeManagedWorlds(worlds: readonly ManagedWorld[]): Pro
     gameTime: world.time.state.totalMinutes,
     reason: '实验工作空间关闭',
   })));
+  let checkpointError: unknown = null;
+  try {
+    beforeClose?.();
+  } catch (error) {
+    checkpointError = error;
+  }
   for (const world of worlds) {
     try { world.db.raw.close(); } catch { /* 已关闭的工作空间保持幂等 */ }
   }
+  if (checkpointError) throw checkpointError;
 }
 
-function workspaceSummary(meta: ExperimentWorkspaceMeta, state: 'created' | 'activated'): string {
+function closeUnactivatedWorlds(worlds: readonly ManagedWorld[]): void {
+  for (const world of worlds) {
+    world.loop.stop();
+    world.social.dispose();
+    try { world.db.raw.close(); } catch { /* 未激活恢复保持清理幂等 */ }
+  }
+}
+
+function workspaceSummary(meta: ExperimentWorkspaceMeta, state: 'created' | 'activated' | 'resumed'): string {
   return `workspace=${meta.id} state=${state} name=${JSON.stringify(meta.name)} worlds=${meta.worldIds.join(',')} seed=${meta.seed} speed=${meta.worldSpeed} days=${meta.defaultExperimentDays}`;
 }
 
 export function nextWorkspaceDatabasePath(initialPath: string): string {
-  if (initialPath === ':memory:') return initialPath;
+  if (initialPath === ':memory:') {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return join(process.cwd(), 'data', 'runs', `town-workspace-${stamp}-${randomUUID().slice(0, 8)}.sqlite`);
+  }
   const extension = extname(initialPath) || '.sqlite';
   const stem = basename(initialPath, extname(initialPath));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');

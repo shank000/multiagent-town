@@ -14,6 +14,10 @@ import { SocialTicker } from './social';
 import { PlayerDirector } from './player';
 import { ExperimentRunner } from './experiment-runner';
 import { applyAgentProfile, normalizeAgentProfile } from './agent-profile';
+import {
+  restoreManagedWorldCheckpoint,
+  type WorldRuntimeCheckpoint,
+} from './workspace-persistence';
 
 export type WorldKind = 'mem-on' | 'mem-off' | 'rumor';
 
@@ -87,6 +91,8 @@ export interface ManagedWorldOptions {
   dbPath?: string;
   /** Stable resident-id keyed definitions, shared across paired worlds before the run begins. */
   profileOverrides?: Readonly<Record<string, unknown>>;
+  /** 仅由工作空间整体预检通过后的显式恢复入口提供。 */
+  runtimeCheckpoint?: WorldRuntimeCheckpoint;
 }
 
 /** 创建平行世界：每个世界拥有独立状态、记忆、对话与事件库。 */
@@ -117,15 +123,29 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
       giftExchange: kind === 'mem-on' ? 'on' : 'off',
     }, { seed });
   }
+  if (options.runtimeCheckpoint) {
+    try {
+      restoreManagedWorldCheckpoint({ world, time, experiment }, options.runtimeCheckpoint);
+    } catch (error) {
+      socialSafeCloseDb(db);
+      throw error;
+    }
+  }
   // 浏览与自然主义观察阶段允许居民自发交谈；正式伙伴选择实验运行时暂停环境闲聊，保持处理边界洁净。
   const social = new SocialTicker(log, {
     enabled: () => !(experiment?.state().running ?? false),
   }, mind.dialogue, mind.rels);
   if (experiment) {
-    const loop = new WorldLoop(time, world, executor, log, db, {}, social, mind, experiment, gateway);
+    const loop = new WorldLoop(
+      time, world, executor, log, db, {}, social, mind, experiment, gateway,
+      { initializeFresh: !options.runtimeCheckpoint },
+    );
     runnerHost = loop;
   } else {
-    runnerHost = new WorldLoop(time, world, executor, log, db, {}, social, mind, undefined, gateway);
+    runnerHost = new WorldLoop(
+      time, world, executor, log, db, {}, social, mind, undefined, gateway,
+      { initializeFresh: !options.runtimeCheckpoint },
+    );
   }
   const loop = runnerHost;
   const seedRumor = (text: string) => {
@@ -134,6 +154,10 @@ export function createManagedWorld(id: string, kind: WorldKind, options: Managed
     mind.store.addMemory({ agentId: lin.id, kind: 'observation', content: `我知道了一个秘密：${text}`, importance: 9, createdGameTime: 0 });
   };
   return { meta, world, time, loop, log, db, dbPath, mind, social, player, experiment, seedRumor };
+}
+
+function socialSafeCloseDb(db: DbHandle): void {
+  try { db.raw.close(); } catch { /* 恢复构造失败时保留原始校验错误 */ }
 }
 
 /** 启动全部世界的时钟（每世界独立循环） */

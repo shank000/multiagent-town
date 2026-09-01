@@ -24,6 +24,12 @@ export interface PartnerChoiceExperimentOptions {
   random?: LabelledRandom;
 }
 
+export interface PartnerChoiceExperimentCheckpoint {
+  schemaVersion: 1;
+  lastMinute: number;
+  manualDecisionIndices: Array<{ agentId: string; index: number }>;
+}
+
 export const RECENCY_WINDOW_MINUTES = 2400;
 
 /** A stateless labelled draw prevents one policy branch from shifting another branch's random stream. */
@@ -91,6 +97,25 @@ export class PartnerChoiceExperiment {
   /** 运行器开始或恢复时以当前时刻建立触发基线，不回补停机期间的轮次。 */
   resetClock(now: number): void {
     this.lastMinute = now;
+  }
+
+  checkpoint(): PartnerChoiceExperimentCheckpoint {
+    return {
+      schemaVersion: 1,
+      lastMinute: this.lastMinute,
+      manualDecisionIndices: [...this.manualDecisionIndex]
+        .map(([agentId, index]) => ({ agentId, index }))
+        .sort((a, b) => a.agentId.localeCompare(b.agentId)),
+    };
+  }
+
+  /** 恢复触发基线；用当前恢复时刻夹紧，明确不补跑进程停机区间。 */
+  restore(input: unknown, now: number): void {
+    const checkpoint = validatePartnerChoiceCheckpoint(input, this.world, now);
+    this.lastMinute = now;
+    this.manualDecisionIndex = new Map(
+      checkpoint.manualDecisionIndices.map(({ agentId, index }) => [agentId, index]),
+    );
   }
 
   /** 当日一轮：先冻结全员候选状态并独立选择，再执行馈礼与一对一对话。 */
@@ -226,6 +251,37 @@ export class PartnerChoiceExperiment {
     this.manualDecisionIndex.set(agentId, index + 1);
     return `manual:${agentId}:${index}`;
   }
+}
+
+export function validatePartnerChoiceCheckpoint(
+  input: unknown,
+  world: WorldState,
+  now: number,
+): PartnerChoiceExperimentCheckpoint {
+  if (!Number.isSafeInteger(now) || now < 0) throw new Error('伙伴实验恢复时刻无效');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('伙伴实验检查点必须是对象');
+  const value = input as Record<string, unknown>;
+  if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.lastMinute)
+      || (value.lastMinute as number) < 0 || (value.lastMinute as number) > now) {
+    throw new Error('伙伴实验检查点版本或触发基线无效');
+  }
+  if (!Array.isArray(value.manualDecisionIndices)) throw new Error('伙伴实验检查点决策索引无效');
+  const ids = new Set<string>();
+  const manualDecisionIndices = value.manualDecisionIndices.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('伙伴实验检查点决策索引无效');
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.agentId !== 'string' || !world.hasAgent(entry.agentId)
+        || ids.has(entry.agentId) || !Number.isSafeInteger(entry.index) || (entry.index as number) < 0) {
+      throw new Error('伙伴实验检查点包含未知居民或非法决策索引');
+    }
+    ids.add(entry.agentId);
+    return { agentId: entry.agentId, index: entry.index as number };
+  });
+  return {
+    schemaVersion: 1,
+    lastMinute: value.lastMinute as number,
+    manualDecisionIndices,
+  };
 }
 
 function experimentPairKey(aId: string, bId: string): string {
