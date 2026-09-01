@@ -450,11 +450,23 @@ test('明确事实问题必须覆盖答案证据，不能用同场景的题外�
   assert.equal(offTopic.ok, false);
   assert.ok(offTopic.reasons.some((reason) => reason.includes('答案证据')));
 
-  const groundedParaphrase = assessDialogueTurn({
+  const heldOutFalsePositive = assessDialogueTurn({
     ...context,
-    utterance: '有封信还写着旧住址，我到广场找到本人，又把名字对了一遍。',
+    utterance: '早啊！今天送信路过广场，看见你新种的野花，开得可真热闹，像夏天的笑脸。',
   });
-  assert.equal(groundedParaphrase.ok, true, groundedParaphrase.reasons.join('；'));
+  assert.equal(heldOutFalsePositive.ok, false);
+  assert.ok(heldOutFalsePositive.reasons.some((reason) => reason.includes('答案证据')));
+
+  const groundedParaphrases = [
+    '有封信还写着旧住址，我到广场找到本人，又把名字对了一遍。',
+    '一封信寄去了原来的住处，好在我后来找着了收件人。',
+    '那封信的地址已经过时了，我找到对方后确认了姓名才交给他。',
+    '路上发现投递地址是旧的，最后当面核实名字才没送错。',
+  ];
+  for (const utterance of groundedParaphrases) {
+    const groundedParaphrase = assessDialogueTurn({ ...context, utterance });
+    assert.equal(groundedParaphrase.ok, true, `${utterance}: ${groundedParaphrase.reasons.join('；')}`);
+  }
 });
 
 test('主观看法问题不要求复述观察证据', () => {
@@ -468,6 +480,42 @@ test('主观看法问题不要求复述观察证据', () => {
     utterance: '日子不是赛船，慢一点也能到岸。',
   });
   assert.equal(result.ok, true, result.reasons.join('；'));
+});
+
+test('主观看法不能借人设扩写无证据的第一人称往事', () => {
+  const context = {
+    ...base,
+    latestPrompt: '你怎么看年轻人总是匆匆忙忙这件事？',
+    priorTurns: ['你怎么看年轻人总是匆匆忙忙这件事？'],
+    evidence: ['傍晚在广场看见两个年轻人匆忙赶路。'],
+    answerEvidence: ['傍晚在广场看见两个年轻人匆忙赶路。'],
+    speakerName: '老周',
+  };
+  const invented = assessDialogueTurn({
+    ...context,
+    utterance: '湖面风平浪静，鱼儿们才肯慢悠悠地浮头呢。我见过一个年轻人，赶着去面试，结果钓上来一条大鲫鱼，说是要带去城里当礼物。后来他回来，脸都变了，说那鱼是湖里最老实的，不急不躁，像极了小镇的脾气。',
+  });
+  assert.equal(invented.ok, false);
+  assert.ok(invented.reasons.some((reason) => reason.includes('无当前证据支持的过去事件')));
+
+  for (const utterance of [
+    '我遇到过一个赶着去城里买房的年轻人。',
+    '我听说过一个年轻人赶去面试，回来时带着一条大鱼。',
+    '我记得那个年轻人后来钓了一条大鱼。',
+  ]) {
+    const unsupported = assessDialogueTurn({ ...context, utterance });
+    assert.equal(unsupported.ok, false, utterance);
+    assert.ok(unsupported.reasons.some((reason) => reason.includes('无当前证据支持的过去事件')), utterance);
+  }
+
+  const supportedEvidence = '傍晚在广场见过一个赶去面试的年轻人，后来他回来告诉老周面试很顺利。';
+  const grounded = assessDialogueTurn({
+    ...context,
+    evidence: [supportedEvidence],
+    answerEvidence: [supportedEvidence],
+    utterance: '我见过那个赶去面试的年轻人，后来他回来时说面试挺顺利。',
+  });
+  assert.equal(grounded.ok, true, grounded.reasons.join('；'));
 });
 
 test('活动预告不能支持已参加叙述，现场核验必须包含说话者与同伴', () => {

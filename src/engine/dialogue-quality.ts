@@ -456,24 +456,36 @@ function isExplicitFactualQuestion(prompt: string): boolean {
 function coversAnswerEvidence(utterance: string, answerEvidence: readonly string[], prompt: string): boolean {
   const contradictions = contradictedFalsePremises(prompt, answerEvidence);
   if (contradictions.length && contradictions.every((item) => explicitlyDeniesContradiction(utterance, item.kind))) return true;
+  const normalizedPrompt = normalizeAnswerSemantics(prompt);
   const normalizedUtterance = normalizeAnswerSemantics(utterance);
   const utteranceConcepts = answerConcepts(normalizedUtterance);
   return answerEvidence.some((raw) => {
     const fact = conversationalEvidence(raw);
     if (!fact) return false;
     const normalizedFact = normalizeAnswerSemantics(fact);
-    const overlap = topicOverlapCount(normalizedFact, normalizedUtterance);
-    if (overlap >= 2) return true;
     const factConcepts = answerConcepts(normalizedFact);
     for (const concept of factConcepts) if (utteranceConcepts.has(concept)) return true;
-    return false;
+    return evidenceSpecificOverlap(normalizedPrompt, normalizedFact, normalizedUtterance) >= 2;
   });
+}
+
+function evidenceSpecificOverlap(prompt: string, fact: string, utterance: string): number {
+  const promptTerms = topicBigrams(prompt);
+  const factTerms = topicBigrams(fact);
+  const utteranceTerms = topicBigrams(utterance);
+  let overlap = 0;
+  for (const term of factTerms) {
+    if (!promptTerms.has(term) && utteranceTerms.has(term)) overlap += 1;
+  }
+  return overlap;
 }
 
 function normalizeAnswerSemantics(text: string): string {
   return text
-    .replace(/旧住址|原住址|原地址|以前的地址/gu, '旧地址')
-    .replace(/收件人|找到本人|找到对方/gu, '找到收信人')
+    .replace(/旧住址|原住址|原地址|原来(?:的)?住处|以前的(?:地址|住处)/gu, '旧地址')
+    .replace(/找着(?:了)?|寻到(?:了)?/gu, '找到')
+    .replace(/收件人/gu, '收信人')
+    .replace(/找到本人|找到对方/gu, '找到收信人')
     .replace(/把?(?:名字|姓名)对(?:了)?一遍|确认(?:了)?(?:名字|姓名)|核实(?:了)?(?:名字|姓名)/gu, '核对姓名')
     .replace(/名字/gu, '姓名')
     .replace(/没(?:有)?办(?:成)?(?:派对|聚会|活动)?|(?:派对|聚会|活动)没(?:有)?办|没成行|未成行/gu, '活动取消')
@@ -487,7 +499,6 @@ function answerConcepts(text: string): Set<string> {
     ['recipient', /收信人/u],
     ['verify-name', /核对姓名/u],
     ['reading-none', /没.{0,6}(?:读书|阅读|在读|看书)|(?:读书|阅读).{0,4}没/u],
-    ['reading', /在读|读过|阅读|《[^》]+》/u],
     ['sprouted', /发芽|冒芽/u],
     ['not-bloomed', /没.{0,5}开花|还没开/u],
     ['cancelled', /活动取消|取消/u],
@@ -530,11 +541,28 @@ function worldClaimReasons(context: DialogueQualityContext): string[] {
       if (!supported) reasons.push('把没有完成证据的共同经历写成已经发生');
     }
   }
+  let anecdoteContext = false;
   for (const sentence of sentences) {
-    let pastContext = false;
+    let pastContext = anecdoteContext;
     for (const clause of sentence.split(/[，,]/u).map((item) => item.trim()).filter(Boolean)) {
-      if (/昨天|昨晚|那天|那晚|当晚|当时|上次|之前|过去|曾经|刚才/u.test(clause)) pastContext = true;
-      if (!pastContext || negatedPastClaim(clause) || pastClaimSupported(clause, context.evidence)) continue;
+      const firstPersonAnecdote = /(?:我)?(?:见过|遇到过|听说过)|(?:我)?记得/u.test(clause);
+      const explicitPast = /昨天|昨晚|那天|那晚|当晚|当时|上次|之前|过去|曾经|刚才/u.test(clause);
+      const narrativeContinuation = /后来|结果/u.test(clause);
+      const returningCharacter = /回来后|(?:他|她|那人|年轻人).{0,6}回来/u.test(clause);
+      if (firstPersonAnecdote || explicitPast || narrativeContinuation || (anecdoteContext && returningCharacter)) {
+        pastContext = true;
+        anecdoteContext = true;
+      }
+      const markerOnly = /^(?:我记得|记得|后来|结果)$/u.test(clause);
+      const asksRatherThanClaims = /怎么|如何|什么|谁|哪|是否|有没有|吗$|呢$/u.test(clause);
+      if (
+        !pastContext
+        || markerOnly
+        || asksRatherThanClaims
+        || prospectiveClaim(clause)
+        || negatedPastClaim(clause)
+        || pastClaimSupported(clause, context.evidence)
+      ) continue;
       reasons.push('叙述无当前证据支持的过去事件');
     }
   }
@@ -577,15 +605,17 @@ function negatedPastClaim(text: string): boolean {
 }
 
 function pastClaimSupported(claim: string, evidence: readonly string[]): boolean {
-  const claimTerms = meaningfulBigrams(claim);
+  const normalizedClaim = normalizeAnswerSemantics(claim);
+  const claimTerms = meaningfulBigrams(normalizedClaim);
   return evidence.some((item) => {
-    const normalizedClaim = normalize(claim);
-    const normalizedEvidence = normalize(item);
-    if (normalizedClaim.length >= 4 && normalizedEvidence.includes(normalizedClaim)) return true;
-    const evidenceTerms = meaningfulBigrams(item);
+    const normalizedEvidence = normalizeAnswerSemantics(item);
+    const compactClaim = normalize(normalizedClaim);
+    const compactEvidence = normalize(normalizedEvidence);
+    if (compactClaim.length >= 4 && compactEvidence.includes(compactClaim)) return true;
+    const evidenceTerms = meaningfulBigrams(normalizedEvidence);
     let overlap = 0;
     for (const term of claimTerms) if (evidenceTerms.has(term)) overlap += 1;
-    return overlap >= 2;
+    return overlap >= 2 && (claimTerms.size <= 8 || overlap / claimTerms.size >= 0.34);
   });
 }
 
