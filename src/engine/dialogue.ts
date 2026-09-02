@@ -628,23 +628,26 @@ export class DialogueEngine {
     }
     try {
       const summaryEventId = randomUUID();
+      const parsed = (summaryRes?.parsed) as { affection_delta?: number; respect_delta?: number } | null;
+      const affectionDelta = finiteRelationshipDelta(parsed?.affection_delta);
+      const respectDelta = finiteRelationshipDelta(parsed?.respect_delta);
+      const trustDelta = affectionDelta * 0.2 + respectDelta * 0.6;
+      const tensionDelta = Math.max(0, -affectionDelta) + Math.max(0, -respectDelta);
       this.log.addEvent({
         id: summaryEventId, type: 'chat', actorId: null, targetIds: [s.a, s.b],
         description: `「${s.aName}」和「${s.bName}」的对话结束：${summary}`,
         location: null, gameTime: now,
-        payload: { kind: 'chat_summary', line: summary, fromId: s.a, toId: s.b, conversationId: s.conversationId },
+        payload: {
+          kind: 'chat_summary', line: summary, fromId: s.a, toId: s.b, conversationId: s.conversationId,
+          affectionDelta, respectDelta, trustDelta, tensionDelta,
+        },
       });
       if (this.rels) {
         // 只消费模型明确返回的有限数值；缺失或无效字段不推断正向关系变化。
-        const parsed = (summaryRes?.parsed) as { affection_delta?: number; respect_delta?: number } | null;
-        const aD = finiteRelationshipDelta(parsed?.affection_delta);
-        const rD = finiteRelationshipDelta(parsed?.respect_delta);
-        const trustDelta = aD * 0.2 + rD * 0.6;
-        const tensionDelta = Math.max(0, -aD) + Math.max(0, -rD);
         for (const [from, to] of [[s.a, s.b], [s.b, s.a]] as const) {
           this.rels.update(from, to, {
-            affectionDelta: aD,
-            respectDelta: rD,
+            affectionDelta,
+            respectDelta,
             knowledge: [summary],
             evidence: {
               kind: 'dialogue',

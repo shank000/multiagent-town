@@ -230,6 +230,12 @@ test('timeline controls expose fractional manual speeds and continuous model-awa
   assert.match(html, /id="timeline-speed-select"/);
   assert.match(html, /data-action="adaptive-speed"[^>]*>智能跟速</);
   assert.match(client, /timelineControl/);
+  assert.match(client, /manualSpeedLimit/);
+  assert.match(client, /syncManualSpeedAvailability/);
+  assert.match(client, /当前可持续手动速度上限/);
+  assert.match(client, /当前 \$\{speed\}× · 初始 \$\{workspace\.worldSpeed\}×/);
+  assert.match(html, /<option value="60" disabled>60×<\/option>/);
+  assert.match(html, /0\.2× · 真实模型冷启动/);
   assert.match(client, /后续按负载持续调整/);
   assert.match(server, /TimelineGovernor/);
   assert.match(server, /timeline_speed_adjusted/);
@@ -245,6 +251,23 @@ test('narrative stream distinguishes planned, travelling, verified, cancelled an
   assert.match(server, /sourceObjectId/);
   assert.match(server, /deliveryLocationId/);
   assert.match(css, /\.scene-contract\.verified/);
+});
+
+test('narrative stream defaults to research signals while preserving an explicit complete-record view', () => {
+  assert.match(html, /data-narrative-mode="research"[^>]*>研究重点/);
+  assert.match(html, /data-narrative-mode="all"[^>]*>完整记录/);
+  assert.match(html, /id="narrative-count"/);
+  assert.match(client, /researchTier:\s*'signal'\s*\|\s*'context'\s*\|\s*'routine'/);
+  assert.match(client, /item\.researchTier !== 'routine'/);
+  assert.match(client, /\$\{signalCount\} 条核心信号 · \$\{contextCount\} 条情境记录/);
+  assert.match(client, /已收起 \$\{hiddenRoutineCount\} 条移动、例行动作与重复独白/);
+  assert.match(client, /对话完成 · 关系证据/);
+  assert.match(client, /relationship-delta/);
+  assert.match(server, /narrativeResearchMeta/);
+  assert.match(server, /researchLabel:\s*'伙伴选择'/);
+  assert.match(server, /拒绝与边界/);
+  assert.match(css, /\.nar-routine-summary/);
+  assert.match(css, /\.relationship-summary/);
 });
 
 test('frequently used research controls meet the 40px target baseline', () => {

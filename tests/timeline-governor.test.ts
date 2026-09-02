@@ -31,6 +31,8 @@ test('智能时间治理器把极慢模型直接降到最低可持续档位', as
   const state = governor.enableAdaptive(worlds);
   assert.equal(state.mode, 'adaptive');
   assert.equal(state.selectedSpeed, 0.05);
+  assert.equal(state.manualSpeedLimit, 0.05);
+  assert.equal(state.manualSpeedLimitReason, 'measured_capacity');
   assert.equal(worlds[0].time.gameMinutesPerTick, 0.025);
   assert.deepEqual(adjustments, [0.05]);
 });
@@ -60,4 +62,15 @@ test('手动档位保留小数速度并退出持续自适应', () => {
   assert.equal(state.mode, 'manual');
   assert.equal(state.selectedSpeed, 0.3);
   assert.equal(state.effectiveSpeed, 0.3);
+  assert.equal(state.manualSpeedLimit, 60);
+  assert.equal(state.manualSpeedLimitReason, 'mock_capacity');
+});
+
+test('真实 provider 在吞吐样本形成前采用保守手动速度上限', () => {
+  const gateway = new LLMGateway({ provider: measuredProvider(1_000, 10), retries: 0 });
+  const governor = new TimelineGovernor(gateway);
+  assert.deepEqual(governor.manualSpeedLimit(), {
+    manualSpeedLimit: 0.2,
+    manualSpeedLimitReason: 'warming_up',
+  });
 });

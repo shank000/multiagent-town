@@ -30,7 +30,7 @@ import { PerceptionEngine } from '../engine/perception';
 import { metricsOf, type Choice } from '../engine/metrics';
 import { buildSnapshot, type WorldSnapshot } from './snapshot';
 import { startLoopGroup, stopLoopGroup } from '../engine/loop';
-import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
+import { MAX_WORLD_SPEED, MIN_WORLD_SPEED } from '../engine/runtime-limits';
 import {
   TimelineGovernor,
   timelinePerformanceSummary,
@@ -133,6 +133,37 @@ function partnerChoiceObservations(log: EventLog, endGameTimeInclusive: number):
   return observations;
 }
 
+type NarrativeResearchTier = 'signal' | 'context' | 'routine';
+
+/** 展示优先级只影响研究台投影；SQLite 事件、后端日志与下载内容保持完整。 */
+function narrativeResearchMeta(
+  kind: string,
+  status: string | null,
+  observerCount: number,
+): { researchTier: NarrativeResearchTier; researchLabel: string } {
+  if (kind === 'chat' || kind === 'chat_summary') return { researchTier: 'signal', researchLabel: '对话证据' };
+  if (kind === 'experiment_pair_choice') return { researchTier: 'signal', researchLabel: '伙伴选择' };
+  if (kind === 'gift') return { researchTier: 'signal', researchLabel: '馈礼与关系' };
+  if (kind === 'social_interaction' || /relationship|relation_change|refusal|interaction_refused/u.test(kind)) {
+    return { researchTier: 'signal', researchLabel: /refusal|refused/u.test(kind) ? '拒绝与边界' : '关系变化' };
+  }
+  if (kind === 'rumor' || kind === 'rumor_seed') return { researchTier: 'signal', researchLabel: '信息传播' };
+  if (kind === 'town_event' || kind === 'town_event_cancelled') return { researchTier: 'signal', researchLabel: '事件结果' };
+  if (kind === 'dialogue_lifecycle' && (status === 'failed' || status === 'interrupted')) {
+    return { researchTier: 'signal', researchLabel: '会话异常' };
+  }
+  if (kind === 'town_event_announcement' || kind === 'town_event_departure') {
+    return { researchTier: 'context', researchLabel: '事件进程' };
+  }
+  if (kind === 'reflection' || kind === 'insight') return { researchTier: 'context', researchLabel: '反思证据' };
+  if (kind === 'ambient_life' && observerCount > 0) return { researchTier: 'context', researchLabel: '共同情境' };
+  if (kind === 'public_object_interaction' && observerCount > 0) return { researchTier: 'context', researchLabel: '可见行动' };
+  if (['thought', 'move', 'interact', 'chat_start', 'day_start', 'timeline_speed_adjusted', 'dialogue_lifecycle', 'ambient_life', 'public_object_interaction'].includes(kind)) {
+    return { researchTier: 'routine', researchLabel: '例行记录' };
+  }
+  return { researchTier: 'context', researchLabel: '世界事件' };
+}
+
 export async function createTownServer(opts: TownWebOptions): Promise<TownWebServer> {
   const publicDir = opts.publicDir ?? resolve(process.cwd(), 'public');
   const snapshotMs = opts.snapshotMs ?? 200;
@@ -224,6 +255,30 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   const timelineGovernor = opts.llm
     ? new TimelineGovernor(opts.llm, { onAdjustment: recordTimelineAdjustment })
     : null;
+  const timelineManualLimit = () => timelineGovernor?.manualSpeedLimit() ?? {
+    manualSpeedLimit: MAX_WORLD_SPEED,
+    manualSpeedLimitReason: 'mock_capacity' as const,
+  };
+  const requestedWorldSpeed = (value: unknown): number | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const speed = Number((value as Record<string, unknown>).worldSpeed);
+    return Number.isFinite(speed) ? speed : null;
+  };
+  const manualSpeedViolation = (speed: number): string | null => {
+    const limit = timelineManualLimit();
+    if (speed <= limit.manualSpeedLimit + 1e-9) return null;
+    return limit.manualSpeedLimitReason === 'warming_up'
+      ? `真实模型尚在吞吐预热，手动速度暂限 ${limit.manualSpeedLimit}×；请使用智能跟速或等待校准完成`
+      : `当前模型实测容量支持的手动速度上限为 ${limit.manualSpeedLimit}×`;
+  };
+  if (timelineGovernor) {
+    const firstTimelineWorld = timelineWorlds()[0];
+    const currentSpeed = firstTimelineWorld ? firstTimelineWorld.time.gameMinutesPerTick * 2 : MIN_WORLD_SPEED;
+    const limit = timelineManualLimit();
+    if (currentSpeed > limit.manualSpeedLimit + 1e-9) {
+      timelineGovernor.setManual(limit.manualSpeedLimit, timelineWorlds(), 'workspace_configuration');
+    }
+  }
 
   const llmConfigurationSafety = (requireSettledWorld = true) => {
     const scheduler = opts.llm?.schedulerSnapshot();
@@ -546,6 +601,12 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           const runtime = opts.llm.reconfigure(config);
           const controlledWorlds = hubWorlds ?? [hub()];
           if (timelineGovernor?.mode === 'adaptive') timelineGovernor.enableAdaptive(timelineWorlds());
+          else if (timelineGovernor) {
+            const timeline = timelineGovernor.snapshot(timelineWorlds(), paused);
+            if (timeline.selectedSpeed > timeline.manualSpeedLimit + 1e-9) {
+              timelineGovernor.setManual(timeline.manualSpeedLimit, timelineWorlds());
+            }
+          }
           for (const world of controlledWorlds) {
             world.log.addEvent({
               id: randomUUID(), type: 'system', actorId: null, targetIds: [],
@@ -1003,6 +1064,9 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
         const safety = llmConfigurationSafety();
         if (!safety.ready) { res.writeHead(409); res.end(safety.reasons.join('；')); return; }
         const body = await readBody(req);
+        const speed = requestedWorldSpeed(body);
+        const speedViolation = speed === null ? null : manualSpeedViolation(speed);
+        if (speedViolation) { res.writeHead(409); res.end(speedViolation); return; }
         clearHubResources();
         try {
           const built = await opts.workspace.replace(body);
@@ -1166,7 +1230,19 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           .filter((event) => event.payload?.kind !== 'action_decision_quality');
         const items = recent.map((e, i) => {
           const p = (e.payload ?? {}) as Record<string, unknown>;
-          const kind = String(p.kind ?? '');
+          // 早期与通用事件未必携带 payload.kind；回退到事件类型，避免把
+          // 移动、例行动作等低价值记录误标为研究情境。
+          const kind = typeof p.kind === 'string' && p.kind.trim() ? p.kind : e.type;
+          const eventStatus = typeof p.status === 'string' ? p.status : null;
+          const observerIds = Array.isArray(p.observerIds)
+            ? p.observerIds.filter((id): id is string => typeof id === 'string')
+            : [];
+          const fromId = typeof p.fromId === 'string' ? p.fromId : e.actorId;
+          const toId = typeof p.toId === 'string' ? p.toId : e.targetIds[0] ?? null;
+          const research = narrativeResearchMeta(kind, eventStatus, observerIds.length);
+          const finiteDelta = (value: unknown): number | null => (
+            typeof value === 'number' && Number.isFinite(value) ? value : null
+          );
           return {
             seq: i,
             id: e.id,
@@ -1179,6 +1255,10 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             actorName: nameOf(e.actorId),
             target: e.targetIds[0] ?? null,
             targetName: nameOf(e.targetIds[0] ?? null),
+            fromId,
+            fromName: nameOf(fromId),
+            toId,
+            toName: nameOf(toId),
             text: e.description,
             line: typeof p.line === 'string' ? p.line : null,
             thought: typeof p.thought === 'string' ? p.thought : null,
@@ -1189,7 +1269,12 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             interactionLabel: typeof p.interactionLabel === 'string' ? p.interactionLabel : null,
             icon: typeof p.icon === 'string' ? p.icon : null,
             source: typeof p.source === 'string' ? p.source : null,
-            eventStatus: typeof p.status === 'string' ? p.status : null,
+            eventStatus,
+            errorText: typeof p.errorText === 'string' ? p.errorText : null,
+            affectionDelta: finiteDelta(p.affectionDelta),
+            respectDelta: finiteDelta(p.respectDelta),
+            trustDelta: finiteDelta(p.trustDelta),
+            tensionDelta: finiteDelta(p.tensionDelta),
             objectId: typeof p.objectId === 'string' ? p.objectId : null,
             objectName: typeof p.objectName === 'string' ? p.objectName : null,
             venueId: typeof p.venueId === 'string' ? p.venueId : null,
@@ -1201,7 +1286,8 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             deliveryLocationName: typeof p.deliveryLocationName === 'string' ? p.deliveryLocationName : null,
             lifeCategory: typeof p.category === 'string' ? p.category : null,
             sensoryCues: Array.isArray(p.sensoryCues) ? p.sensoryCues.filter((cue): cue is string => typeof cue === 'string') : [],
-            observerCount: Array.isArray(p.observerIds) ? p.observerIds.filter((id): id is string => typeof id === 'string').length : 0,
+            observerCount: observerIds.length,
+            ...research,
           };
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1506,10 +1592,19 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
           body.action === 'speed' && typeof body.value === 'number'
           && Number.isFinite(body.value) && body.value > 0 && body.value <= MAX_WORLD_SPEED
         ) {
-          timelineGovernor?.setManual(body.value, timelineWorlds());
+          const violation = manualSpeedViolation(body.value);
+          if (violation) {
+            res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: violation, ...timelineManualLimit() }));
+            return;
+          }
+          const timeline = timelineGovernor?.setManual(body.value, timelineWorlds()) ?? null;
           if (!timelineGovernor) {
             for (const world of controlledWorlds) world.time.gameMinutesPerTick = body.value * 0.5;
           }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, speed: body.value, timeline }));
+          return;
         } else {
           res.writeHead(400);
           res.end('bad control');

@@ -14,16 +14,16 @@
     <div class="spacer"></div>
     <div class="research-mode" id="connection-status" role="status" aria-live="polite"><span class="live-dot"></span>纵向社会观测 · 实时</div>
     <div class="llm-status" id="llm-status" role="status" aria-live="polite"><span class="llm-dot"></span>本地推理 · 就绪</div>
-    <div class="timeline-status" id="timeline-status" role="status" aria-live="polite"><span class="timeline-dot"></span>手动时间 · 1×</div>
+    <div class="timeline-status" id="timeline-status" role="status" aria-live="polite"><span class="timeline-dot"></span>时间状态同步中</div>
     <div class="seg" id="controls" aria-label="世界时间控制">
       <button data-action="pause">暂停</button>
       <select id="timeline-speed-select" aria-label="选择手动世界时间倍率" title="1× 表示每个现实秒推进 1 个游戏分钟">
         <option value="0.05">0.05×</option><option value="0.1">0.1×</option>
-        <option value="0.2">0.2×</option><option value="0.3">0.3×</option>
-        <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
-        <option value="1" selected>1×</option><option value="2">2×</option>
-        <option value="5">5×</option><option value="10">10×</option>
-        <option value="30">30×</option><option value="60">60×</option>
+        <option value="0.2" selected>0.2×</option><option value="0.3" disabled>0.3×</option>
+        <option value="0.5" disabled>0.5×</option><option value="0.75" disabled>0.75×</option>
+        <option value="1" disabled>1×</option><option value="2" disabled>2×</option>
+        <option value="5" disabled>5×</option><option value="10" disabled>10×</option>
+        <option value="30" disabled>30×</option><option value="60" disabled>60×</option>
       </select>
       <button data-action="adaptive-speed" title="持续根据 token/s、P90 时延、排队与居民数量调整世界时间">智能跟速</button>
     </div>
@@ -275,7 +275,7 @@
         </div>
 
         <section class="timeline-card glass-card" aria-label="社会互动时间线">
-          <div class="card-title"><span>社会互动时间线</span><button id="narrative-jump" class="mini-action" type="button" hidden>回到最新</button></div>
+          <div class="card-title timeline-card-title"><div><span>社会互动时间线</span><small id="narrative-count">正在同步研究信号</small></div><div class="narrative-mode" role="group" aria-label="时间线记录范围"><button type="button" class="active" data-narrative-mode="research" aria-pressed="true">研究重点</button><button type="button" data-narrative-mode="all" aria-pressed="false">完整记录</button><button id="narrative-jump" class="mini-action" type="button" hidden>回到最新</button></div></div>
           <div id="narrative"></div>
         </section>
       </div>
@@ -302,7 +302,7 @@
             <label class="wide">工作空间名称<input name="name" maxlength="60" value="关系记忆实验" required /></label>
             <label>随机种子<input name="seed" type="number" min="1" max="2147483647" value="1" required /></label>
             <label>默认实验天数<input name="defaultExperimentDays" type="number" min="1" max="365" value="30" required /></label>
-            <label>世界运行速度<select name="worldSpeed"><option value="0.05">0.05× · 极慢推理</option><option value="0.1">0.1×</option><option value="0.2">0.2×</option><option value="0.3">0.3×</option><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1× · 基准</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="30">30×</option><option value="60">60× · 高速观察</option></select></label>
+            <label>世界运行速度<select name="worldSpeed"><option value="0.05">0.05× · 极慢推理</option><option value="0.1">0.1×</option><option value="0.2" selected>0.2× · 真实模型冷启动</option><option value="0.3" disabled>0.3×</option><option value="0.5" disabled>0.5×</option><option value="0.75" disabled>0.75×</option><option value="1" disabled>1×</option><option value="2" disabled>2×</option><option value="5" disabled>5×</option><option value="10" disabled>10×</option><option value="30" disabled>30×</option><option value="60" disabled>60×</option></select><small id="workspace-speed-guidance">真实模型完成吞吐校准后开放可持续档位</small></label>
             <label class="workspace-pause-option"><input name="startPaused" type="checkbox" checked /> 创建后保持暂停，核对居民、模型与实验配置后再运行</label>
           </div></section>
           <section class="editor-section workspace-world-editor">

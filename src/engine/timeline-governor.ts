@@ -31,6 +31,8 @@ export interface TimelineGovernorSnapshot {
   selectedSpeed: number;
   effectiveSpeed: number;
   recommendedSpeed: number | null;
+  manualSpeedLimit: number;
+  manualSpeedLimitReason: 'mock_capacity' | 'warming_up' | 'measured_capacity';
   adaptiveCeiling: number;
   synchronizing: boolean;
   paused: boolean;
@@ -68,6 +70,24 @@ export class TimelineGovernor {
   }
 
   get mode(): TimelineMode { return this.modeValue; }
+
+  /**
+   * 手动档位也必须服从真实模型的可持续容量。Mock 仅用于工程回归，保留完整档位；
+   * 真实 provider 在形成至少两个吞吐样本前采用保守冷启动上限。
+   */
+  manualSpeedLimit(): Pick<TimelineGovernorSnapshot, 'manualSpeedLimit' | 'manualSpeedLimitReason'> {
+    if (this.gateway.runtimeSnapshot().mode === 'mock') {
+      return { manualSpeedLimit: MAX_WORLD_SPEED, manualSpeedLimitReason: 'mock_capacity' };
+    }
+    const performance = this.gateway.throughputSnapshot();
+    if (performance.sampleCount < 2 || performance.recommendedMaxWorldSpeed === null) {
+      return { manualSpeedLimit: 0.2, manualSpeedLimitReason: 'warming_up' };
+    }
+    return {
+      manualSpeedLimit: floorPreset(performance.recommendedMaxWorldSpeed),
+      manualSpeedLimitReason: 'measured_capacity',
+    };
+  }
 
   setManual(
     speed: number,
@@ -124,6 +144,7 @@ export class TimelineGovernor {
     scheduler = this.gateway.schedulerSnapshot(),
   ): TimelineGovernorSnapshot {
     const performance = scheduler.performance;
+    const manualLimit = this.manualSpeedLimit();
     const selectedSpeed = speedOf(worlds);
     const synchronizing = scheduler.pressureReason === 'cognitive_sync';
     const queuePressure = scheduler.pressureReason === 'queue_capacity' || scheduler.pressureReason === 'queue_wait';
@@ -143,6 +164,7 @@ export class TimelineGovernor {
       selectedSpeed,
       effectiveSpeed: paused || scheduler.backpressured ? 0 : selectedSpeed,
       recommendedSpeed: performance.recommendedMaxWorldSpeed,
+      ...manualLimit,
       adaptiveCeiling: this.adaptiveCeiling,
       synchronizing,
       paused,

@@ -30,7 +30,7 @@ function fixtureDir(): string {
   return dir;
 }
 
-async function setup(enableRuntimeLog = false) {
+async function setup(enableRuntimeLog = false, gateway = new LLMGateway({ provider: 'mock' })) {
   const dir = fixtureDir();
   const db = openDb(':memory:');
   const log = new EventLog(db);
@@ -40,7 +40,6 @@ async function setup(enableRuntimeLog = false) {
   ];
   const world = new WorldState(OBJS, agents);
   const time = new TimeEngine(5);
-  const gateway = new LLMGateway({ provider: 'mock' });
   const executor = new AgentExecutor(gateway, world, log);
   const loop = new WorldLoop(time, world, executor, log, db);
   const runtimeLog = enableRuntimeLog
@@ -127,10 +126,50 @@ test('推理状态接口公开有界队列与背压指标', async () => {
       cognitionBudget: { modelRequests: 0, groundedContinuations: 0, playerBypasses: 0 },
       timeline: {
         mode: 'manual', selectedSpeed: 10, effectiveSpeed: 10,
-        recommendedSpeed: null, adaptiveCeiling: 60, synchronizing: false,
+        recommendedSpeed: null, manualSpeedLimit: 60, manualSpeedLimitReason: 'mock_capacity',
+        adaptiveCeiling: 60, synchronizing: false,
         paused: false, reason: 'manual', stableEvaluations: 0, lastChangedAt: null,
       },
     });
+  } finally {
+    await server.close();
+  }
+});
+
+test('真实 provider 未形成吞吐证据前限制手动速度并由服务端拒绝越界请求', async () => {
+  const gateway = new LLMGateway({
+    provider: {
+      name: 'local-real-test',
+      async complete() {
+        return { content: '{}', parsed: {}, usage: { inputTokens: 1, outputTokens: 1, costYuan: 0 } };
+      },
+    },
+  });
+  const { server, base, time } = await setup(false, gateway);
+  try {
+    assert.equal(time.gameMinutesPerTick * 2, 0.2);
+    const status = await (await fetch(`${base}/api/llm/status`)).json() as {
+      timeline: { manualSpeedLimit: number; manualSpeedLimitReason: string };
+    };
+    assert.equal(status.timeline.manualSpeedLimit, 0.2);
+    assert.equal(status.timeline.manualSpeedLimitReason, 'warming_up');
+
+    const unsafe = await fetch(`${base}/api/world/control`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'speed', value: 1 }),
+    });
+    assert.equal(unsafe.status, 409);
+    const refusal = await unsafe.json() as { error: string; manualSpeedLimit: number };
+    assert.equal(refusal.manualSpeedLimit, 0.2);
+    assert.match(refusal.error, /吞吐预热|0\.2×/);
+    assert.equal(time.gameMinutesPerTick * 2, 0.2);
+
+    const safe = await fetch(`${base}/api/world/control`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'speed', value: 0.1 }),
+    });
+    assert.equal(safe.status, 200);
+    assert.equal(time.gameMinutesPerTick * 2, 0.1);
   } finally {
     await server.close();
   }
@@ -237,11 +276,21 @@ test('动作质量记录保留在事件库且不进入叙事接口', async () =>
       description: '甲 开始整理广场。', location: 'obj:plaza', gameTime: 0,
       payload: { kind: 'interact' },
     });
+    log.addEvent({
+      id: 'story-2', type: 'move', actorId: 'agent:1', targetIds: ['obj:bed'],
+      description: '甲 到达床。', location: 'obj:bed', gameTime: 0,
+      payload: null,
+    });
     assert.equal(log.eventsOfKind('action_decision_quality').length, 1);
     const narrative = await (await fetch(`${base}/api/narrative?limit=100`)).json() as {
-      items: Array<{ id: string; kind: string }>;
+      items: Array<{ id: string; kind: string; researchTier: string; researchLabel: string }>;
     };
-    assert.ok(narrative.items.some((item) => item.id === 'story-1'));
+    const routine = narrative.items.find((item) => item.id === 'story-1');
+    assert.equal(routine?.researchTier, 'routine');
+    assert.equal(routine?.researchLabel, '例行记录');
+    const legacyRoutine = narrative.items.find((item) => item.id === 'story-2');
+    assert.equal(legacyRoutine?.kind, 'move');
+    assert.equal(legacyRoutine?.researchTier, 'routine');
     assert.ok(!narrative.items.some((item) => item.kind === 'action_decision_quality'));
   } finally {
     await server.close();
@@ -273,11 +322,15 @@ test('叙事接口投影活动现场与馈礼履约的场景证据', async () =>
     };
     const activity = narrative.items.find((item) => item.id === 'event-verified');
     assert.equal(activity?.eventStatus, 'active');
+    assert.equal(activity?.researchTier, 'signal');
+    assert.equal(activity?.researchLabel, '事件结果');
     assert.equal(activity?.venueId, 'obj:plaza');
     assert.equal(activity?.participantCount, 2);
     assert.deepEqual(activity?.sensoryCues, ['摊位交谈声']);
     const gift = narrative.items.find((item) => item.id === 'gift-fulfilled');
     assert.equal(gift?.eventStatus, 'fulfilled');
+    assert.equal(gift?.researchTier, 'signal');
+    assert.equal(gift?.researchLabel, '馈礼与关系');
     assert.equal(gift?.sourceObjectName, '花店服务台');
     assert.equal(gift?.deliveryLocationName, '中央广场');
   } finally {

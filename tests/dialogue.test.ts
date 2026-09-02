@@ -264,7 +264,8 @@ test('摘要写入双方记忆流', async () => {
 test('对话结束双向更新关系（渐进 + knowledge）', async () => {
   const { store, world, dialogue, a, b } = setup();
   const rels = new RelationshipStore(openDb(':memory:'));
-  const d2 = new DialogueEngine(new LLMGateway({ provider: 'mock' }), store, new EventLog(openDb(':memory:')), 12, rels);
+  const d2Log = new EventLog(openDb(':memory:'));
+  const d2 = new DialogueEngine(new LLMGateway({ provider: 'mock' }), store, d2Log, 12, rels);
   d2.start(a, b, 10);
   await flush();
   for (let now = 12; now <= 40; now += 2) { d2.tick(world, 2, now); await flush(); }
@@ -274,6 +275,11 @@ test('对话结束双向更新关系（渐进 + knowledge）', async () => {
   assert.ok(ba.affection > 0);
   assert.ok(ab.knowledge.length >= 1);
   assert.ok(ab.affection <= 0.2); // 渐进上限
+  const summary = d2Log.eventsForDay(1).find((event) => event.payload?.kind === 'chat_summary');
+  assert.equal(typeof summary?.payload?.affectionDelta, 'number');
+  assert.equal(typeof summary?.payload?.respectDelta, 'number');
+  assert.equal(typeof summary?.payload?.trustDelta, 'number');
+  assert.equal(typeof summary?.payload?.tensionDelta, 'number');
 });
 
 test('摘要缺失或返回无效关系增量时保持零漂移', async () => {

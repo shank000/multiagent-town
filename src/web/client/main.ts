@@ -119,6 +119,8 @@ interface TimelineControlView {
   selectedSpeed: number;
   effectiveSpeed: number;
   recommendedSpeed: number | null;
+  manualSpeedLimit: number;
+  manualSpeedLimitReason: 'mock_capacity' | 'warming_up' | 'measured_capacity';
   adaptiveCeiling: number;
   synchronizing: boolean;
   paused: boolean;
@@ -311,6 +313,7 @@ async function main(): Promise<void> {
   bindWorkspaceInteractions();
   bindNetworkInteractions();
   bindMetricTabs();
+  bindNarrativeMode();
   bindNarrativeFollow();
   bindPlayBar();
   bindResearchDialogs();
@@ -583,25 +586,46 @@ const feed: FeedItem[] = [];
 interface NarrativeItem {
   id: string; seq: number; time: number; day: number; minute: number; type: string; kind: string;
   actor: string | null; actorName: string; target: string | null; targetName: string | null;
+  fromId: string | null; fromName: string; toId: string | null; toName: string;
   text: string; line: string | null; thought: string | null;
   mode: string | null; chosen: string | null;
   candidates: { id: string; name: string; affection: number; lastInteraction: number }[] | null;
   interactionType: string | null; interactionLabel: string | null; icon: string | null; source: string | null;
-  eventStatus: string | null;
+  eventStatus: string | null; errorText: string | null;
+  affectionDelta: number | null; respectDelta: number | null; trustDelta: number | null; tensionDelta: number | null;
   objectId: string | null; objectName: string | null; lifeCategory: string | null;
   venueId: string | null; venueName: string | null; participantCount: number;
   sourceObjectId: string | null; sourceObjectName: string | null;
   deliveryLocationId: string | null; deliveryLocationName: string | null;
   sensoryCues: string[]; observerCount: number;
+  researchTier: 'signal' | 'context' | 'routine'; researchLabel: string;
 }
 let lastNarrativeSignature = '';
 let lastNarrativeAt = 0;
 let narrativeFollow = true;
+let narrativeViewMode: 'research' | 'all' = 'research';
+let narrativeItems: NarrativeItem[] = [];
 
 /** 叙事流：SillyTavern 式时间轴卡片 + 对话气泡 + 内心独白 */
 function renderNarrative(items: NarrativeItem[]): void {
   const box = document.getElementById('narrative');
   if (!box) return;
+  narrativeItems = items;
+  const visibleItems = narrativeViewMode === 'all'
+    ? items
+    : items.filter((item) => item.researchTier !== 'routine');
+  const hiddenRoutineCount = items.length - visibleItems.length;
+  const signalCount = items.filter((item) => item.researchTier === 'signal').length;
+  const contextCount = items.filter((item) => item.researchTier === 'context').length;
+  document.querySelectorAll<HTMLButtonElement>('[data-narrative-mode]').forEach((button) => {
+    const active = button.dataset.narrativeMode === narrativeViewMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  const count = document.getElementById('narrative-count');
+  if (count) count.textContent = narrativeViewMode === 'research'
+    ? `${signalCount} 条核心信号 · ${contextCount} 条情境记录 · 收起 ${hiddenRoutineCount} 条例行记录`
+    : `${items.length} 条完整投影`;
   const activeElement = document.activeElement instanceof HTMLElement && box.contains(document.activeElement)
     ? document.activeElement
     : null;
@@ -620,8 +644,20 @@ function renderNarrative(items: NarrativeItem[]): void {
   const previousTop = box.scrollTop;
   const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   const frag = document.createDocumentFragment();
+  if (narrativeViewMode === 'research' && hiddenRoutineCount > 0) {
+    const summary = document.createElement('div');
+    summary.className = 'nar-routine-summary';
+    summary.innerHTML = `<span>已收起 ${hiddenRoutineCount} 条移动、例行动作与重复独白</span><button type="button" data-show-all-records>查看完整记录</button>`;
+    frag.appendChild(summary);
+  }
+  if (visibleItems.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'label nar-signal-empty';
+    empty.textContent = '当前时间窗尚无对话、关系变化或事件结果；例行记录仍完整保留。';
+    frag.appendChild(empty);
+  }
   let lastDay = -1;
-  for (const it of items) {
+  for (const it of visibleItems) {
     if (it.day !== lastDay) {
       lastDay = it.day;
       const sep = document.createElement('div');
@@ -631,9 +667,22 @@ function renderNarrative(items: NarrativeItem[]): void {
     }
     const card = document.createElement('div');
     card.dataset.eventId = it.id;
-    const meta = `<span class="nar-meta">${hhmm(it.minute)}</span>`;
+    card.dataset.researchTier = it.researchTier;
+    const meta = `<span class="nar-signal ${it.researchTier}">${escapeHtml(it.researchLabel)}</span><span class="nar-meta">${hhmm(it.minute)}</span>`;
     const actorData = it.actor ? encodeURIComponent(it.actor) : '';
-    if (it.kind.startsWith('chat')) {
+    if (it.kind === 'chat_summary') {
+      const from = it.fromId ? snap?.agents.find((agent) => agent.id === it.fromId) : null;
+      const to = it.toId ? snap?.agents.find((agent) => agent.id === it.toId) : null;
+      const deltas = [
+        ['情感', it.affectionDelta], ['尊重', it.respectDelta], ['信任', it.trustDelta], ['张力', it.tensionDelta],
+      ].filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Math.abs(entry[1]) > 1e-9)
+        .map(([label, value]) => `<span class="relationship-delta ${value < 0 || label === '张力' ? 'negative' : 'positive'}">${label} ${value > 0 ? '+' : ''}${value.toFixed(2)}</span>`).join('');
+      card.className = 'nar-card relationship-summary';
+      card.innerHTML = `<div class="interaction-people">${from ? `<button type="button" data-agent-id="${encodeURIComponent(from.id)}">${pixelAvatarMarkup(from.name, from.avatar, 'narrative-avatar')}<span>${escapeHtml(from.name)}</span></button>` : ''}<i>↔</i>${to ? `<button type="button" data-agent-id="${encodeURIComponent(to.id)}">${pixelAvatarMarkup(to.name, to.avatar, 'narrative-avatar')}<span>${escapeHtml(to.name)}</span></button>` : ''}${meta}</div><div class="nar-prose"><span class="nar-title">对话完成 · 关系证据</span><br>${escapeHtml(it.line ?? it.text)}</div><div class="relationship-deltas">${deltas || '<span class="relationship-delta neutral">本轮关系维持</span>'}</div>`;
+    } else if (it.kind === 'dialogue_lifecycle' && (it.eventStatus === 'failed' || it.eventStatus === 'interrupted')) {
+      card.className = 'nar-card social-outcome negative';
+      card.innerHTML = `${meta}<span class="nar-title">会话未正常完成</span><div class="nar-prose">${escapeHtml(it.text)}</div>${it.errorText ? `<small>${escapeHtml(it.errorText)}</small>` : ''}`;
+    } else if (it.kind.startsWith('chat')) {
       card.className = 'nar-bubble';
       const actor = it.actor ? snap?.agents.find((agent) => agent.id === it.actor) : null;
       card.innerHTML = `<div class="nar-head"><button type="button" class="nar-ava" data-agent-id="${actorData}" aria-label="查看 ${escapeHtml(it.actorName)}">${actor ? pixelAvatarMarkup(actor.name, actor.avatar, 'narrative-avatar') : escapeHtml(it.actorName.slice(0, 1))}</button><div class="nar-speaker"><button type="button" class="nar-name" data-agent-id="${actorData}">${escapeHtml(it.actorName)}</button>${it.targetName ? `<small>对 ${escapeHtml(it.targetName)} 说</small>` : ''}</div>${meta}</div><div class="nar-text">${escapeHtml(it.line ?? it.text)}</div>`;
@@ -695,6 +744,10 @@ function renderNarrative(items: NarrativeItem[]): void {
   }
   box.innerHTML = '';
   box.appendChild(frag);
+  box.querySelector<HTMLButtonElement>('[data-show-all-records]')?.addEventListener('click', () => {
+    narrativeViewMode = 'all';
+    renderNarrative(narrativeItems);
+  });
   box.querySelectorAll<HTMLElement>('[data-agent-id]').forEach((element) => {
     element.addEventListener('click', () => {
       const encoded = element.dataset.agentId;
@@ -734,11 +787,11 @@ async function pollNarrative(): Promise<void> {
   lastNarrativeAt = now;
   try {
     const requestedWorld = activeWorldId;
-    const res = await fetch(`/api/narrative?limit=300&worldId=${encodeURIComponent(requestedWorld)}`);
+    const res = await fetch(`/api/narrative?limit=500&worldId=${encodeURIComponent(requestedWorld)}`);
     if (!res.ok) throw new Error(String(res.status));
     const r = (await res.json()) as { worldId?: string; items: NarrativeItem[] };
     if (activeWorldId !== requestedWorld || r.worldId !== requestedWorld) return;
-    const fresh = r.items.filter((x) => (x.id ?? '') !== '' && x.seq >= 0).slice(-120);
+    const fresh = r.items.filter((x) => (x.id ?? '') !== '' && x.seq >= 0).slice(-300);
     const signature = `${requestedWorld}\u0000${fresh.map((item) => item.id).join('\u0000')}`;
     if (signature === lastNarrativeSignature) return;
     lastNarrativeSignature = signature;
@@ -1066,6 +1119,7 @@ function installWorldSnapshot(next: WorldSnapshot): void {
   feed.length = 0;
   lastNarrativeSignature = '';
   lastNarrativeAt = 0;
+  narrativeItems = [];
   narrativeFollow = true;
   const narrative = document.getElementById('narrative');
   if (narrative) narrative.innerHTML = '<p class="label">正在读取当前世界的社会事件…</p>';
@@ -1155,6 +1209,7 @@ function pollLLMStatus(): void {
         ? `<span class="llm-dot"></span>${runtimeLabel} · ${queued} 排队${waitSeconds ? ` · ${waitSeconds}s` : ''}${calibration}`
         : `<span class="llm-dot"></span>${runtimeLabel} · ${active ? '生成中' : '就绪'}${calibration}`;
     timelineControl = status.timeline ?? null;
+    syncManualSpeedAvailability();
     const timelineElement = document.getElementById('timeline-status');
     if (timelineElement && timelineControl) {
       const selected = timelineControl.selectedSpeed;
@@ -1168,7 +1223,11 @@ function pollLLMStatus(): void {
       timelineElement.classList.toggle('adaptive', timelineControl.mode === 'adaptive');
       timelineElement.classList.toggle('sync', timelineControl.synchronizing);
       timelineElement.innerHTML = `<span class="timeline-dot"></span>${label}`;
+      timelineElement.title = timelineControl.manualSpeedLimitReason === 'warming_up'
+        ? `真实模型吞吐预热中，手动档位暂限 ${timelineControl.manualSpeedLimit}×`
+        : `当前可持续手动速度上限 ${timelineControl.manualSpeedLimit}×`;
     }
+    if (currentWorkspace) renderWorkspaceExplorer(currentWorkspace, timelineControl?.selectedSpeed);
     updateHud();
   }).catch(() => {
     const element = document.getElementById('llm-status');
@@ -1176,6 +1235,35 @@ function pollLLMStatus(): void {
   });
 }
 setInterval(pollLLMStatus, 2000);
+
+function syncManualSpeedAvailability(): void {
+  const limit = timelineControl?.manualSpeedLimit ?? 0.2;
+  const reason = timelineControl?.manualSpeedLimitReason ?? 'warming_up';
+  const controls = [
+    document.getElementById('timeline-speed-select') as HTMLSelectElement | null,
+    document.querySelector<HTMLSelectElement>('#workspace-create-form select[name="worldSpeed"]'),
+  ].filter((control): control is HTMLSelectElement => control !== null);
+  for (const control of controls) {
+    for (const option of Array.from(control.options)) {
+      const speed = Number(option.value);
+      option.disabled = Number.isFinite(speed) && speed > limit + 1e-9;
+      option.title = option.disabled ? `超过当前模型可持续上限 ${limit}×` : '';
+    }
+    if (Number(control.value) > limit + 1e-9 && control.id !== 'timeline-speed-select') {
+      const safe = Array.from(control.options).filter((option) => !option.disabled).at(-1);
+      if (safe) control.value = safe.value;
+    }
+    control.title = reason === 'warming_up'
+      ? `吞吐预热中，暂开放至 ${limit}×`
+      : `根据模型实测吞吐开放至 ${limit}×`;
+  }
+  const guidance = document.getElementById('workspace-speed-guidance');
+  if (guidance) guidance.textContent = reason === 'warming_up'
+    ? `吞吐预热中：当前最多 ${limit}×，完成校准后自动开放可持续档位`
+    : reason === 'mock_capacity'
+      ? 'Mock 工程模式开放全部档位；正式实验请切换真实模型'
+      : `依据当前模型吞吐，手动速度上限为 ${limit}×`;
+}
 
 function llmModeLabel(mode: LLMRuntimeView['mode']): string {
   if (mode === 'mock') return 'Mock 模拟';
@@ -1378,7 +1466,7 @@ function syncWorkspaceExplorerActive(worldId: string): void {
   });
 }
 
-function renderWorkspaceExplorer(workspace: WorkspaceMetaView): void {
+function renderWorkspaceExplorer(workspace: WorkspaceMetaView, liveSpeed = timelineControl?.selectedSpeed): void {
   const count = document.getElementById('workspace-loaded-count');
   if (count) count.textContent = `${workspace.worldCount} / 3`;
   const tree = document.getElementById('workspace-tree');
@@ -1388,7 +1476,11 @@ function renderWorkspaceExplorer(workspace: WorkspaceMetaView): void {
       if (!kind) return '';
       return `<button type="button" class="workspace-tree-world" role="treeitem" data-workspace-world-id="${escapeHtml(worldId)}"><i>${escapeHtml(worldId.toUpperCase())}</i><span><b>${escapeHtml(workspaceKindLabel(kind))}</b><small>${escapeHtml(workspaceKindDescription(kind))}</small></span><em aria-hidden="true"></em></button>`;
     }).join('');
-    tree.innerHTML = `<div class="workspace-tree-root" role="treeitem" aria-expanded="true"><span aria-hidden="true">▾</span><b>${escapeHtml(workspace.name)}</b><small>seed ${workspace.seed} · ${workspace.defaultExperimentDays} 天 · ${workspace.worldSpeed}×</small></div>${children}`;
+    const speed = Number.isFinite(liveSpeed) ? Number(liveSpeed) : workspace.worldSpeed;
+    const speedLabel = Math.abs(speed - workspace.worldSpeed) < 1e-9
+      ? `当前 ${speed}×`
+      : `当前 ${speed}× · 初始 ${workspace.worldSpeed}×`;
+    tree.innerHTML = `<div class="workspace-tree-root" role="treeitem" aria-expanded="true"><span aria-hidden="true">▾</span><b>${escapeHtml(workspace.name)}</b><small>seed ${workspace.seed} · ${workspace.defaultExperimentDays} 天 · ${speedLabel}</small></div>${children}`;
   }
   const status = document.getElementById('workspace-explorer-status');
   if (status) status.textContent = `${workspace.worldCount} 个世界已加载 · ${workspace.startPaused ? '等待启动' : '正在运行'}`;
@@ -2235,6 +2327,15 @@ function bindNarrativeFollow(): void {
   });
 }
 
+function bindNarrativeMode(): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-narrative-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      narrativeViewMode = button.dataset.narrativeMode === 'all' ? 'all' : 'research';
+      renderNarrative(narrativeItems);
+    });
+  });
+}
+
 function bindControls(): void {
   document.querySelectorAll('#controls button[data-action]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -2273,11 +2374,13 @@ function bindControls(): void {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'speed', value }),
       });
-      if (!response.ok) throw new Error(String(response.status));
-      timelineControl = timelineControl ? { ...timelineControl, mode: 'manual', selectedSpeed: value } : null;
+      const result = await response.json() as { error?: string; timeline?: TimelineControlView | null };
+      if (!response.ok) throw new Error(result.error || String(response.status));
+      timelineControl = result.timeline ?? (timelineControl ? { ...timelineControl, mode: 'manual', selectedSpeed: value } : null);
+      syncManualSpeedAvailability();
       showToast(`手动世界时间设为 ${value}×；真实模型生成期间仍自动进入认知同步`, 'info');
-    } catch {
-      showToast('世界时间倍率未生效，请检查服务状态', 'error');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '世界时间倍率未生效，请检查服务状态', 'error');
       updateHud();
     } finally {
       speedSelect.disabled = false;
