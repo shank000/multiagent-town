@@ -106,7 +106,7 @@ export class Planner {
       : undefined;
     const fallbackChoice = fallbackHourChoices(catalog, agent.id, hour)[0];
     const fallbackOption = fallbackChoice ? catalog.find((option) => option.id === fallbackChoice.optionId) : undefined;
-    const option = hourlyOption ?? activeRoutine ?? dailyOptions[0] ?? fallbackOption;
+    const option = hourlyOption ?? activeRoutine ?? rotatedDailyOption(dailyOptions, agent.id, day, hour) ?? fallbackOption;
     if (!option) return null;
     const routineSlot = option.kind === 'routine'
       ? agent.persona.routine.find((slot) => (
@@ -212,7 +212,7 @@ export class Planner {
       && option.fromMinute !== null && option.toMinute !== null
       && option.fromMinute < hourEnd && option.toMinute > hourStart
     ));
-    const selected = activeRoutine ?? selectedDaily.find((option) => option.actorId === agent.id);
+    const selected = activeRoutine ?? rotatedDailyOption(selectedDaily, agent.id, day, hour);
     return selected
       ? [{ time: `${String(hour).padStart(2, '0')}:00`, optionId: selected.id }]
       : fallbackHourChoices(catalog, agent.id, hour);
@@ -281,6 +281,21 @@ function dailyOptionSchema(optionIds: readonly string[]): Record<string, unknown
       option_ids: { type: 'array', minItems: 3, maxItems: 5, uniqueItems: true, items: { type: 'string', enum: optionIds } },
     },
   };
+}
+
+function rotatedDailyOption(
+  options: readonly PlanningOption[],
+  agentId: string,
+  day: number,
+  hour: number,
+): PlanningOption | undefined {
+  if (!options.length) return undefined;
+  let hash = 2_166_136_261;
+  for (const char of `${agentId}:${day}:${hour}`) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619) >>> 0;
+  }
+  return options[hash % options.length];
 }
 
 function optionRepairInstruction(

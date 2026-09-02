@@ -340,6 +340,24 @@ test('已有自由文本小时议程不会通过闭世界提交边界累积', as
   db.raw.close();
 });
 
+test('无生效作息时按 agent/day/hour 稳定轮换已审计日选项', async () => {
+  const db = openDb(':memory:');
+  const store = new MemoryStore(db);
+  const planner = new Planner(new LLMGateway({ provider: 'mock' }), store, 'rotation-test');
+  const rotationWorld = buildTown();
+  const agent = rotationWorld.allAgents()[0];
+  agent.persona = { ...agent.persona, routine: [] };
+  planner.bindWorld(rotationWorld);
+  await planner.dailyPlan(agent, 1, 300);
+  for (const hour of [10, 11, 12, 13]) await planner.decomposeHour(agent, 1, hour, hour * 60);
+  const first = store.planFor(agent.id, 1)?.hourly ?? [];
+  assert.ok(new Set(first.map((item) => `${item.action}@${item.location}`)).size >= 2);
+  const atTen = first.find((item) => item.time === '10:00');
+  await planner.decomposeHour(agent, 1, 10, 610);
+  assert.deepEqual(store.planFor(agent.id, 1)?.hourly.find((item) => item.time === '10:00'), atTen);
+  db.raw.close();
+});
+
 test('规划提示显式列出闭世界选项并保持有界，结构说明不受叙事过滤影响', () => {
   const agent = world.allAgents()[0];
   const options = buildPlanningOptions(agent, world);

@@ -517,7 +517,11 @@ export class AgentExecutor {
 
   private groundedActionThought(agent: Agent, decision: Decision): string {
     const current = this.world.getObject(agent.locationId)?.name ?? '这里';
-    if (decision.action.type === 'idle') return `我准备在「${current}」短暂休息。`;
+    if (decision.action.type === 'idle') {
+      return /观察|留意|查看/u.test(decision.action.verb)
+        ? `我准备留在「${current}」观察周围。`
+        : `我准备在「${current}」短暂休息。`;
+    }
     const place = this.world.getObject(decision.action.target)?.name ?? '当前地点';
     if (decision.action.type === 'move_to') return `我准备前往「${place}」。`;
     return `我准备到「${place}」${decision.action.verb}。`;

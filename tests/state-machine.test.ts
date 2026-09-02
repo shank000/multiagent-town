@@ -167,6 +167,22 @@ test('新的玩家指令可绕过生产每小时额度且同一指令不会反�
   db.raw.close();
 });
 
+test('观察型连续 idle 的代码独白与动作一致，不误写为休息', async () => {
+  const { log, agent, executor } = setup([
+    { content: '', parsed: { thought: '先休息', action: { type: 'idle', target: null, verb: '休息' }, duration_minutes: 10 } },
+  ]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  executor.progress(agent, 0, 20);
+  executor.progress(agent, 0, 30);
+  assert.equal(agent.action?.action.verb, '观察周围');
+  assert.match(agent.thought ?? '', /观察周围/);
+  assert.doesNotMatch(agent.thought ?? '', /休息/);
+  const continuity = log.eventsForDay(1).find((event) => event.payload?.source === 'continuity');
+  assert.match(continuity?.description ?? '', /观察周围/);
+});
+
 test('校验失败会携带原因重试，仍失败时使用叙事安全的 idle', async () => {
   const { log, agent, executor, gateway, provider } = setup([
     { content: '', parsed: { action: { type: 'interact', target: 'obj:mars' }, duration_minutes: 10 } },
