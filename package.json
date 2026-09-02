@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --no-warnings --import tsx --test \"tests/*.test.ts\"",
     "test:agents:real": "node --no-warnings --import tsx src/cli/real-agent-check.ts",
+    "test:runtime:real": "node --expose-gc --no-warnings --import tsx src/cli/runtime-soak.ts",
     "typecheck": "tsc --noEmit",
     "town": "node --no-warnings --import tsx src/cli/run.ts",
     "replay": "node --no-warnings --import tsx src/cli/replay.ts",

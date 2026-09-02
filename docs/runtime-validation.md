@@ -2,6 +2,28 @@
 
 > 机制与压力数据日期：2026-08-23；SDK 合同复验日期：2026-08-29；本地真实模型并发回归日期：2026-08-30；终态一致性与对话质量门复验日期：2026-08-31。每项证据按其能够支持的范围解释。
 
+## 可复用的真实模型运行耐久门
+
+运行器只连接本地 Ollama（默认使用既有 `qwen3-balanced` profile 和 `127.0.0.1:11434`），不会启动、停止或重置任何服务。所有 SQLite 与 JSON 输出必须位于已被 Git 忽略的 `data/` 目录。开发冒烟命令：
+
+```bash
+pnpm test:runtime:real -- --worlds 1 --waves 1 --pairs-per-world 3 --forced-timeout-ms 5 --output data/runtime-soak/dev-smoke
+```
+
+需要形成内存稳定性证据时使用至少 3 个波次；例如保留默认单世界规模：
+
+```bash
+pnpm test:runtime:real -- --worlds 1 --waves 3 --pairs-per-world 3 --forced-timeout-ms 5 --output data/runtime-soak/local-stability
+```
+
+参数采用严格边界：`worlds=1..3`、`waves=1..8`、`pairs-per-world=1..3`、`forced-timeout-ms=1..1000`。`--output` 可指向目录或 `.json` 文件，但必须在仓库 `data/` 下且尚不存在；运行器拒绝复用旧数据库或覆盖既有报告。运行器总是先安全落盘 JSON 报告，再根据十项合同设置退出码；任意合同失败即为非零。
+
+十项合同固定为：真实 provider、正常会话数量、正常终态与 4–6 轮限制、完整 queued/started/completed 生命周期、共享队列压力有观测且不越界、真实 Ollama 超时诊断、超时后的安全 fallback 完成、SQLite 完整性/时间线/消息序列、稳定内存、干净排空与关闭。报告只保存计数、状态、时延、模型名和已清洗错误，不保存提示正文、消息正文或凭据。
+
+内存检查要求以 `node --expose-gc` 取得基线和逐波次 post-GC 检查点。第一波视为热身；至少 3 波时，post-warmup 堆净增长不得超过 `max(32 MiB, 首波堆×25%)`，线性斜率不得超过 `max(16 MiB/波, 首波堆×12%/波)`。单波开发冒烟会明确报告 `insufficient`，并使 `memory.stabilized` 合同失败；它可以验证执行路径，却不能声称长运行稳定。`global.gc` 不可用同样不能通过该合同。
+
+该门验证的是运行工程合同：真实生成、排队、超时恢复、持久化不变量和进程内存边界。它不估计、不支持、也不应被解释为任何社会科学处理效应或人物行为效应；正式科学结论仍必须来自预注册设计与独立分析。
+
 ## 1. 本地 TypeScript 机制正控
 
 命令：
