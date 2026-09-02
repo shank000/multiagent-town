@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { TimeEngine, type ClockState } from '../core/time';
 import { WorldState } from '../core/world';
 import { AgentExecutor } from '../core/state-machine';
+import type { CognitionBudgetSnapshot } from '../core/state-machine';
 import { EventLog } from '../store/events';
 import type { DbHandle } from '../store/db';
 import type { GameEvent } from '../core/types';
@@ -51,6 +52,10 @@ export class WorldLoop {
 
   setCheckpointWriter(writer: (() => void) | null): void {
     this.checkpointWriter = writer;
+  }
+
+  cognitionBudgetSnapshot(): CognitionBudgetSnapshot {
+    return this.executor.cognitionBudgetSnapshot();
   }
 
   setCoordinatedCheckpointing(enabled: boolean): void {

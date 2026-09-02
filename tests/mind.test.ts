@@ -69,26 +69,13 @@ test('跨日后每位居民形成一份证据约束日记，快速时钟不漏�
   }
 });
 
-test('小时规划合并过期请求，只提交最新时间段', async () => {
-  let releaseFirst!: () => void;
-  let firstStarted!: () => void;
-  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
-  const requestedHours: number[] = [];
+test('小时规划本地派生并合并连续请求，不产生 provider 调用', async () => {
+  const requestedTemplates: string[] = [];
   const provider: LLMProvider = {
     name: 'planning-coalescing',
     async complete(request: LLMRequest): Promise<LLMResponse> {
-      const context = request.messages.find((message) => message.role === 'user')?.content.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/)?.[1];
-      const payload = context ? JSON.parse(context) as { hour?: number; planningOptions?: { id: string }[] } : {};
-      const hour = Number(payload.hour ?? -1);
-      requestedHours.push(hour);
-      if (requestedHours.length === 1) {
-        firstStarted();
-        await firstGate;
-      }
-      const parsed = {
-        agenda: [{ time: `${String(hour).padStart(2, '0')}:00`, option_id: payload.planningOptions?.[0]?.id }],
-      };
+      requestedTemplates.push(request.template);
+      const parsed = {};
       return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
     },
   };
@@ -99,13 +86,11 @@ test('小时规划合并过期请求，只提交最新时间段', async () => {
   planner.bindWorld(world);
   const agent = world.allAgents()[0];
   const first = planner.scheduleHour(agent, 1, 1, 60);
-  await started;
   const second = planner.scheduleHour(agent, 1, 2, 120);
   const latest = planner.scheduleHour(agent, 1, 3, 180);
-  releaseFirst();
   await Promise.all([first, second, latest, planner.drain()]);
-  assert.deepEqual(requestedHours, [1, 3]);
+  assert.deepEqual(requestedTemplates, []);
   const plan = store.planFor(agent.id, 1);
-  assert.deepEqual(plan?.hourly.map((item) => item.time), ['03:00']);
+  assert.deepEqual(plan?.hourly.map((item) => item.time), ['01:00', '03:00']);
   db.raw.close();
 });

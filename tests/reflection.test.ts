@@ -8,9 +8,7 @@ import { ReflectionEngine, reflectionDiaryOf } from '../src/engine/reflection';
 import { makeAgent, persona, flush } from './helpers';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../src/llm/types';
 import {
-  REFLECTION_INSIGHTS_TEMPLATE,
   REFLECTION_JOURNAL_TEMPLATE,
-  REFLECTION_QUESTIONS_TEMPLATE,
 } from '../src/llm/prompts';
 
 function setup() {
@@ -144,7 +142,7 @@ test('反思模型不可用时仍以事件证据形成日记，并标注降级�
   const event = log.eventsForDay(1).find((item) => item.payload?.kind === 'reflection');
   const quality = event?.payload?.quality as { status?: string; degradedStages?: string[] } | undefined;
   assert.equal(quality?.status, 'model_fallback');
-  assert.deepEqual(quality?.degradedStages, ['questions', 'journal']);
+  assert.deepEqual(quality?.degradedStages, ['journal']);
 
   db.raw.close();
 });
@@ -168,20 +166,15 @@ test('持久证据水位线支持两次触发反思与全天日记，且不重�
   const provider: LLMProvider = {
     name: 'reflection-watermark',
     async complete(request: LLMRequest): Promise<LLMResponse> {
-      let parsed: Record<string, unknown>;
-      if (request.template === REFLECTION_QUESTIONS_TEMPLATE) {
-        parsed = { questions: ['今天发生了什么？', '我该如何理解？', '下一步怎么做？'] };
-      } else if (request.template === REFLECTION_INSIGHTS_TEMPLATE) {
-        parsed = { insights: ['我应该认真观察。', '我应该认真观察！'] };
-      } else {
-        assert.equal(request.template, REFLECTION_JOURNAL_TEMPLATE);
-        const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
-        const match = user.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/);
-        assert.ok(match);
-        const context = JSON.parse(match[1]) as Record<string, unknown>;
-        journalContexts.push(context);
-        const evidence = context.evidence as { id: string }[];
-        parsed = {
+      assert.equal(request.template, REFLECTION_JOURNAL_TEMPLATE);
+      const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
+      const match = user.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/);
+      assert.ok(match);
+      const context = JSON.parse(match[1]) as Record<string, unknown>;
+      journalContexts.push(context);
+      const evidence = context.evidence as { id: string }[];
+      const parsed: Record<string, unknown> = {
+          questions: ['今天发生了什么？', '我该如何理解？', '下一步怎么做？'],
           diary: '只使用证据完成日记。',
           mind_state: {
             valence: 0, energy: 0.5, stress: 0.3, social_need: 0.5,
@@ -194,7 +187,6 @@ test('持久证据水位线支持两次触发反思与全天日记，且不重�
           }] : [],
           revisions: [],
           behavior_guidance: ['先核对事实再行动。'],
-        };
       }
       return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
     },
@@ -260,6 +252,9 @@ test('持久证据水位线支持两次触发反思与全天日记，且不重�
       .filter((insight) => insight.replace(/[\s。！!]/gu, '') === duplicateKey).length;
     assert.equal(ledgerCount, 1);
     assert.equal(journalContexts.length, 3);
+    assert.deepEqual(gateway.metricSummary().map(({ template, calls }) => ({ template, calls })), [
+      { template: REFLECTION_JOURNAL_TEMPLATE, calls: 3 },
+    ]);
     assert.ok(journalContexts.every((context) => context.priorDiary === '第一天的正式日记。'));
   } finally {
     await engine.drain();

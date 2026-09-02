@@ -123,6 +123,8 @@ test('推理状态接口公开有界队列与背压指标', async () => {
         p90DialogueLatencyMs: null, p90QueueWaitMs: null,
         recommendedMaxWorldSpeed: null, burstMaxWorldSpeed: 60, confidence: 'unavailable',
       },
+      templateMetrics: [],
+      cognitionBudget: { modelRequests: 0, groundedContinuations: 0, playerBypasses: 0 },
       timeline: {
         mode: 'manual', selectedSpeed: 10, effectiveSpeed: 10,
         recommendedSpeed: null, adaptiveCeiling: 60, synchronizing: false,

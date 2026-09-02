@@ -172,6 +172,7 @@ async function checkPlanning(llm: LLMGateway, agent: Agent): Promise<CheckResult
   planner.bindWorld(world);
   const started = performance.now();
   try {
+    const hourCallsBefore = llm.metricSummary().find((metric) => metric.template === 'hour_plan')?.calls ?? 0;
     const dayStart = (day - 1) * 1440;
     await planner.dailyPlan(resident, day, dayStart + 300);
     await planner.decomposeHour(resident, day, hour, dayStart + hour * 60);
@@ -182,18 +183,21 @@ async function checkPlanning(llm: LLMGateway, agent: Agent): Promise<CheckResult
     const planMemory = store.recentMemories(resident.id, 20).find((memory) => memory.kind === 'plan');
     const memoryGrounded = !!planMemory
       && auditRenderedDailyPlan(planMemory.content.replace(/^第\d+天计划：/, ''), options, world).ok;
+    const hourCallsAfter = llm.metricSummary().find((metric) => metric.template === 'hour_plan')?.calls ?? 0;
+    const hourCallsEliminated = hourCallsAfter === hourCallsBefore;
     const ok = daily.ok && hourly.ok && memoryGrounded
-      && (plan?.hourly ?? []).every((item) => world.hasObject(item.location));
+      && hourCallsEliminated && (plan?.hourly ?? []).every((item) => world.hasObject(item.location));
     const failures = [
       daily.ok ? '' : daily.issues.map((issue) => issue.message).join('；'),
       hourly.ok ? '' : hourly.issues.map((issue) => issue.message).join('；'),
       memoryGrounded ? '' : '计划记忆未通过同一现实边界检查',
+      hourCallsEliminated ? '' : '小时议程仍触发了 hour_plan 模型调用',
     ].filter(Boolean);
     const first = plan?.hourly[0];
     const place = first ? world.getObject(first.location)?.name ?? first.location : '无小时安排';
     return {
       name: '规划', ok, latencyMs: Math.round(performance.now() - started),
-      detail: failures.length ? failures.join('；') : `第${day}天 ${hour}:00 日计划、小时安排与记忆均可还原为闭世界选项`,
+      detail: failures.length ? failures.join('；') : `第${day}天 ${hour}:00 日计划、小时安排与记忆均可还原为闭世界选项，hour_plan 调用=0`,
       sample: `${(plan?.broadPlan ?? '').slice(0, 150)}${first ? ` / ${first.time} ${first.action} @ ${place}` : ''}`,
     };
   } finally {
@@ -405,7 +409,8 @@ async function checkReflection(llm: LLMGateway, agent: Agent, scenario: AgentSce
   const mindOk = !!mind && numericRanges.every(([key, low, high]) => (
     typeof mind[key] === 'number' && Number.isFinite(mind[key]) && Number(mind[key]) >= low && Number(mind[key]) <= high
   )) && typeof mind.summary === 'string' && mind.summary.trim().length > 0;
-  const arraysOk = !!stringArray(parsed?.insights)
+  const arraysOk = (stringArray(parsed?.questions)?.length ?? 0) > 0
+    && !!stringArray(parsed?.insights)
     && Array.isArray(parsed?.beliefs)
     && Array.isArray(parsed?.revisions)
     && !!stringArray(parsed?.behavior_guidance)

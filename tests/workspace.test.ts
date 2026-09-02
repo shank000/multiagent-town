@@ -142,7 +142,12 @@ test('暂停后创建工作空间会等待规划器的后续模型批次共同�
   });
   const base = `http://127.0.0.1:${server.port}`;
   try {
-    for (let index = 0; index < 4; index++) await first.loop.step({ awaitDecisions: false });
+    // 显式形成六居民日计划批次；小时议程已经改为本地派生，不再制造模型队列。
+    first.mind.planner.bindWorld(first.world);
+    for (const agent of first.world.allAgents()) {
+      void first.mind.planner.scheduleDailyAndHour(agent, 1, 5, 300);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const pending = gateway.schedulerSnapshot();
     assert.ok(pending.active > 0 || pending.queued > 0);
 

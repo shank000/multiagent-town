@@ -4,7 +4,7 @@ import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
 import { MemoryStore } from '../src/store/memory';
 import { LLMGateway } from '../src/llm/gateway';
-import { MemoryWriter } from '../src/engine/memory-writer';
+import { MemoryWriter, scoreGameEventImportance } from '../src/engine/memory-writer';
 import { flush } from './helpers';
 import type { GameEvent } from '../src/core/types';
 
@@ -39,11 +39,21 @@ test('chat 事件双方都记；day_start 与 thought 跳过', async () => {
   assert.ok(!store.recentMemories('agent:林晚晴', 20).some((m) => m.content.includes('第1天开始')));
 });
 
-test('importance 经 mock 打分（派对→9）', async () => {
+test('importance 使用事件语义确定性打分，不调用 mock 模型', async () => {
   const { log, store } = setup();
   log.addEvent(ev('e1', 800, '林晚晴 广播「今晚湖边派对！」', 'broadcast', 'agent:林晚晴'));
   await flush();
-  assert.equal(store.recentMemories('agent:林晚晴', 1)[0].importance, 9);
+  assert.equal(store.recentMemories('agent:林晚晴', 1)[0].importance, 6);
+});
+
+test('确定性 importance 区分馈礼冲突、核验共同活动与例行休息', () => {
+  const gift = ev('gift', 1, '白露向周岚送出礼物。', 'interact', 'agent:白露', { kind: 'gift_fulfilled', source: 'partner_choice' });
+  const verified = ev('shared', 2, '两人共同完成活动。', 'interact', 'agent:白露', { kind: 'verified_shared_activity' });
+  const rest = ev('rest', 3, '白露休息。', 'system', 'agent:白露', { kind: 'rest' });
+  assert.equal(scoreGameEventImportance(gift), 9);
+  assert.equal(scoreGameEventImportance({ ...gift }), 9);
+  assert.equal(scoreGameEventImportance(verified), 8);
+  assert.equal(scoreGameEventImportance(rest), 2);
 });
 
 test('reflection、动作质量、对话生命周期与非 agent 事件不写库', async () => {

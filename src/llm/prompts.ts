@@ -18,8 +18,9 @@ export const REFLECTION_JOURNAL_TEMPLATE = 'reflection_journal';
 export const REFLECTION_JOURNAL_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['diary', 'mind_state', 'insights', 'beliefs', 'revisions', 'behavior_guidance'],
+  required: ['questions', 'diary', 'mind_state', 'insights', 'beliefs', 'revisions', 'behavior_guidance'],
   properties: {
+    questions: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 120 } },
     diary: { type: 'string', minLength: 30, maxLength: 1200 },
     mind_state: {
       type: 'object',
@@ -404,10 +405,11 @@ export function reflectionJournalMessages(input: ReflectionJournalInput): ChatMe
     `此前洞察：${input.priorInsights.join('；') || '（暂无）'}\n` +
     `上一份日记：${input.priorDiary || '（暂无）'}\n` +
     `候选新洞察：${input.candidateInsights.join('；') || '（暂无）'}\n` +
-    '规则：日记使用第一人称，结合职业、价值观和心态解释当天经历；事实只能来自证据。主观感受要明确写成感受。只有新证据确实改变旧判断时才填写 revisions。行为指引必须具体、可执行，并服务于后续计划。' +
+    '规则：先从证据提出 1~3 个关于目标、人际关系或重复主题的开放问题，并直接在同一次输出中形成洞察、日记、心态、信念、修订与行为指引。日记使用第一人称，结合职业、价值观和心态解释当天经历；事实只能来自证据。主观感受要明确写成感受。只有新证据确实改变旧判断时才填写 revisions。行为指引必须具体、可执行，并服务于后续计划。' +
     ' 当日事实按证据顺序逐条直接转述，每条证据最多一句；随后再写主观感受和总结。不得添加证据中未出现的对话引语、物品、人物行动、数量、时间、结果、动机或因果关系。人物背景只能解释心态与目标，不能改写成今天发生的事件。' +
     ' 保持输出紧凑并完整闭合 JSON：diary 80~180 字；mind_state.summary 不超过 50 字；insights 1~2 条；beliefs 1~2 条；revisions 0~1 条；behavior_guidance 1~3 条；数组中的每段文字不超过 70 字。没有修正时输出空 revisions 数组。' +
     '\n只输出 JSON：{' +
+    '"questions":["..."],' +
     '"diary":"...",' +
     '"mind_state":{"valence":<-1..1>,"energy":<0..1>,"stress":<0..1>,"social_need":<0..1>,"occupational_focus":<0..1>,"summary":"..."},' +
     '"insights":["..."],' +

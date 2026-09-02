@@ -3,16 +3,19 @@
 import type { EventLog } from '../store/events';
 import type { MemoryStore } from '../store/memory';
 import type { LLMGateway } from '../llm/gateway';
-import { IMPORTANCE_TEMPLATE, importanceMessages } from '../llm/prompts';
 import { TimeEngine, MINUTES_PER_DAY } from '../core/time';
 import type { GameEvent } from '../core/types';
 
 export class MemoryWriter {
   private pending = new Set<Promise<void>>();
   private unsubscribe: (() => void) | null = null;
-  private modelScoresInFlight = 0;
+  private scoredEvents = 0;
 
-  constructor(private store: MemoryStore, private llm: LLMGateway, private scopeId = 'default') {}
+  constructor(private store: MemoryStore, _llm: LLMGateway, _scopeId = 'default') {}
+
+  budgetSnapshot(): { deterministicImportanceScores: number; modelImportanceRequests: 0 } {
+    return { deterministicImportanceScores: this.scoredEvents, modelImportanceRequests: 0 };
+  }
 
   attach(log: EventLog): void {
     this.detach();
@@ -62,35 +65,42 @@ export class MemoryWriter {
     const agentIds = [...ids].filter((id) => id.startsWith('agent:'));
     if (!agentIds.length) return; // 无 agent 参与的事件不打分不写库
     const content = `第${day}天 ${stamp}${e.description}`.slice(0, 200);
-    const score = await this.score(content); // 同一事件同一内容只打一次分（chat 双方复用）
+    const score = scoreGameEventImportance(e); // 同一事件只做一次确定性评分（chat 双方复用）
+    this.scoredEvents += 1;
     for (const id of agentIds) {
       this.store.addMemory({ agentId: id, kind: 'observation', content, importance: score, createdGameTime: e.gameTime, sourceEventId: e.id });
     }
   }
 
-  private async score(text: string): Promise<number> {
-    // 重要性评分属于后台标注，不允许挤占动作与对话；积压时采用一致的规则评分并继续保存客观事件。
-    if (this.modelScoresInFlight >= 8) return heuristicImportance(text);
-    this.modelScoresInFlight += 1;
-    try {
-      const res = await this.llm.complete({
-        tier: 'small', template: IMPORTANCE_TEMPLATE, jsonMode: true, maxTokens: 64,
-        temperature: 0.1, messages: importanceMessages(text), priority: 'background',
-        scopeId: this.scopeId, timeoutMs: 15_000,
-      });
-      const n = (res.parsed as { importance?: number } | null)?.importance;
-      return typeof n === 'number' && Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : heuristicImportance(text);
-    } catch {
-      return heuristicImportance(text);
-    } finally {
-      this.modelScoresInFlight -= 1;
-    }
-  }
 }
 
-function heuristicImportance(text: string): number {
-  if (/秘密|冲突|拒绝|馈礼|选择|关系|约定|离开|失去/.test(text)) return 8;
-  if (/对话|说|共同|帮助|拜访|活动/.test(text)) return 6;
-  if (/到达|工作|散步|休息|吃饭|睡觉/.test(text)) return 4;
-  return 5;
+/**
+ * Stable 1..10 event importance. Only typed event fields, bounded payload labels and a bounded
+ * description slice participate, so repeated scoring never depends on provider availability.
+ */
+export function scoreGameEventImportance(event: GameEvent): number {
+  const payload = event.payload ?? {};
+  const kind = boundedCue(payload.kind);
+  const source = boundedCue(payload.source);
+  const outcome = boundedCue(payload.outcome);
+  const cue = `${kind} ${source} ${outcome} ${event.description.slice(0, 180)}`;
+
+  if (
+    /partner_choice|伙伴选择|馈礼|gift|冲突|conflict|拒绝|refusal|背叛|失去|秘密泄露/u.test(cue)
+  ) return 9;
+  if (
+    /verified_shared_activity|活动现场|已核验|共同完成|履约|约定达成|关系转折/u.test(cue)
+  ) return 8;
+  if (event.type === 'player' || /玩家指令|紧急|事故|重要决定/u.test(cue)) return 8;
+  if (event.type === 'chat' || /chat|对话|邀请|帮助|拜访|共同活动/u.test(cue)) return 6;
+  if (event.type === 'broadcast' || /公告|预告|关系|约定|选择/u.test(cue)) return 6;
+  if (event.type === 'move' || /到达|前往|散步|回家/u.test(cue)) return 3;
+  if (/work|工作|营业|值班|煮咖啡|送信/u.test(cue)) return 4;
+  if (/rest|idle|休息|观察周围|吃饭|睡觉/u.test(cue)) return 2;
+  if (event.type === 'interact') return 5;
+  return 4;
+}
+
+function boundedCue(value: unknown): string {
+  return typeof value === 'string' ? value.slice(0, 80) : '';
 }

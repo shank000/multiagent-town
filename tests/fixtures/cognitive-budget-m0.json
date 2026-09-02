@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "bd6d943637b664e9349cd032625b36456ea02ef4",
+  "days": 2,
+  "agents": 6,
+  "tickMinutes": 5,
+  "callsByTemplate": {
+    "action_decision": 486,
+    "daily_plan": 12,
+    "dialogue": 66,
+    "dialogue_summary": 11,
+    "hour_plan": 288,
+    "importance": 1108,
+    "reflection_insights": 126,
+    "reflection_journal": 42,
+    "reflection_questions": 42
+  },
+  "nonDialogueCalls": 2104,
+  "dialogueCalls": 77,
+  "gates": {
+    "providerAndGatewayCountsMatch": true,
+    "plansPresent": 12,
+    "agendasPresent": 12,
+    "dailyReflectionsPresent": 12,
+    "persistedReflections": 42,
+    "dialogueCompleted": true,
+    "thinkingAgents": 0,
+    "schedulerActive": 0,
+    "schedulerQueued": 0
+  }
+}

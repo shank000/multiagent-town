@@ -18,6 +18,7 @@ import { initialMindStateOf } from '../engine/agent-profile';
 import { isEventAttendanceVerb } from '../llm/planning-options';
 
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
+export const PRODUCTION_MODEL_DECISION_INTERVAL_MIN = 60;
 export const MOVE_SPEED_TILES_PER_MIN = 1;
 
 const ACTION_DECISION_VALIDATOR = 'action-decision/v3';
@@ -93,6 +94,12 @@ interface DecisionRequestContext {
   runtimeMode: LLMRuntimeMode;
 }
 
+export interface CognitionBudgetSnapshot {
+  modelRequests: number;
+  groundedContinuations: number;
+  playerBypasses: number;
+}
+
 export class AgentExecutor {
   private pending = new Map<string, PendingDecision>();
   /** 过期响应触发重取后冻结虚拟时间，直到新上下文中的响应落定或失败。 */
@@ -100,6 +107,10 @@ export class AgentExecutor {
   private blockCount = new Map<string, number>();
   private fallbackStreak = new Map<string, number>();
   private activeDecisions = new Set<Promise<void>>();
+  private lastActualModelDecisionAt = new Map<string, number>();
+  private continuityUntil = new Map<string, number>();
+  private lastPlayerDirectiveRevision = new Map<string, number>();
+  private budget: CognitionBudgetSnapshot = { modelRequests: 0, groundedContinuations: 0, playerBypasses: 0 };
 
   constructor(
     private llm: LLMGateway,
@@ -109,6 +120,10 @@ export class AgentExecutor {
     private player?: PlayerDirector,
     private scopeId = 'default',
   ) {}
+
+  cognitionBudgetSnapshot(): CognitionBudgetSnapshot {
+    return { ...this.budget };
+  }
 
   /** 每 tick 对每个 agent 调用一次；dt = 本次 tick 推进的游戏分钟数 */
   progress(agent: Agent, dt: number, now: number, realtimeSampling = false): void {
@@ -146,7 +161,7 @@ export class AgentExecutor {
           } else {
             // 新请求期间冻结虚拟时间，避免粗粒度 tick 令每次重取都再次过期。
             this.temporalDecisionBarriers.add(agent.id);
-            this.requestDecision(agent, now);
+            this.requestDecision(agent, now, { retrySameLogicalDecision: true });
           }
           return;
         }
@@ -186,11 +201,38 @@ export class AgentExecutor {
       ? Math.max(DECISION_INTERVAL_MIN, dt * 24)
       : DECISION_INTERVAL_MIN;
     if (now - agent.lastDecisionAt >= decisionInterval) {
-      this.requestDecision(agent, now);
+      const runtimeMode = this.llm.runtimeSnapshot().mode;
+      if (runtimeMode === 'mock') {
+        this.requestDecision(agent, now);
+        return;
+      }
+      const directive = this.player?.currentDirective(agent.id, now) ?? null;
+      const isNewPlayerDirective = !!directive
+        && this.lastPlayerDirectiveRevision.get(agent.id) !== directive.revision;
+      const lastActual = this.lastActualModelDecisionAt.get(agent.id) ?? Number.NEGATIVE_INFINITY;
+      const eligibleAt = lastActual + PRODUCTION_MODEL_DECISION_INTERVAL_MIN;
+      if (isNewPlayerDirective || now >= eligibleAt) {
+        this.requestDecision(agent, now, { playerBypass: isNewPlayerDirective });
+        return;
+      }
+      if (now < (this.continuityUntil.get(agent.id) ?? Number.NEGATIVE_INFINITY)) return;
+      this.startGroundedContinuity(agent, now, eligibleAt);
     }
   }
 
-  private requestDecision(agent: Agent, now: number): void {
+  private requestDecision(
+    agent: Agent,
+    now: number,
+    options: { retrySameLogicalDecision?: boolean; playerBypass?: boolean } = {},
+  ): void {
+    if (!options.retrySameLogicalDecision) {
+      this.lastActualModelDecisionAt.set(agent.id, now);
+      this.continuityUntil.delete(agent.id);
+      this.budget.modelRequests += 1;
+      if (options.playerBypass) this.budget.playerBypasses += 1;
+      const directive = this.player?.currentDirective(agent.id, now);
+      if (directive) this.lastPlayerDirectiveRevision.set(agent.id, directive.revision);
+    }
     agent.state = 'thinking';
     agent.lastDecisionAt = now;
     const minuteOfDay = now % MINUTES_PER_DAY;
@@ -442,6 +484,37 @@ export class AgentExecutor {
     };
   }
 
+  private startGroundedContinuity(agent: Agent, now: number, eligibleAt: number): void {
+    const minuteOfDay = now % MINUTES_PER_DAY;
+    const remaining = Math.max(1, Math.min(120, eligibleAt - now));
+    const day = Math.floor(now / MINUTES_PER_DAY) + 1;
+    const option = this.mind?.planner.groundedContinuityOption(agent, day, minuteOfDay) ?? null;
+    const routine = !option
+      ? agent.persona.routine.find((slot) => slot.from <= minuteOfDay && minuteOfDay < slot.to)
+      : null;
+    const target = option?.targetId ?? routine?.target ?? null;
+    const verb = option?.verb ?? routine?.verb ?? '观察周围';
+    const interaction = option?.interaction ?? routine?.type === 'interact';
+    const declared = target ? this.interactionVerbs(agent, target) : [];
+    let decision: Decision;
+    if (target && this.world.hasObject(target) && agent.locationId !== target) {
+      const canonicalVerb = interaction && declared.includes(verb) ? verb : undefined;
+      decision = canonicalVerb
+        ? { thought: '', action: { type: 'interact', target, verb: canonicalVerb }, durationMinutes: remaining }
+        : { thought: '', action: { type: 'move_to', target, verb: `前往${this.world.getObject(target)?.name ?? '安排地点'}` }, durationMinutes: remaining };
+    } else if (target && this.world.hasObject(target) && interaction && declared.includes(verb)) {
+      decision = { thought: '', action: { type: 'interact', target, verb }, durationMinutes: remaining };
+    } else {
+      decision = { thought: '', action: { type: 'idle', target: null, verb: /休息|睡|打盹/u.test(verb) ? '休息' : '观察周围' }, durationMinutes: remaining };
+    }
+    decision.thought = this.groundedActionThought(agent, decision);
+    this.continuityUntil.set(agent.id, eligibleAt);
+    this.budget.groundedContinuations += 1;
+    agent.lastDecisionAt = now;
+    this.log.addEvent(this.thoughtEvent(agent, decision, now, undefined, 'continuity'));
+    this.beginAction(agent, decision, now);
+  }
+
   private groundedActionThought(agent: Agent, decision: Decision): string {
     const current = this.world.getObject(agent.locationId)?.name ?? '这里';
     if (decision.action.type === 'idle') return `我准备在「${current}」短暂休息。`;
@@ -629,7 +702,13 @@ export class AgentExecutor {
     };
   }
 
-  private thoughtEvent(agent: Agent, d: Decision, now: number, quality?: ActionDecisionQuality): GameEvent {
+  private thoughtEvent(
+    agent: Agent,
+    d: Decision,
+    now: number,
+    quality?: ActionDecisionQuality,
+    source: 'routine' | 'continuity' = 'routine',
+  ): GameEvent {
     return {
       id: randomUUID(),
       type: 'system',
@@ -641,7 +720,7 @@ export class AgentExecutor {
       payload: {
         kind: 'thought',
         thought: d.thought,
-        ...(quality ? { source: 'llm', decisionQuality: quality } : { source: 'routine' }),
+        ...(quality ? { source: 'llm', decisionQuality: quality } : { source }),
       },
     };
   }

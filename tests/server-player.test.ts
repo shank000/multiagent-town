@@ -56,7 +56,7 @@ test('玩家指令 API：act 设置、delete 清除', async () => {
   }
 });
 
-test('广播：全员 agent 获得记忆（派对 → importance 9）', async () => {
+test('广播：全员 agent 获得记忆（未核验派对预告 → importance 6）', async () => {
   const { mind, server, base, dir } = await setup();
   try {
     const r = await fetch(`${base}/api/broadcast`, {
@@ -69,7 +69,7 @@ test('广播：全员 agent 获得记忆（派对 → importance 9）', async ()
     for (const id of ['agent:1', 'agent:2']) {
       const mems = mind.store.recentMemories(id, 20);
       assert.ok(mems.some((m) => m.content.includes('湖边派对')), `${id} 应记住广播`);
-      assert.equal(mems.find((m) => m.content.includes('湖边派对'))!.importance, 9);
+      assert.equal(mems.find((m) => m.content.includes('湖边派对'))!.importance, 6);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

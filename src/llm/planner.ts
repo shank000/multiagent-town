@@ -3,15 +3,15 @@
 import type { Agent } from '../core/types';
 import type { WorldState } from '../core/world';
 import type { LLMGateway } from './gateway';
-import { DAILY_PLAN_TEMPLATE, HOUR_PLAN_TEMPLATE, dailyPlanMessages, hourPlanMessages } from './prompts';
+import { DAILY_PLAN_TEMPLATE, dailyPlanMessages } from './prompts';
 import type { ChatMessage, LLMRequest } from './types';
 import type { AgendaItem, MemoryStore } from '../store/memory';
 import { initialMindStateOf } from '../engine/agent-profile';
 import { planningContextFromWorld } from './plan-grounding';
 import {
-  assessDailyOptionSelection, assessHourOptionSelection, auditRenderedDailyPlan, auditRenderedHourAgenda,
+  assessDailyOptionSelection, auditRenderedDailyPlan, auditRenderedHourAgenda,
   buildPlanningOptions, dailyPlanningOptionPool, fallbackDailyOptions, fallbackHourChoices,
-  hourPlanningOptionPool, renderDailyPlan, renderHourAgenda,
+  renderDailyPlan, renderHourAgenda,
   type HourOptionChoice, type PlanningContractIssue, type PlanningOption,
 } from './planning-options';
 
@@ -29,6 +29,12 @@ function hhToMin(hhmm: string): number {
   return (h || 0) * 60 + (m || 0);
 }
 
+export interface GroundedContinuityOption {
+  targetId: string;
+  verb: string;
+  interaction: boolean;
+}
+
 export class Planner {
   private scheduled = new Map<string, ScheduledPlan>();
   private active = new Set<Promise<void>>();
@@ -44,7 +50,7 @@ export class Planner {
   }
 
   async decomposeHour(agent: Agent, day: number, hour: number, now: number): Promise<void> {
-    this.commitHourPlan(agent, day, hour, now, await this.generateHourPlan(agent, day, hour));
+    this.commitHourPlan(agent, day, hour, now, this.deriveHourPlan(agent, day, hour));
   }
 
   scheduleHour(agent: Agent, day: number, hour: number, now: number): Promise<void> {
@@ -77,6 +83,42 @@ export class Planner {
       const place = this.world?.getObject(item.location)?.name ?? item.location;
       return `${item.time} ${item.action}（${place}）`;
     }).join('；');
+  }
+
+  /** Returns only an option that can still be recovered from the current closed-world catalog. */
+  groundedContinuityOption(agent: Agent, day: number, minuteOfDay: number): GroundedContinuityOption | null {
+    const world = this.currentWorld();
+    const catalog = buildPlanningOptions(agent, world);
+    const hour = Math.floor(minuteOfDay / 60);
+    const plan = this.store.planFor(agent.id, day);
+    const dailyAudit = plan ? auditRenderedDailyPlan(plan.broadPlan, catalog, world) : null;
+    const dailyOptions = dailyAudit?.ok ? dailyAudit.value : [];
+    const activeRoutine = catalog.find((option) => (
+      option.kind === 'routine'
+      && option.fromMinute !== null && option.toMinute !== null
+      && option.fromMinute <= minuteOfDay && minuteOfDay < option.toMinute
+    ));
+    const hourlyItems = plan?.hourly.filter((item) => Math.floor(hhToMin(item.time) / 60) === hour) ?? [];
+    const hourlyAudit = hourlyItems.length ? auditRenderedHourAgenda(hourlyItems, hour, catalog) : null;
+    const allowedIds = new Set([...dailyOptions, ...(activeRoutine ? [activeRoutine] : [])].map((option) => option.id));
+    const hourlyOption = hourlyAudit?.ok
+      ? hourlyAudit.value.find((option) => allowedIds.has(option.id))
+      : undefined;
+    const fallbackChoice = fallbackHourChoices(catalog, agent.id, hour)[0];
+    const fallbackOption = fallbackChoice ? catalog.find((option) => option.id === fallbackChoice.optionId) : undefined;
+    const option = hourlyOption ?? activeRoutine ?? dailyOptions[0] ?? fallbackOption;
+    if (!option) return null;
+    const routineSlot = option.kind === 'routine'
+      ? agent.persona.routine.find((slot) => (
+        slot.target === option.locationId && slot.verb === option.verb
+        && slot.from === option.fromMinute && slot.to === option.toMinute
+      ))
+      : undefined;
+    return {
+      targetId: option.locationId,
+      verb: option.verb,
+      interaction: option.kind === 'place_action' || routineSlot?.type === 'interact',
+    };
   }
 
   private stateFor(agent: Agent): ScheduledPlan {
@@ -117,7 +159,7 @@ export class Planner {
       state.hour = null;
       if (hour) {
         try {
-          const result = await this.generateHourPlan(state.agent, hour.day, hour.hour);
+          const result = this.deriveHourPlan(state.agent, hour.day, hour.hour);
           if (state.hourRevision === hour.revision) this.commitHourPlan(state.agent, hour.day, hour.hour, hour.now, result);
         } catch (error) {
           console.warn(`[planner] ${state.agent.id} ${hour.hour}:00 议程未能形成：${errorMessage(error)}`);
@@ -156,26 +198,24 @@ export class Planner {
     return fallbackDailyOptions(catalog, agent.id).map((option) => option.id);
   }
 
-  private async generateHourPlan(agent: Agent, day: number, hour: number): Promise<HourOptionChoice[]> {
-    const broad = this.store.planFor(agent.id, day)?.broadPlan ?? '';
-    let issues: PlanningContractIssue[] = [{ code: 'invalid_structure', message: '尚未选择小时计划选项' }];
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const world = this.currentWorld();
-      const context = planningContextFromWorld(world);
-      const pool = hourPlanningOptionPool(buildPlanningOptions(agent, world), agent, hour);
-      let messages = hourPlanMessages(agent, hour, broad, context, pool);
-      if (attempt === 1) messages = appendRepair(messages, optionRepairInstruction(issues, pool, 'hour', hour));
-      try {
-        const response = await this.llm.complete(this.hourRequest(agent, messages, pool, hour, attempt));
-        const assessment = assessHourOptionSelection(response.parsed, hour, pool, agent.id);
-        if (assessment.ok) return assessment.value;
-        issues = assessment.issues;
-      } catch {
-        issues = [{ code: 'invalid_structure', message: '模型暂未形成可用的小时计划选择' }];
-      }
-    }
-    const catalog = buildPlanningOptions(agent, this.currentWorld());
-    return fallbackHourChoices(catalog, agent.id, hour);
+  private deriveHourPlan(agent: Agent, day: number, hour: number): HourOptionChoice[] {
+    const world = this.currentWorld();
+    const catalog = buildPlanningOptions(agent, world);
+    const plan = this.store.planFor(agent.id, day);
+    const auditedDaily = plan ? auditRenderedDailyPlan(plan.broadPlan, catalog, world) : null;
+    const selectedDaily = auditedDaily?.ok ? auditedDaily.value : fallbackDailyOptions(catalog, agent.id);
+    const hourStart = hour * 60;
+    const hourEnd = hourStart + 60;
+    const activeRoutine = catalog.find((option) => (
+      option.actorId === agent.id
+      && option.kind === 'routine'
+      && option.fromMinute !== null && option.toMinute !== null
+      && option.fromMinute < hourEnd && option.toMinute > hourStart
+    ));
+    const selected = activeRoutine ?? selectedDaily.find((option) => option.actorId === agent.id);
+    return selected
+      ? [{ time: `${String(hour).padStart(2, '0')}:00`, optionId: selected.id }]
+      : fallbackHourChoices(catalog, agent.id, hour);
   }
 
   private dailyRequest(
@@ -188,21 +228,6 @@ export class Planner {
       tier: 'small', template: DAILY_PLAN_TEMPLATE, jsonMode: true,
       jsonSchema: dailyOptionSchema(options.map((option) => option.id)),
       maxTokens: 192, temperature: attempt === 0 ? 0.4 : 0.1, agentId: agent.id, reasoning: false,
-      priority: 'planning', scopeId: this.scopeId, timeoutMs: 120_000, messages,
-    };
-  }
-
-  private hourRequest(
-    agent: Agent,
-    messages: ChatMessage[],
-    options: readonly PlanningOption[],
-    hour: number,
-    attempt: number,
-  ): LLMRequest {
-    return {
-      tier: 'small', template: HOUR_PLAN_TEMPLATE, jsonMode: true,
-      jsonSchema: hourOptionSchema(options.map((option) => option.id), hour),
-      maxTokens: 256, temperature: attempt === 0 ? 0.3 : 0.1, agentId: agent.id, reasoning: false,
       priority: 'planning', scopeId: this.scopeId, timeoutMs: 120_000, messages,
     };
   }
@@ -223,11 +248,12 @@ export class Planner {
   private commitHourPlan(agent: Agent, day: number, hour: number, now: number, choices: HourOptionChoice[]): void {
     const world = this.currentWorld();
     const catalog = buildPlanningOptions(agent, world);
-    const assessed = assessHourOptionSelection({
-      agenda: choices.map((choice) => ({ time: choice.time, option_id: choice.optionId })),
-    }, hour, catalog, agent.id);
-    const accepted = assessed.ok ? assessed.value : fallbackHourChoices(catalog, agent.id, hour);
-    const agenda = renderHourAgenda(accepted, catalog);
+    let agenda: AgendaItem[];
+    try {
+      agenda = renderHourAgenda(choices, catalog);
+    } catch {
+      agenda = renderHourAgenda(fallbackHourChoices(catalog, agent.id, hour), catalog);
+    }
     const agendaAudit = auditRenderedHourAgenda(agenda, hour, catalog);
     if (!agendaAudit.ok) throw new Error(agendaAudit.issues.map((issue) => issue.message).join('；'));
 
@@ -257,35 +283,14 @@ function dailyOptionSchema(optionIds: readonly string[]): Record<string, unknown
   };
 }
 
-function hourOptionSchema(optionIds: readonly string[], hour: number): Record<string, unknown> {
-  return {
-    type: 'object', additionalProperties: false, required: ['agenda'],
-    properties: {
-      agenda: {
-        type: 'array', minItems: 1, maxItems: 4,
-        items: {
-          type: 'object', additionalProperties: false, required: ['time', 'option_id'],
-          properties: {
-            time: { type: 'string', pattern: `^${String(hour).padStart(2, '0')}:[0-5]\\d$` },
-            option_id: { type: 'string', enum: optionIds },
-          },
-        },
-      },
-    },
-  };
-}
-
 function optionRepairInstruction(
   issues: readonly PlanningContractIssue[],
   options: readonly PlanningOption[],
-  kind: 'daily' | 'hour',
-  hour?: number,
+  kind: 'daily',
 ): string {
   const errors = issues.map((issue) => issue.message).join('；') || '选择没有通过当前世界边界检查';
   const ids = options.map((option) => option.id).join('、');
-  return kind === 'daily'
-    ? `上一版选择有误：${errors}。请仅从这些 id 中选择 3 至 5 个不同选项：${ids}。不要增加说明文字。`
-    : `上一版选择有误：${errors}。请仅从这些 id 中选择 1 至 4 个不同选项：${ids}；时间必须属于 ${String(hour).padStart(2, '0')}:00 至 ${String(hour).padStart(2, '0')}:59。不要增加说明文字。`;
+  return `上一版选择有误：${errors}。请仅从这些 id 中选择 3 至 5 个不同选项：${ids}。不要增加说明文字。`;
 }
 
 function appendRepair(messages: ChatMessage[], instruction: string): ChatMessage[] {

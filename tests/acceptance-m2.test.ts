@@ -58,7 +58,7 @@ test('M2 验收：寻路经门进吧台、玩家指令执行、广播全员记�
       `沈屿应前往书店，实际 (${shen.x},${shen.y})`
     );
 
-    // ③ 广播：全员获得派对记忆（importance 9）
+    // ③ 广播：全员获得派对记忆（未核验活动预告为 6）
     await fetch(`${base}/api/broadcast`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -68,7 +68,7 @@ test('M2 验收：寻路经门进吧台、玩家指令执行、广播全员记�
     for (const a of world.allAgents()) {
       const mem = mind.store.recentMemories(a.id, 50).find((m) => m.content.includes('湖边派对'));
       assert.ok(mem, `${a.name} 应记住广播`);
-      assert.equal(mem.importance, 9);
+      assert.equal(mem.importance, 6);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

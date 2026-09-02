@@ -462,14 +462,25 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
       }
       if (url.pathname === '/api/llm/status' && req.method === 'GET') {
         const controlledTimelineWorlds = timelineWorlds();
+        const cognitionBudget = (hubWorlds ?? [hub()]).reduce((total, world) => {
+          const snapshot = world.loop.cognitionBudgetSnapshot();
+          total.modelRequests += snapshot.modelRequests;
+          total.groundedContinuations += snapshot.groundedContinuations;
+          total.playerBypasses += snapshot.playerBypasses;
+          return total;
+        }, { modelRequests: 0, groundedContinuations: 0, playerBypasses: 0 });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(opts.llm ? {
           ...opts.llm.schedulerSnapshot(),
+          templateMetrics: opts.llm.metricSummary(),
+          cognitionBudget,
           timeline: timelineGovernor?.snapshot(controlledTimelineWorlds, paused) ?? null,
         } : {
           active: 0, queued: 0, maxConcurrent: 0, maxQueued: 0,
           oldestActiveMs: 0, oldestWaitMs: 0, backpressured: false, pressureReason: null,
           activeByPriority: {}, byPriority: {}, byScope: {},
+          templateMetrics: [],
+          cognitionBudget,
           performance: {
             provider: 'none', sampleCount: 0, generationTokensPerSecond: null, promptTokensPerSecond: null,
             effectiveTokensPerSecond: null, p50LatencyMs: null, p90LatencyMs: null,

@@ -6,6 +6,7 @@ import { openDb } from '../src/store/db';
 import { EventLog } from '../src/store/events';
 import { LLMGateway } from '../src/llm/gateway';
 import { MindEngine } from '../src/engine/mind';
+import { PlayerDirector } from '../src/engine/player';
 import type { ChatMessage, LLMProvider } from '../src/llm/types';
 import { makeAgent, flush, persona, StubProvider } from './helpers';
 import type { WorldObject } from '../src/core/types';
@@ -79,11 +80,12 @@ test('睡眠作息保护阻止午夜模型决策改写为白天活动', async ()
     persona: persona({ routine: [{ from: 0, to: 420, type: 'interact', target: 'obj:bed', verb: '睡觉' }] }),
   });
   const world = new WorldState(objects, [agent]);
-  const gateway = new LLMGateway({
-    provider: new StubProvider([{
+  const provider = new StubProvider([{
       content: '',
       parsed: { thought: '去白天工作', action: { type: 'move_to', target: 'obj:work', verb: '去工作' }, duration_minutes: 10 },
-    }]),
+    }]);
+  const gateway = new LLMGateway({
+    provider,
     retries: 0,
   });
   const executor = new AgentExecutor(gateway, world, log);
@@ -95,6 +97,74 @@ test('睡眠作息保护阻止午夜模型决策改写为白天活动', async ()
   assert.equal(agent.state, 'moving');
   assert.equal(agent.action?.action.target, 'obj:bed');
   assert.match(agent.thought ?? '', /睡觉时段/);
+  assert.equal(provider.calls, 0);
+  assert.equal(executor.cognitionBudgetSnapshot().modelRequests, 0);
+});
+
+test('生产模式每小时只发一个逻辑模型请求，期间以闭世界作息连续行动且不重复', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const agent = makeAgent({
+    id: 'agent:cadence', name: '甲', x: 0, y: 0, locationId: 'obj:home',
+    persona: persona({ routine: [{ from: 0, to: 120, type: 'interact', target: 'obj:home', verb: '打扫' }] }),
+  });
+  const provider = new StubProvider([
+    { content: '', parsed: { thought: '先休息', action: { type: 'idle', target: null, verb: '休息' }, duration_minutes: 10 } },
+    { content: '', parsed: { thought: '再休息', action: { type: 'idle', target: null, verb: '休息' }, duration_minutes: 10 } },
+  ]);
+  const executor = new AgentExecutor(
+    new LLMGateway({ provider, retries: 0 }), new WorldState(TEST_OBJECTS, [agent]), log,
+  );
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  executor.progress(agent, 0, 20);
+  executor.progress(agent, 0, 30);
+  assert.equal(provider.calls, 1);
+  assert.equal(agent.action?.action.verb, '打扫');
+  assert.equal(agent.actionEndsAt, 70);
+  executor.progress(agent, 0, 40);
+  executor.progress(agent, 0, 50);
+  executor.progress(agent, 0, 60);
+  assert.equal(provider.calls, 1);
+  assert.deepEqual(executor.cognitionBudgetSnapshot(), {
+    modelRequests: 1, groundedContinuations: 1, playerBypasses: 0,
+  });
+  assert.equal(log.eventsForDay(1).filter((event) => event.payload?.source === 'continuity').length, 1);
+  executor.progress(agent, 0, 70);
+  executor.progress(agent, 0, 80);
+  await flush();
+  assert.equal(provider.calls, 2);
+  db.raw.close();
+});
+
+test('新的玩家指令可绕过生产每小时额度且同一指令不会反复绕过', async () => {
+  const db = openDb(':memory:');
+  const log = new EventLog(db);
+  const agent = makeAgent({ id: 'agent:player', name: '甲', x: 0, y: 0, locationId: 'obj:home' });
+  const provider = new StubProvider([
+    { content: '', parsed: { thought: '先休息', action: { type: 'idle', target: null, verb: '休息' }, duration_minutes: 10 } },
+    { content: '', parsed: { thought: '按指令', action: { type: 'interact', target: 'obj:home', verb: '打扫' }, duration_minutes: 10 } },
+  ]);
+  const player = new PlayerDirector();
+  const executor = new AgentExecutor(
+    new LLMGateway({ provider, retries: 0 }), new WorldState(TEST_OBJECTS, [agent]), log, undefined, player,
+  );
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  executor.progress(agent, 0, 20);
+  player.act(agent.id, '请在家打扫', 25);
+  executor.progress(agent, 0, 30);
+  await flush();
+  executor.progress(agent, 0, 30);
+  executor.progress(agent, 0, 40);
+  executor.progress(agent, 0, 50);
+  assert.equal(provider.calls, 2);
+  assert.deepEqual(executor.cognitionBudgetSnapshot(), {
+    modelRequests: 2, groundedContinuations: 1, playerBypasses: 1,
+  });
+  db.raw.close();
 });
 
 test('校验失败会携带原因重试，仍失败时使用叙事安全的 idle', async () => {

@@ -16,19 +16,16 @@ import type {
 import type { LLMGateway } from '../llm/gateway';
 import { initialMindStateOf } from './agent-profile';
 import {
-  REFLECTION_INSIGHTS_TEMPLATE,
   REFLECTION_JOURNAL_JSON_SCHEMA,
   REFLECTION_JOURNAL_TEMPLATE,
-  REFLECTION_QUESTIONS_TEMPLATE,
-  reflectionInsightsMessages,
   reflectionJournalMessages,
-  reflectionQuestionsMessages,
 } from '../llm/prompts';
 
 const REFLECTION_THRESHOLD = 150;
 const MAX_TRIGGERED_PER_DAY = 2;
 
 interface JournalRaw {
+  questions?: unknown;
   diary?: unknown;
   mind_state?: unknown;
   insights?: unknown;
@@ -115,54 +112,22 @@ export class ReflectionEngine {
     const prior = this.store.reflectionsFor(agent.id)[0] ?? null;
     const priorDaily = this.store.previousDailyReflection(agent.id, day);
     const priorInsights = this.store.recentInsights(agent.id, 8);
-    const consumedEvidence = kind === 'triggered'
-      ? new Set(this.store.reflectionsFor(agent.id)
-        .flatMap((record) => record.evidenceIds))
-      : new Set<string>();
-
     const degradedStages: string[] = [];
-    const questionEvidence = selectPromptEvidence(evidence, 20);
-    const questionResponse = await this.modelStage(
-      'questions',
-      () => this.askQuestions(agent.id, questionEvidence.map((item) => item.content)),
-      {},
-      degradedStages,
-    );
-    const questions = uniqueStrings(questionResponse.questions, 3, 120);
-    const candidateInsights: string[] = [];
-    const evidenceIds = new Set(evidence.map((item) => item.id));
-
-    for (const question of questions) {
-      const questionEvidence = kind === 'daily'
-        ? evidence.slice().sort((a, b) => b.importance - a.importance || b.createdGameTime - a.createdGameTime).slice(0, 6)
-        : this.store.retrieve(agent.id, question, now, 12)
-          .filter((item) => isEventEvidence(item) && !consumedEvidence.has(item.id))
-          .slice(0, 6);
-      for (const item of questionEvidence) evidenceIds.add(item.id);
-      const response = await this.modelStage(
-        'insights',
-        () => this.askInsights(agent.id, question, questionEvidence.map((item) => item.content)),
-        {},
-        degradedStages,
-      );
-      candidateInsights.push(...uniqueStrings(response.insights, 5, 160));
-    }
-
-    const boundedEvidence = this.loadEvidence(agent.id, [...evidenceIds], evidence, kind);
+    const boundedEvidence = boundedReflectionEvidence(evidence, kind);
+    const promptEvidence = selectPromptEvidence(boundedEvidence, 20);
     const journalResponse = await this.modelStage(
       'journal',
       () => this.askJournal(
-        agent, day, kind, selectPromptEvidence(boundedEvidence, 20), questions,
-        candidateInsights, priorInsights, prior, priorDaily?.diary ?? '',
+        agent, day, kind, promptEvidence, priorInsights, prior, priorDaily?.diary ?? '',
       ),
       {},
       degradedStages,
     );
+    const questions = uniqueStrings(journalResponse.questions, 3, 120);
+    const finalQuestions = questions.length ? questions : fallbackQuestions(agent);
     const allowedEvidence = new Set(boundedEvidence.map((item) => item.id));
     const insights = uniqueInsightStrings(journalResponse.insights, 5, 180);
-    const proposedInsights = boundedEvidence.length
-      ? (insights.length ? insights : uniqueInsightStrings(candidateInsights, 5, 180))
-      : [];
+    const proposedInsights = boundedEvidence.length ? insights : [];
     const priorInsightKeys = new Set(priorInsights.map(normalizeInsightKey));
     const finalInsights = proposedInsights.filter((insight) => !priorInsightKeys.has(normalizeInsightKey(insight)));
     const mindState = normalizeMindState(journalResponse.mind_state, prior?.mindState ?? initialMindStateOf(agent.persona), boundedEvidence);
@@ -180,7 +145,7 @@ export class ReflectionEngine {
       depth: prior ? prior.depth + 1 : 0,
       kind,
       day,
-      questions,
+      questions: finalQuestions,
       insights: finalInsights,
       evidenceIds: [...allowedEvidence],
       diary,
@@ -251,51 +216,11 @@ export class ReflectionEngine {
       .slice(0, kind === 'daily' ? 240 : 100);
   }
 
-  private loadEvidence(agentId: string, ids: string[], current: Memory[], kind: ReflectionKind): Memory[] {
-    const byId = new Map(current.map((item) => [item.id, item]));
-    // retrieve() 可能为事件触发反思补充更早证据；recentMemories 提供有界回查。
-    for (const item of this.store.recentMemories(agentId, 300).filter(isEventEvidence)) byId.set(item.id, item);
-    const resolved = ids.map((id) => byId.get(id)).filter((item): item is Memory => !!item);
-    if (kind !== 'daily') return resolved.slice(0, 80);
-    return resolved
-      .sort((a, b) => b.importance - a.importance || b.createdGameTime - a.createdGameTime)
-      .slice(0, 80)
-      .sort((a, b) => a.createdGameTime - b.createdGameTime || a.id.localeCompare(b.id));
-  }
-
-  private async askQuestions(agentId: string, memories: string[]): Promise<{ questions?: unknown }> {
-    const result = await this.llm.complete({
-      tier: 'small', template: REFLECTION_QUESTIONS_TEMPLATE, jsonMode: true, maxTokens: 512, temperature: 0.45,
-      messages: reflectionQuestionsMessages(memories),
-      agentId,
-      reasoning: false,
-      priority: 'reflection',
-      scopeId: this.scopeId,
-      timeoutMs: 120_000,
-    });
-    return (result.parsed ?? {}) as { questions?: unknown };
-  }
-
-  private async askInsights(agentId: string, question: string, evidence: string[]): Promise<{ insights?: unknown }> {
-    const result = await this.llm.complete({
-      tier: 'small', template: REFLECTION_INSIGHTS_TEMPLATE, jsonMode: true, maxTokens: 512, temperature: 0.35,
-      messages: reflectionInsightsMessages(question, evidence),
-      agentId,
-      reasoning: false,
-      priority: 'reflection',
-      scopeId: this.scopeId,
-      timeoutMs: 120_000,
-    });
-    return (result.parsed ?? {}) as { insights?: unknown };
-  }
-
   private async askJournal(
     agent: Agent,
     day: number,
     kind: ReflectionKind,
     evidence: Memory[],
-    questions: string[],
-    candidateInsights: string[],
     priorInsights: string[],
     prior: { diary: string; mindState: ReflectionMindState } | null,
     priorDiary: string,
@@ -308,8 +233,8 @@ export class ReflectionEngine {
         day,
         kind,
         evidence: evidence.map((item) => ({ id: item.id, content: item.content, kind: item.kind, importance: item.importance })),
-        questions,
-        candidateInsights,
+        questions: [],
+        candidateInsights: [],
         priorInsights,
         priorDiary,
         priorMindState: prior?.mindState ?? null,
@@ -451,6 +376,14 @@ function selectPromptEvidence(evidence: readonly Memory[], limit: number): Memor
     .sort((a, b) => a.createdGameTime - b.createdGameTime || a.id.localeCompare(b.id));
 }
 
+function boundedReflectionEvidence(evidence: readonly Memory[], kind: ReflectionKind): Memory[] {
+  if (kind !== 'daily') return evidence.slice(0, 80);
+  return [...evidence]
+    .sort((a, b) => b.importance - a.importance || b.createdGameTime - a.createdGameTime)
+    .slice(0, 80)
+    .sort((a, b) => a.createdGameTime - b.createdGameTime || a.id.localeCompare(b.id));
+}
+
 function compactFailureReason(reason: string): string {
   if (/context|上下文|exceed_context_size/iu.test(reason)) return 'context_limit';
   if (/timeout|期限|未完成|超时/iu.test(reason)) return 'timeout';
@@ -496,6 +429,14 @@ function fallbackGuidance(agent: Agent, state: ReflectionMindState): string[] {
   return [
     `优先履行${agent.persona.occupation}的核心职责，并检查行动结果。`,
     state.stress >= 0.65 ? '在下一次重要决定前先短暂休息。' : '保持稳定节奏，并对重要互动做出回应。',
+  ];
+}
+
+function fallbackQuestions(agent: Agent): string[] {
+  return [
+    `我今天怎样履行了${agent.persona.occupation}的职责？`,
+    '哪些已经发生的互动值得我继续关注？',
+    '明天怎样依据已有证据保持稳定节奏？',
   ];
 }
 

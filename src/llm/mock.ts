@@ -205,6 +205,7 @@ function journalReflection(ctx: Record<string, unknown>): Record<string, unknown
     socialNeed >= 0.65 ? '到广场或其他公共空间主动维持一段重要关系。' : '对今天的重要互动做一次有针对性的回应。',
   ];
   return {
+    questions: ['我今天履行了哪些安排？', '哪些互动值得继续关注？', '明天怎样保持稳定节奏？'],
     diary,
     mind_state: {
       valence, energy, stress, social_need: socialNeed, occupational_focus: occupationalFocus,

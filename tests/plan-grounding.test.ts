@@ -213,11 +213,10 @@ test('非法附加叙事触发一次低温修复，只有选项渲染文本进�
   await planner.dailyPlan(agent, 1, 300);
   await planner.decomposeHour(agent, 1, 9, 540);
 
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 2);
   assert.equal(requests[1].temperature, 0.1);
-  assert.equal(requests[3].temperature, 0.1);
   assert.equal((requests[0].jsonSchema as { additionalProperties?: boolean }).additionalProperties, false);
-  assert.equal((((requests[2].jsonSchema as { properties?: { agenda?: { items?: { additionalProperties?: boolean } } } }).properties?.agenda?.items)?.additionalProperties), false);
+  assert.ok(requests.every((request) => request.template === 'daily_plan'));
   const catalog = buildPlanningOptions(agent, world);
   const plan = store.planFor(agent.id, 1);
   assert.ok(plan);
@@ -292,10 +291,15 @@ test('两次无效输出走确定性 fallback，旧计划可读但不再混入�
     hourly: [{ time: '08:15', action: '旧版自由行动', location: 'obj:town' }],
   });
   assert.equal(planner.currentAgendaLine(agent, 2, 8 * 60 + 15), '08:15 旧版自由行动（小镇）');
+  const legacyContinuity = planner.groundedContinuityOption(agent, 2, 8 * 60 + 15);
+  assert.ok(legacyContinuity);
+  assert.notEqual(legacyContinuity.verb, '旧版自由行动');
+  assert.equal(world.hasObject(legacyContinuity.targetId), true);
 
   await planner.dailyPlan(agent, 1, 300);
   await planner.decomposeHour(agent, 1, 9, 540);
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => request.template === 'daily_plan'));
   const catalog = buildPlanningOptions(agent, world);
   const plan = store.planFor(agent.id, 1);
   assert.ok(plan);
