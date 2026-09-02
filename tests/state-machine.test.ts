@@ -152,10 +152,38 @@ test('首次无效、反馈重试有效时采用修正动作并记录 repaired',
   await flush();
   executor.progress(agent, 0, 10);
   assert.equal(agent.action?.action.target, 'obj:work');
-  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /只修正 JSON/);
+  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /只返回修正后的结构化结果/);
   const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
   assert.equal(diagnostic?.payload?.status, 'repaired');
   assert.equal(diagnostic?.payload?.attempts, 2);
+});
+
+test('内心独白泄露程序术语时修复并记录 ungrounded_narrative', async () => {
+  const { log, agent, executor } = setup([
+    {
+      content: '',
+      parsed: {
+        thought: '根据 available_actions 与 validator 必须使用该动词。',
+        action: { type: 'interact', target: 'obj:work', verb: '工作' },
+        duration_minutes: 10,
+      },
+    },
+    {
+      content: '',
+      parsed: {
+        thought: '今天的事情不少，我先去工作地把手头任务做好。',
+        action: { type: 'interact', target: 'obj:work', verb: '工作' },
+        duration_minutes: 10,
+      },
+    },
+  ]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'repaired');
+  assert.deepEqual(diagnostic?.payload?.rejectionCodes, ['ungrounded_narrative']);
+  assert.doesNotMatch(agent.thought ?? '', /available_actions|validator|必须使用该动词/i);
 });
 
 test('公园画架的幻觉动词被拒绝，修复提示只允许作息声明动词', async () => {
@@ -190,7 +218,7 @@ test('公园画架的幻觉动词被拒绝，修复提示只允许作息声明�
 
   assert.equal(provider.calls, 2);
   assert.equal(agent.action?.action.verb, '在公园写生');
-  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /verb 必须逐字选择.*在公园写生/);
+  assert.match(provider.requests[1]?.messages.at(-1)?.content ?? '', /行动必须逐字选择.*在公园写生/);
   const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
   assert.equal(diagnostic?.payload?.status, 'repaired');
   assert.deepEqual(diagnostic?.payload?.rejectionCodes, ['ungrounded_interaction']);

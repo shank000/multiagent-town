@@ -1,10 +1,17 @@
-// 规划：每日大计划 + 每小时议程分解 + 当前时段议程（spec §5.4；M0 作息为兜底）
+// 规划：每日大计划 + 每小时议程分解；所有模型结果先通过当前世界边界检查再进入记忆。
 
 import type { Agent } from '../core/types';
+import type { WorldState } from '../core/world';
 import type { LLMGateway } from './gateway';
 import { DAILY_PLAN_TEMPLATE, HOUR_PLAN_TEMPLATE, dailyPlanMessages, hourPlanMessages } from './prompts';
+import type { ChatMessage, LLMRequest } from './types';
 import type { AgendaItem, MemoryStore } from '../store/memory';
 import { initialMindStateOf } from '../engine/agent-profile';
+import {
+  assessDailyPlan, assessHourAgenda, groundedDailyFallback, groundedHourFallback,
+  planningContextFromWorld, planningRepairInstruction,
+  type GroundingIssue, type PlanningWorldContext,
+} from './plan-grounding';
 
 interface ScheduledPlan {
   agent: Agent;
@@ -16,30 +23,21 @@ interface ScheduledPlan {
 }
 
 const DAILY_PLAN_JSON_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['broad_plan'],
-  properties: {
-    broad_plan: { type: 'string', maxLength: 300 },
-  },
+  type: 'object', additionalProperties: false, required: ['broad_plan'],
+  properties: { broad_plan: { type: 'string', maxLength: 300 } },
 } as const;
 
 const HOUR_PLAN_JSON_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['agenda'],
+  type: 'object', additionalProperties: false, required: ['agenda'],
   properties: {
     agenda: {
-      type: 'array',
-      maxItems: 4,
+      type: 'array', minItems: 1, maxItems: 4,
       items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['time', 'action', 'location'],
+        type: 'object', additionalProperties: false, required: ['time', 'action', 'location'],
         properties: {
           time: { type: 'string', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$' },
           action: { type: 'string', maxLength: 50 },
-          location: { type: 'string', maxLength: 30 },
+          location: { type: 'string', maxLength: 40 },
         },
       },
     },
@@ -54,53 +52,19 @@ function hhToMin(hhmm: string): number {
 export class Planner {
   private scheduled = new Map<string, ScheduledPlan>();
   private active = new Set<Promise<void>>();
+  private world: WorldState | null = null;
 
   constructor(private llm: LLMGateway, private store: MemoryStore, private scopeId = 'default') {}
 
+  /** MindEngine 每次 tick 绑定正在运行的世界；实体列表在每次生成和提交前重新读取。 */
+  bindWorld(world: WorldState): void { this.world = world; }
+
   async dailyPlan(agent: Agent, day: number, now: number): Promise<void> {
-    const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((m) => ({ content: m.content, importance: m.importance }));
-    const insights = this.store.recentInsights(agent.id, 5);
-    const guidance = this.store.recentGuidance(agent.id, 4);
-    const mindState = this.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
-    const priorDiary = this.store.dailyReflectionFor(agent.id, day - 1)?.diary ?? '';
-    const res = await this.llm.complete({
-      tier: 'small',
-      template: DAILY_PLAN_TEMPLATE,
-      jsonMode: true,
-      jsonSchema: DAILY_PLAN_JSON_SCHEMA,
-      maxTokens: 256,
-      temperature: 0.45,
-      agentId: agent.id,
-      reasoning: false,
-      priority: 'planning',
-      scopeId: this.scopeId,
-      timeoutMs: 120_000,
-      messages: dailyPlanMessages(agent, day, memories, insights, { guidance, mindState, priorDiary }),
-    });
-    const raw = (res.parsed as { broad_plan?: unknown } | null)?.broad_plan;
-    const broad = (typeof raw === 'string' ? raw : '').slice(0, 300) || '自由安排一天。';
-    this.store.savePlan({ agentId: agent.id, day, broadPlan: broad, hourly: [], status: 'active', createdGameTime: now });
-    this.store.addMemory({ agentId: agent.id, kind: 'plan', content: `第${day}天计划：${broad}`, importance: 8, createdGameTime: now });
+    this.commitDailyPlan(agent, day, now, await this.generateDailyPlan(agent, day, now));
   }
 
   async decomposeHour(agent: Agent, day: number, hour: number, now: number): Promise<void> {
-    const plan = this.store.planFor(agent.id, day);
-    const broad = plan?.broadPlan ?? '';
-    const res = await this.llm.complete({
-      tier: 'small', template: HOUR_PLAN_TEMPLATE, jsonMode: true, jsonSchema: HOUR_PLAN_JSON_SCHEMA,
-      maxTokens: 384, temperature: 0.35,
-      messages: hourPlanMessages(agent, hour, broad), agentId: agent.id, reasoning: false,
-      priority: 'planning', scopeId: this.scopeId, timeoutMs: 120_000,
-    });
-    const rawAgenda = (res.parsed as { agenda?: unknown } | null)?.agenda;
-    const agenda = (Array.isArray(rawAgenda) ? rawAgenda : [])
-      .filter((h): h is { time: string; action: string; location?: unknown } =>
-        !!h && typeof (h as { time?: unknown }).time === 'string' && typeof (h as { action?: unknown }).action === 'string')
-      .map((h) => ({ time: h.time, action: h.action.slice(0, 60), location: String(h.location ?? '').slice(0, 40) }));
-    const merged = (plan?.hourly ?? []).filter((h) => Math.floor(hhToMin(h.time) / 60) !== hour);
-    merged.push(...agenda);
-    merged.sort((a, b) => hhToMin(a.time) - hhToMin(b.time));
-    this.store.savePlan({ agentId: agent.id, day, broadPlan: broad || '自由安排一天。', hourly: merged, status: 'active', createdGameTime: now });
+    this.commitHourPlan(agent, day, hour, now, await this.generateHourPlan(agent, day, hour));
   }
 
   /** 只保留每位居民最新的小时规划；模型返回时若已过时则不覆盖当前计划。 */
@@ -129,17 +93,18 @@ export class Planner {
     const plan = this.store.planFor(agent.id, day);
     if (!plan) return null;
     const hour = Math.floor(minuteOfDay / 60);
-    const items = plan.hourly.filter((h) => Math.floor(hhToMin(h.time) / 60) === hour);
+    const items = plan.hourly.filter((item) => Math.floor(hhToMin(item.time) / 60) === hour);
     if (!items.length) return plan.broadPlan;
-    return items.map((h) => `${h.time} ${h.action}（${h.location}）`).join('；');
+    const context = this.world ? this.currentContext() : null;
+    return items.map((item) => {
+      const place = context?.places.find((candidate) => candidate.id === item.location)?.name ?? item.location;
+      return `${item.time} ${item.action}（${place}）`;
+    }).join('；');
   }
 
   private stateFor(agent: Agent): ScheduledPlan {
     const existing = this.scheduled.get(agent.id);
-    if (existing) {
-      existing.agent = agent;
-      return existing;
-    }
+    if (existing) { existing.agent = agent; return existing; }
     const state: ScheduledPlan = { agent, daily: null, hour: null, dailyRevision: 0, hourRevision: 0, task: null };
     this.scheduled.set(agent.id, state);
     return state;
@@ -168,70 +133,141 @@ export class Planner {
           const result = await this.generateDailyPlan(state.agent, daily.day, daily.now);
           if (state.dailyRevision === daily.revision) this.commitDailyPlan(state.agent, daily.day, daily.now, result);
         } catch (error) {
-          console.warn(`[planner] ${state.agent.id} 第${daily.day}天计划暂用现有安排：${errorMessage(error)}`);
+          console.warn(`[planner] ${state.agent.id} 第${daily.day}天计划未能形成：${errorMessage(error)}`);
         }
       }
-
       const hour = state.hour;
       state.hour = null;
       if (hour) {
         try {
-          const result = await this.generateHourPlan(state.agent, hour.day, hour.hour, hour.now);
+          const result = await this.generateHourPlan(state.agent, hour.day, hour.hour);
           if (state.hourRevision === hour.revision) this.commitHourPlan(state.agent, hour.day, hour.hour, hour.now, result);
         } catch (error) {
-          console.warn(`[planner] ${state.agent.id} ${hour.hour}:00 议程沿用现有安排：${errorMessage(error)}`);
+          console.warn(`[planner] ${state.agent.id} ${hour.hour}:00 议程未能形成：${errorMessage(error)}`);
         }
       }
     }
   }
 
   private async generateDailyPlan(agent: Agent, day: number, now: number): Promise<string> {
-    const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((m) => ({ content: m.content, importance: m.importance }));
+    let context = this.currentContext();
+    const memories = this.store.retrieve(agent.id, agent.persona.goals.join(' '), now, 20).map((memory) => ({
+      content: memory.content, importance: memory.importance,
+    }));
+    const adaptive = {
+      guidance: this.store.recentGuidance(agent.id, 4),
+      mindState: this.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona),
+      priorDiary: this.store.dailyReflectionFor(agent.id, day - 1)?.diary ?? '',
+    };
     const insights = this.store.recentInsights(agent.id, 5);
-    const guidance = this.store.recentGuidance(agent.id, 4);
-    const mindState = this.store.latestMindState(agent.id) ?? initialMindStateOf(agent.persona);
-    const priorDiary = this.store.dailyReflectionFor(agent.id, day - 1)?.diary ?? '';
-    const res = await this.llm.complete({
+    let messages = dailyPlanMessages(agent, day, memories, insights, adaptive, context);
+    let issues: GroundingIssue[] = [{ code: 'empty_narrative', message: '尚未生成计划' }];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (attempt === 1) {
+        context = this.currentContext();
+        messages = appendRepair(messages, planningRepairInstruction(issues, context, 'daily'));
+      }
+      try {
+        const res = await this.llm.complete(this.dailyRequest(agent, messages, attempt));
+        context = this.currentContext();
+        const raw = (res.parsed as { broad_plan?: unknown } | null)?.broad_plan;
+        const assessment = assessDailyPlan(raw, context);
+        if (assessment.ok) return assessment.value;
+        issues = assessment.issues;
+      } catch {
+        issues = [{ code: 'invalid_agenda', message: '模型暂未形成可用的日计划' }];
+      }
+    }
+    const fallbackContext = this.currentContext();
+    const assessed = assessDailyPlan(groundedDailyFallback(agent, fallbackContext), fallbackContext);
+    if (!assessed.ok) throw new Error(assessed.issues.map((issue) => issue.message).join('；'));
+    return assessed.value;
+  }
+
+  private async generateHourPlan(agent: Agent, day: number, hour: number): Promise<AgendaItem[]> {
+    let context = this.currentContext();
+    const broad = this.store.planFor(agent.id, day)?.broadPlan ?? '';
+    let messages = hourPlanMessages(agent, hour, broad, context);
+    let issues: GroundingIssue[] = [{ code: 'invalid_agenda', message: '尚未生成小时安排' }];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (attempt === 1) {
+        context = this.currentContext();
+        messages = appendRepair(messages, planningRepairInstruction(issues, context, 'hour', hour));
+      }
+      try {
+        const res = await this.llm.complete(this.hourRequest(agent, messages, attempt));
+        context = this.currentContext();
+        const raw = (res.parsed as { agenda?: unknown } | null)?.agenda;
+        const assessment = assessHourAgenda(raw, hour, context);
+        if (assessment.ok) return assessment.value;
+        issues = assessment.issues;
+      } catch {
+        issues = [{ code: 'invalid_agenda', message: '模型暂未形成可用的小时安排' }];
+      }
+    }
+    const fallbackContext = this.currentContext();
+    const assessed = assessHourAgenda(groundedHourFallback(agent, hour, fallbackContext), hour, fallbackContext);
+    if (!assessed.ok) throw new Error(assessed.issues.map((issue) => issue.message).join('；'));
+    return assessed.value;
+  }
+
+  private dailyRequest(agent: Agent, messages: ChatMessage[], attempt: number): LLMRequest {
+    return {
       tier: 'small', template: DAILY_PLAN_TEMPLATE, jsonMode: true, jsonSchema: DAILY_PLAN_JSON_SCHEMA,
-      maxTokens: 256,
-      temperature: 0.45, agentId: agent.id, reasoning: false, priority: 'planning',
-      scopeId: this.scopeId, timeoutMs: 120_000,
-      messages: dailyPlanMessages(agent, day, memories, insights, { guidance, mindState, priorDiary }),
-    });
-    const raw = (res.parsed as { broad_plan?: unknown } | null)?.broad_plan;
-    return (typeof raw === 'string' ? raw : '').slice(0, 300) || '自由安排一天。';
+      maxTokens: 256, temperature: attempt === 0 ? 0.45 : 0.1, agentId: agent.id, reasoning: false,
+      priority: 'planning', scopeId: this.scopeId, timeoutMs: 120_000, messages,
+    };
+  }
+
+  private hourRequest(agent: Agent, messages: ChatMessage[], attempt: number): LLMRequest {
+    return {
+      tier: 'small', template: HOUR_PLAN_TEMPLATE, jsonMode: true, jsonSchema: HOUR_PLAN_JSON_SCHEMA,
+      maxTokens: 384, temperature: attempt === 0 ? 0.35 : 0.1, agentId: agent.id, reasoning: false,
+      priority: 'planning', scopeId: this.scopeId, timeoutMs: 120_000, messages,
+    };
   }
 
   private commitDailyPlan(agent: Agent, day: number, now: number, broad: string): void {
-    this.store.savePlan({ agentId: agent.id, day, broadPlan: broad, hourly: [], status: 'active', createdGameTime: now });
-    this.store.addMemory({ agentId: agent.id, kind: 'plan', content: `第${day}天计划：${broad}`, importance: 8, createdGameTime: now });
-  }
-
-  private async generateHourPlan(agent: Agent, day: number, hour: number, now: number): Promise<AgendaItem[]> {
-    const plan = this.store.planFor(agent.id, day);
-    const broad = plan?.broadPlan ?? '';
-    const res = await this.llm.complete({
-      tier: 'small', template: HOUR_PLAN_TEMPLATE, jsonMode: true, jsonSchema: HOUR_PLAN_JSON_SCHEMA,
-      maxTokens: 384,
-      temperature: 0.35, messages: hourPlanMessages(agent, hour, broad), agentId: agent.id,
-      reasoning: false, priority: 'planning', scopeId: this.scopeId, timeoutMs: 120_000,
-    });
-    const rawAgenda = (res.parsed as { agenda?: unknown } | null)?.agenda;
-    return (Array.isArray(rawAgenda) ? rawAgenda : [])
-      .filter((item): item is { time: string; action: string; location?: unknown } =>
-        !!item && typeof (item as { time?: unknown }).time === 'string'
-          && typeof (item as { action?: unknown }).action === 'string')
-      .map((item) => ({ time: item.time, action: item.action.slice(0, 60), location: String(item.location ?? '').slice(0, 40) }));
+    const assessment = assessDailyPlan(broad, this.currentContext());
+    if (!assessment.ok) throw new Error(`日计划提交边界失败：${assessment.issues.map((issue) => issue.message).join('；')}`);
+    this.store.savePlan({ agentId: agent.id, day, broadPlan: assessment.value, hourly: [], status: 'active', createdGameTime: now });
+    this.store.addMemory({ agentId: agent.id, kind: 'plan', content: `第${day}天计划：${assessment.value}`, importance: 8, createdGameTime: now });
   }
 
   private commitHourPlan(agent: Agent, day: number, hour: number, now: number, agenda: AgendaItem[]): void {
+    const context = this.currentContext();
+    const assessment = assessHourAgenda(agenda, hour, context);
+    if (!assessment.ok) throw new Error(`小时安排提交边界失败：${assessment.issues.map((issue) => issue.message).join('；')}`);
     const plan = this.store.planFor(agent.id, day);
-    const broad = plan?.broadPlan ?? '自由安排一天。';
-    const merged = (plan?.hourly ?? []).filter((item) => Math.floor(hhToMin(item.time) / 60) !== hour);
-    merged.push(...agenda);
+    const broadAssessment = assessDailyPlan(plan?.broadPlan ?? '', context);
+    const broad = broadAssessment.ok ? broadAssessment.value : groundedDailyFallback(agent, context);
+    const merged = validatedExistingAgenda(plan?.hourly ?? [], context)
+      .filter((item) => Math.floor(hhToMin(item.time) / 60) !== hour);
+    merged.push(...assessment.value);
     merged.sort((a, b) => hhToMin(a.time) - hhToMin(b.time));
     this.store.savePlan({ agentId: agent.id, day, broadPlan: broad, hourly: merged, status: 'active', createdGameTime: now });
   }
+
+  private currentContext(): PlanningWorldContext {
+    if (!this.world) throw new Error('规划器尚未绑定当前世界');
+    return planningContextFromWorld(this.world);
+  }
+}
+
+function appendRepair(messages: ChatMessage[], instruction: string): ChatMessage[] {
+  return [...messages, { role: 'user', content: instruction }];
+}
+
+function validatedExistingAgenda(items: AgendaItem[], context: PlanningWorldContext): AgendaItem[] {
+  const groups = new Map<number, AgendaItem[]>();
+  for (const item of items) {
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(item.time)) continue;
+    const hour = Number(item.time.slice(0, 2));
+    const group = groups.get(hour) ?? [];
+    group.push(item);
+    groups.set(hour, group);
+  }
+  return [...groups.entries()].flatMap(([hour, group]) => assessHourAgenda(group, hour, context).value);
 }
 
 function errorMessage(error: unknown): string {

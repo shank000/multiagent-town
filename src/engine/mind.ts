@@ -71,6 +71,7 @@ export class MindEngine {
   }
 
   tick(world: WorldState, dt: number, now: number, realtimeSampling = false): void {
+    this.planner.bindWorld(world);
     this.lastGameTime = Math.max(this.lastGameTime, now);
     const day = Math.floor(now / MINUTES_PER_DAY) + 1;
     const minute = now % MINUTES_PER_DAY;

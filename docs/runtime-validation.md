@@ -2,6 +2,20 @@
 
 > 机制与压力数据日期：2026-08-23；SDK 合同复验日期：2026-08-29；本地真实模型并发回归日期：2026-08-30；终态一致性与对话质量门复验日期：2026-08-31。每项证据按其能够支持的范围解释。
 
+## 规划与叙事的世界边界
+
+`MindEngine` 在每次调度规划前把正在运行的 `WorldState` 绑定到规划器。日计划和小时安排只可引用当前居民名册与当前对象表；小时地点统一保存为对象 id，且每个时间必须属于请求的小时。模型结果先经纯评估器检查，越界时以低温修复一次，再以人物作息和现存地点形成确定性安排。只有通过相同评估器的日计划会写入 `plans` 和 `kind=plan` 记忆。
+
+动作决策同时检查内心独白：程序字段、程序地点编号、名册外社交对象和内部校验话术会进入 `ungrounded_narrative` 质量记录，并触发现有的一次修复与安全回退。真实模型门禁支持：
+
+```powershell
+$env:LLM_PROVIDER='ollama'
+$env:OLLAMA_PROFILE='qwen3-balanced'
+$env:REAL_AGENT_NAMES='白露,老周'
+$env:REAL_AGENT_CHECKS='planning,action'
+pnpm test:agents:real
+```
+
 ## 可复用的真实模型运行耐久门
 
 运行器只连接本地 Ollama（默认使用既有 `qwen3-balanced` profile 和 `127.0.0.1:11434`），不会启动、停止或重置任何服务。所有 SQLite 与 JSON 输出必须位于已被 Git 忽略的 `data/` 目录。开发冒烟命令：

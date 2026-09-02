@@ -23,7 +23,7 @@ const ACTION_DECISION_VALIDATOR = 'action-decision/v3';
 const MAX_DECISION_AGE_MIN = 15;
 
 type ActionDecisionQualityStatus = 'valid' | 'normalized' | 'repaired' | 'safe_fallback' | 'stale_rejected';
-type ActionDecisionRejectionCode = 'ungrounded_interaction' | 'stale_context';
+type ActionDecisionRejectionCode = 'ungrounded_interaction' | 'ungrounded_narrative' | 'stale_context';
 
 interface ActionDecisionQuality {
   status: ActionDecisionQualityStatus;
@@ -292,14 +292,14 @@ export class AgentExecutor {
       let validation = this.validate(agent, response.parsed, playerInstruction);
       if (!validation.ok) {
         reasons.push(validation.error ?? '动作决策未通过校验');
-        if (validation.errorCode === 'ungrounded_interaction') rejectionCodes.add('ungrounded_interaction');
+        if (validation.errorCode) rejectionCodes.add(validation.errorCode);
         attempts = 2;
         response = await this.llm.complete(this.repairRequest(agent, req, response.parsed, reasons[0], playerInstruction));
         model = response.performance?.model ?? model;
         validation = this.validate(agent, response.parsed, playerInstruction);
         if (!validation.ok) {
           reasons.push(validation.error ?? '修正后的动作决策未通过校验');
-          if (validation.errorCode === 'ungrounded_interaction') rejectionCodes.add('ungrounded_interaction');
+          if (validation.errorCode) rejectionCodes.add(validation.errorCode);
         }
       }
 
@@ -338,23 +338,21 @@ export class AgentExecutor {
     reason: string,
     playerInstruction: string | null,
   ): LLMRequest {
-    const previous = safeJson(invalid).slice(0, 1_200);
     const target = targetFromDecision(invalid);
     const allowed = target ? this.interactionVerbs(agent, target) : [];
     const groundingRule = allowed.length
-      ? `若使用 interact，verb 必须逐字选择目标已声明动词之一：${allowed.join('、')}。`
+      ? `若要与目标互动，行动必须逐字选择该地点已声明功能之一：${allowed.join('、')}。`
       : playerInstruction
-        ? `若使用 interact，verb 必须来自明确玩家指令「${playerInstruction}」中的动作短语。`
-        : '若目标没有已声明交互动词，请改用 move_to 或 idle，不得发明 interact 动词。';
+        ? `若要与目标互动，行动必须来自明确玩家指令「${playerInstruction}」中的动作短语。`
+        : '若目标没有已声明功能，请改为前往观察或原地休息，不得发明互动方式。';
     return {
       ...req,
       temperature: 0.1,
       messages: [
         ...req.messages,
-        { role: 'assistant', content: previous },
         {
           role: 'user',
-          content: `上一个动作 JSON 未通过校验：${reason}。请只修正 JSON，不要解释。idle 的 target 必须是 null；move_to/interact 的 target 必须是可用对象 id。${groundingRule}`,
+          content: `上一个行动决定没有通过现实边界检查：${reason}。请只返回修正后的结构化结果，不要解释。休息时不指定地点；移动或互动时只能选择当前可用地点。内心想法要使用生活化语言，不要提到程序字段或检查规则。${groundingRule}`,
         },
       ],
     };
@@ -364,6 +362,8 @@ export class AgentExecutor {
     return validateDecision(parsed, (id) => this.world.hasObject(id), {
       interactionVerbs: (targetId) => this.interactionVerbs(agent, targetId),
       playerInstruction,
+      knownResidentNames: this.world.allAgents().map((resident) => resident.name),
+      knownObjectIds: this.world.allObjects().map((object) => object.id),
     });
   }
 
@@ -644,14 +644,6 @@ export class AgentExecutor {
       gameTime: now,
       payload: { kind: 'action_decision_quality', ...quality, reasons },
     };
-  }
-}
-
-function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? '{}';
-  } catch {
-    return '{}';
   }
 }
 

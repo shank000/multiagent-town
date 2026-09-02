@@ -6,6 +6,8 @@ import { reflectionDiaryOf } from '../engine/reflection';
 import { personalityOf } from '../engine/town-model';
 import { assessDialogueTurn, conservativeDialogueReply, dialogueRepairInstruction } from '../engine/dialogue-quality';
 import { validateDecision } from '../llm/action-validator';
+import { Planner } from '../llm/planner';
+import { assessDailyPlan, assessHourAgenda, planningContextFromWorld } from '../llm/plan-grounding';
 import { LLMGateway } from '../llm/gateway';
 import {
   ACTION_DECISION_TEMPLATE,
@@ -17,6 +19,8 @@ import {
   reflectionJournalMessages,
 } from '../llm/prompts';
 import { gatewayConfigFromEnv, providerNameFromEnv } from '../llm/provider-config';
+import { openDb } from '../store/db';
+import { MemoryStore } from '../store/memory';
 
 interface AgentScenario {
   question: string;
@@ -27,7 +31,7 @@ interface AgentScenario {
 }
 
 interface CheckResult {
-  name: '行动' | '对话' | '世界事实' | '反思';
+  name: '规划' | '行动' | '对话' | '世界事实' | '反思';
   ok: boolean;
   latencyMs: number;
   detail: string;
@@ -142,6 +146,8 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
         .map((slot) => slot.verb);
       return [...new Set([...declared, ...routine])];
     },
+    knownResidentNames: world.allAgents().map((resident) => resident.name),
+    knownObjectIds: world.allObjects().map((object) => object.id),
   });
   const expectedTarget = activeRoutine?.target ?? null;
   const followsRoutine = !expectedTarget || validated.decision.action.target === expectedTarget;
@@ -151,6 +157,41 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
     detail: !validated.ok ? validated.error ?? '决策结构非法' : followsRoutine ? '结构合法且承接当前职业日程' : `未承接当前日程目标 ${expectedTarget}`,
     sample: `${validated.decision.thought} → ${validated.decision.action.verb} @ ${validated.decision.action.target ?? '原地'}`,
   };
+}
+
+async function checkPlanning(llm: LLMGateway, agent: Agent): Promise<CheckResult> {
+  const world = buildTown();
+  const context = planningContextFromWorld(world);
+  const db = openDb(':memory:');
+  const store = new MemoryStore(db);
+  const planner = new Planner(llm, store, `real-planning:${agent.id}`);
+  planner.bindWorld(world);
+  const started = performance.now();
+  try {
+    await planner.dailyPlan(agent, 1, 300);
+    await planner.decomposeHour(agent, 1, 10, 600);
+    const plan = store.planFor(agent.id, 1);
+    const daily = assessDailyPlan(plan?.broadPlan, context);
+    const hourly = assessHourAgenda(plan?.hourly, 10, context);
+    const planMemory = store.recentMemories(agent.id, 20).find((memory) => memory.kind === 'plan');
+    const memoryGrounded = !!planMemory && assessDailyPlan(planMemory.content.replace(/^第\d+天计划：/, ''), context).ok;
+    const ok = daily.ok && hourly.ok && memoryGrounded
+      && hourly.value.every((item) => world.hasObject(item.location));
+    const failures = [
+      daily.ok ? '' : daily.issues.map((issue) => issue.message).join('；'),
+      hourly.ok ? '' : hourly.issues.map((issue) => issue.message).join('；'),
+      memoryGrounded ? '' : '计划记忆未通过同一现实边界检查',
+    ].filter(Boolean);
+    const first = hourly.value[0];
+    const place = first ? world.getObject(first.location)?.name ?? first.location : '无小时安排';
+    return {
+      name: '规划', ok, latencyMs: Math.round(performance.now() - started),
+      detail: failures.length ? failures.join('；') : '日计划、小时安排与计划记忆均通过当前世界边界检查',
+      sample: `${daily.value.slice(0, 150)}${first ? ` / ${first.time} ${first.action} @ ${place}` : ''}`,
+    };
+  } finally {
+    db.raw.close();
+  }
 }
 
 async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenario: AgentScenario): Promise<CheckResult> {
@@ -401,9 +442,9 @@ async function main(): Promise<void> {
     .split(',')
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean));
-  const validChecks = new Set(['action', 'dialogue', 'world', 'reflection']);
+  const validChecks = new Set(['planning', 'action', 'dialogue', 'world', 'reflection']);
   if ([...requestedChecks].some((name) => !validChecks.has(name))) {
-    throw new Error(`REAL_AGENT_CHECKS 仅支持 action,dialogue,world,reflection：${[...requestedChecks].join(', ')}`);
+    throw new Error(`REAL_AGENT_CHECKS 仅支持 planning,action,dialogue,world,reflection：${[...requestedChecks].join(', ')}`);
   }
   const results: AgentResult[] = [];
 
@@ -418,6 +459,7 @@ async function main(): Promise<void> {
     if (!scenario) throw new Error(`缺少居民验收场景：${agent.name}`);
     const checks: CheckResult[] = [];
     const runs: { key: string; name: CheckResult['name']; run: () => Promise<CheckResult> }[] = [
+      { key: 'planning', name: '规划', run: () => checkPlanning(llm, agent) },
       { key: 'action', name: '行动', run: () => checkAction(llm, agent) },
       { key: 'dialogue', name: '对话', run: () => checkDialogue(llm, agent, other, scenario) },
       { key: 'world', name: '世界事实', run: () => checkWorldFacts(llm, agent, other) },

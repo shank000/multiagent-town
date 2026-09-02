@@ -4,6 +4,7 @@ import type { Agent, Persona, RoutineSlot } from '../core/types';
 import type { ReflectionMindState } from '../store/memory';
 import type { ChatMessage } from './types';
 import { TimeEngine, MINUTES_PER_DAY } from '../core/time';
+import type { PlanningWorldContext } from './plan-grounding';
 
 export const ACTION_DECISION_TEMPLATE = 'action_decision';
 export const IMPORTANCE_TEMPLATE = 'importance';
@@ -132,7 +133,7 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
   const travelExample = input.objects.find((object) => object.id !== input.agent.locationId) ?? input.objects[0];
   const actionExample = affordedExample
     ? {
-        thought: `使用${affordedExample.name}已声明的功能`,
+        thought: `我准备在${affordedExample.name}${affordedExample.affordances![0].verb}`,
         action: { type: 'interact', target: affordedExample.id, verb: affordedExample.affordances![0].verb },
         duration_minutes: 10,
       }
@@ -166,14 +167,24 @@ export function buildActionDecisionMessages(input: ActionDecisionInput): { messa
     `决定接下来 5~15 分钟做什么。地点必须从给定对象里选。`,
     'thought 只解释这一个即时行动，事实只能来自以上上下文；未来意图要写成“准备/打算”，不得把未观察到的事件写成已经发生，也不得描述 action 未编码的额外行动。',
     '动作字段必须匹配：idle 只能使用 JSON null 作为 target；move_to/interact 必须使用可用对象的 id 作为 target。',
-    'interact 是可执行动作：verb 必须逐字选用目标对象 affordances 中的 verb，或人物作息里同一 target 已明确声明的 verb；明确玩家指令中的动作短语也可作为授权。目标没有这些声明时，只能 move_to 前往观察或 idle，不得发明交互动词。',
+    'interact 是可执行动作：verb 必须逐字选用目标地点 available_actions 中的 action，或人物作息里同一地点已有的动作；明确玩家指令中的动作短语也可作为依据。地点没有这些功能时，只能 move_to 前往观察或 idle，不得发明交互方式。',
     '对象中的 state 只会在你处于可感知范围内时出现，可把它当作当前亲眼看到、听到或闻到的现场线索。',
     'idle 示例：{"thought":"稍作休息","action":{"type":"idle","target":null,"verb":"休息"},"duration_minutes":10}',
     `动作示例：${JSON.stringify(actionExample)}`,
     `只输出 JSON：一个符合上述约束的对象。`,
   ].join('\n');
+  const naturalObjects = input.objects.map((object) => ({
+    id: object.id,
+    name: object.name,
+    ...(object.description ? { description: object.description } : {}),
+    ...(object.affordances?.length ? {
+      available_actions: object.affordances.map((item) => ({ action: item.verb, outcome: item.outcome })),
+    } : {}),
+    ...(object.sensoryCues?.length ? { sensory_cues: object.sensoryCues } : {}),
+    ...(object.state ? { current_state: object.state } : {}),
+  }));
   const user = input.includeMockContext === false
-    ? `可用对象：${JSON.stringify(input.objects)}`
+    ? `可用地点与物品：${JSON.stringify(naturalObjects)}`
     : `可用对象：${JSON.stringify(input.objects)}\n\n<M0_CONTEXT>\n${JSON.stringify(input.mockContext)}\n</M0_CONTEXT>`;
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
 }
@@ -199,19 +210,24 @@ export function dailyPlanMessages(
   memories: MemoryBrief[],
   insights: string[],
   adaptive: { guidance?: string[]; mindState?: ReflectionMindState | null; priorDiary?: string } = {},
+  world?: PlanningWorldContext,
 ): ChatMessage[] {
   const guidance = adaptive.guidance?.join('；') || '（暂无）';
   const mindset = adaptive.mindState?.summary ?? '（暂无稳定评估）';
+  const residents = world?.residents.map((resident) => resident.name).join('、') || agent.name;
+  const places = world?.places.map((place) => `${place.name}（${place.id}）`).join('、') || '按既有作息选择地点';
   return simpleMessages(
-    `你是 ${personaText(agent.persona)}。你在一个 2D 小镇生活，需要安排第 ${day} 天。\n近期记忆：\n${memories.slice(0, 10).map((m) => `- ${m.content}`).join('\n') || '（暂无）'}\n自我认知：${insights.join('；') || '（暂无）'}\n上一份日记：${adaptive.priorDiary || '（暂无）'}\n当前心态：${mindset}\n经反思形成的行为指引：${guidance}\n生成今天的大计划（3~5 句，覆盖职业职责、人际回应、休息与个人目标）。计划可以根据反思调整，但不得声称尚未发生的事件。只输出 JSON：{"broad_plan": "..."}`,
-    { persona: agent.persona, day, memories, insights, guidance: adaptive.guidance ?? [], mindState: adaptive.mindState ?? null, priorDiary: adaptive.priorDiary ?? '' }
+    `你是 ${personaText(agent.persona)}。你在一个 2D 小镇生活，需要安排第 ${day} 天。\n当前居民名册：${residents}\n当前可去地点：${places}\n近期记忆：\n${memories.slice(0, 10).map((m) => `- ${m.content}`).join('\n') || '（暂无）'}\n自我认知：${insights.join('；') || '（暂无）'}\n上一份日记：${adaptive.priorDiary || '（暂无）'}\n当前心态：${mindset}\n经反思形成的行为指引：${guidance}\n生成今天的大计划（3~5 句，覆盖职业职责、人际回应、休息与个人目标）。只能引用名册中的居民和当前地点；计划可以根据反思调整，但不得声称尚未发生的事件，也不要写程序检查说明。只输出 JSON：{"broad_plan": "..."}`,
+    { persona: agent.persona, day, memories, insights, guidance: adaptive.guidance ?? [], mindState: adaptive.mindState ?? null, priorDiary: adaptive.priorDiary ?? '', world: world ?? null }
   );
 }
 
-export function hourPlanMessages(agent: Agent, hour: number, broadPlan: string): ChatMessage[] {
+export function hourPlanMessages(agent: Agent, hour: number, broadPlan: string, world?: PlanningWorldContext): ChatMessage[] {
+  const residents = world?.residents.map((resident) => resident.name).join('、') || agent.name;
+  const places = world?.places.map((place) => `${place.name}（${place.id}）`).join('、') || '按既有作息选择地点';
   return simpleMessages(
-    `你是 ${personaText(agent.persona)}。现在是第 ${hour} 点。当天大计划：${broadPlan || '（暂无）'}\n把接下来 1 小时拆成 5~15 分钟的具体动作清单。只输出 JSON：{"agenda": [{"time": "HH:MM", "action": "...", "location": "<对象 id 或名字>"}]}`,
-    { persona: agent.persona, hour, broadPlan }
+    `你是 ${personaText(agent.persona)}。现在是第 ${hour} 点。当天大计划：${broadPlan || '（暂无）'}\n当前居民名册：${residents}\n当前可去地点：${places}\n把这一小时拆成 5~15 分钟的具体动作清单。时间必须属于第 ${hour} 点，地点只能选上面的地点，居民只能引用名册中的人。使用生活化语言，不要写程序检查说明。只输出 JSON：{"agenda": [{"time": "HH:MM", "action": "...", "location": "<地点 id 或名字>"}]}`,
+    { persona: agent.persona, hour, broadPlan, world: world ?? null }
   );
 }
 

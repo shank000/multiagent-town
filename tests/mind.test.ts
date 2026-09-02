@@ -38,7 +38,9 @@ test('currentAgendaLine 返回当前时段议程或大计划', async () => {
   const db = openDb(':memory:');
   const store = new MindEngine({ db, llm: new LLMGateway({ provider: 'mock' }), log: new EventLog(db) }).store;
   const planner = new Planner(new LLMGateway({ provider: 'mock' }), store);
-  const agent = buildTown().allAgents()[0];
+  const world = buildTown();
+  planner.bindWorld(world);
+  const agent = world.allAgents()[0];
   await planner.dailyPlan(agent, 1, 300);
   await planner.decomposeHour(agent, 1, 9, 540);
   const line = planner.currentAgendaLine(agent, 1, 540);
@@ -90,7 +92,9 @@ test('小时规划合并过期请求，只提交最新时间段', async () => {
   const db = openDb(':memory:');
   const store = new MemoryStore(db);
   const planner = new Planner(new LLMGateway({ provider, retries: 0, maxConcurrent: 1 }), store, 'w1');
-  const agent = buildTown().allAgents()[0];
+  const world = buildTown();
+  planner.bindWorld(world);
+  const agent = world.allAgents()[0];
   const first = planner.scheduleHour(agent, 1, 1, 60);
   await started;
   const second = planner.scheduleHour(agent, 1, 2, 120);

@@ -1,12 +1,13 @@
 // 动作校验：结构化输出 + 对象树校验，失败降级 idle（design §5.5）
 
 import type { Action, Decision } from '../core/types';
+import { assessNarrative } from './plan-grounding';
 
 export interface ValidationResult {
   ok: boolean;
   decision: Decision; // !ok 时即为 idle 降级决策
   error?: string;
-  errorCode?: 'ungrounded_interaction';
+  errorCode?: 'ungrounded_interaction' | 'ungrounded_narrative';
   normalization?: {
     code: 'idle_target_cleared' | 'interaction_verb_canonicalized';
     detail: string;
@@ -18,6 +19,10 @@ export interface DecisionValidationContext {
   interactionVerbs?: (targetId: string) => readonly string[];
   /** 玩家明确指令中的动作短语是独立的人工授权来源。 */
   playerInstruction?: string | null;
+  /** 当前世界的居民名册，供内心独白边界检查使用。 */
+  knownResidentNames?: readonly string[];
+  /** 当前世界的对象 id，供内心独白中的地点引用检查使用。 */
+  knownObjectIds?: readonly string[];
 }
 
 const ACTION_TYPES = new Set(['move_to', 'interact', 'idle']);
@@ -34,6 +39,15 @@ export function validateDecision(
   } | null;
   if (!obj || typeof obj !== 'object') return fail('决策输出不是对象');
   const thought = typeof obj.thought === 'string' ? obj.thought.slice(0, 200) : '';
+  if (thought) {
+    const narrative = assessNarrative(thought, {
+      residents: (context.knownResidentNames ?? []).map((name) => ({ id: name, name })),
+      places: (context.knownObjectIds ?? []).map((id) => ({ id, name: id, availableActions: [] })),
+    });
+    if (!narrative.ok) {
+      return fail(`内心想法没有通过现实边界检查：${narrative.issues.map((issue) => issue.message).join('；')}`, 'ungrounded_narrative');
+    }
+  }
   const type = obj.action?.type;
   const duration = Number(obj.duration_minutes);
   if (typeof type !== 'string' || !ACTION_TYPES.has(type)) return fail(`动作类型非法：${String(type)}`);
@@ -53,14 +67,14 @@ export function validateDecision(
     const instructed = verbAppearsInInstruction(verb, context.playerInstruction);
     if (declared.kind === 'ambiguous' && !instructed) {
       return fail(
-        `交互动词无法唯一映射到目标「${target}」的声明动词：${verb}；匹配动词：${declared.matches.join('、')}`,
+        `行动「${verb}」无法唯一映射到目标「${target}」的已声明功能；可能的功能：${declared.matches.join('、')}`,
         'ungrounded_interaction',
       );
     }
     if (declared.kind === 'none' && !instructed) {
       const allowedText = allowed.length ? allowed.join('、') : '无';
       return fail(
-        `交互动词未由目标「${target}」的 affordance、人物作息或玩家指令声明：${verb}；允许动词：${allowedText}`,
+        `行动「${verb}」不属于目标「${target}」的已声明功能、人物作息或玩家指令；已声明功能：${allowedText}`,
         'ungrounded_interaction',
       );
     }

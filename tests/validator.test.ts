@@ -25,7 +25,7 @@ test('interact 动词必须由目标 affordance、作息或明确玩家指令落
   );
   assert.equal(hallucinated.ok, false);
   assert.equal(hallucinated.errorCode, 'ungrounded_interaction');
-  assert.match(hallucinated.error ?? '', /允许动词：在公园写生/);
+  assert.match(hallucinated.error ?? '', /已声明功能：在公园写生/);
 
   const routineVerb = validateDecision(
     { thought: '开始写生', action: { type: 'interact', target: 'obj:park', verb: '在公园写生' }, duration_minutes: 10 },
@@ -124,4 +124,29 @@ test('idleDecision 构造兜底决策', () => {
     action: { type: 'idle', target: null, verb: '休息' },
     durationMinutes: 10,
   });
+});
+
+test('动作内心独白拒绝程序术语、未知对象与名册外居民', () => {
+  const context = {
+    knownResidentNames: ['林晚晴', '白露'],
+    knownObjectIds: ['obj:cafe', 'obj:park'],
+  };
+  for (const thought of [
+    '根据 affordance 必须使用该动词。',
+    '我先去 obj:mars 看看。',
+    '我想邀请小雅一起喝咖啡。',
+  ]) {
+    const result = validateDecision({
+      thought,
+      action: { type: 'idle', target: null, verb: '休息' },
+      duration_minutes: 10,
+    }, has, context);
+    assert.equal(result.ok, false, thought);
+    assert.equal(result.errorCode, 'ungrounded_narrative');
+  }
+  assert.equal(validateDecision({
+    thought: '我先在咖啡馆整理一下，再向白露问候。',
+    action: { type: 'idle', target: null, verb: '休息' },
+    duration_minutes: 10,
+  }, has, context).ok, true);
 });

@@ -49,7 +49,7 @@ test('buildActionDecisionMessages 含 persona/时钟/JSON 指令/M0_CONTEXT', ()
   assert.ok(user.includes('<M0_CONTEXT>'));
 });
 
-test('动作提示的 interact 示例逐字采用对象声明的 affordance', () => {
+test('动作提示的 interact 示例逐字采用地点已声明功能', () => {
   const agent = makeAgent({ persona: persona({ name: '甲', routine: [] }) });
   const { messages } = buildActionDecisionMessages({
     agent, day: 1, minuteOfDay: 600, locationName: '公园', playerInstruction: null,
@@ -82,7 +82,10 @@ test('真实模型动作提示只发送一份语义上下文并保留全部可�
   const agent = makeAgent({ persona: persona({ name: '甲', occupation: '邮递员' }) });
   const { messages } = buildActionDecisionMessages({
     agent, day: 1, minuteOfDay: 600, locationName: '邮局', playerInstruction: null,
-    objects: [{ id: 'obj:post_office', name: '邮局' }, { id: 'obj:plaza', name: '广场' }],
+    objects: [{
+      id: 'obj:post_office', name: '邮局',
+      affordances: [{ verb: '分拣信件', outcome: '完成上午的投递准备' }],
+    }, { id: 'obj:plaza', name: '广场' }],
     mockContext: {
       persona: agent.persona, minuteOfDay: 600, routine: [], memories: [{ content: '上午需要投递信件。', importance: 7 }],
       insights: ['按路线依次投递更稳妥。'], agenda: '整理邮件', playerInstruction: null, objects: [],
@@ -93,6 +96,10 @@ test('真实模型动作提示只发送一份语义上下文并保留全部可�
   assert.ok(user.includes('obj:post_office'));
   assert.ok(user.includes('obj:plaza'));
   assert.ok(!user.includes('<M0_CONTEXT>'));
+  assert.ok(user.includes('available_actions'));
+  assert.ok(user.includes('"action":"分拣信件"'));
+  assert.ok(user.includes('"outcome":"完成上午的投递准备"'));
+  assert.ok(!user.includes('affordance'));
   assert.ok(messages[0].content.includes('上午需要投递信件'));
   assert.ok(messages[0].content.includes('按路线依次投递更稳妥'));
 });
