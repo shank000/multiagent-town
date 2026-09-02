@@ -15,9 +15,9 @@ import {
   REFLECTION_QUESTIONS_TEMPLATE,
 } from '../llm/prompts';
 
-const DAYS = 2;
+const DEFAULT_DAYS = 2;
 const AGENT_COUNT = 6;
-const TICK_MINUTES = 5;
+const DEFAULT_TICK_MINUTES = 5;
 const DIALOGUE_TEMPLATES = new Set([DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE]);
 
 export interface CognitiveBudgetResult {
@@ -44,6 +44,16 @@ export interface CognitiveBudgetResult {
   cognitionBudget: { modelRequests: number; groundedContinuations: number; playerBypasses: number };
 }
 
+export interface CognitiveBudgetOptions {
+  days?: number;
+  tickMinutes?: number;
+}
+
+export interface ResolvedCognitiveBudgetOptions {
+  days: number;
+  tickMinutes: number;
+}
+
 /**
  * A deterministic provider used only to measure actual gateway completions. It returns contract-shaped
  * data without copying prompts or credentials into the report and deliberately runs in custom mode.
@@ -67,7 +77,15 @@ export class CountingContractProvider implements LLMProvider {
   }
 }
 
-export async function runCognitiveBudgetHarness(): Promise<CognitiveBudgetResult> {
+export function resolveCognitiveBudgetOptions(options: CognitiveBudgetOptions = {}): ResolvedCognitiveBudgetOptions {
+  return {
+    days: boundedInteger(options.days ?? DEFAULT_DAYS, 'days', 1, 30),
+    tickMinutes: boundedInteger(options.tickMinutes ?? DEFAULT_TICK_MINUTES, 'tickMinutes', 1, 60),
+  };
+}
+
+export async function runCognitiveBudgetHarness(options: CognitiveBudgetOptions = {}): Promise<CognitiveBudgetResult> {
+  const resolved = resolveCognitiveBudgetOptions(options);
   const provider = new CountingContractProvider();
   const gateway = new LLMGateway({
     provider,
@@ -78,24 +96,25 @@ export async function runCognitiveBudgetHarness(): Promise<CognitiveBudgetResult
   });
   const managed = createManagedWorld('cognitive-budget', 'mem-on', {
     seed: 1701,
-    gameMinutesPerTick: TICK_MINUTES,
+    gameMinutesPerTick: resolved.tickMinutes,
     gateway,
     dbPath: ':memory:',
   });
-  const totalMinutes = DAYS * 1440;
+  const totalMinutes = resolved.days * 1440;
   try {
     await managed.loop.runUntil(totalMinutes);
     await managed.mind.drain();
     const pair = managed.world.allAgents().slice(0, 2);
-    const reservation = managed.mind.dialogue.reserve(pair[0], pair[1], totalMinutes, {
+    const endGameTime = managed.time.state.totalMinutes;
+    const reservation = managed.mind.dialogue.reserve(pair[0], pair[1], endGameTime, {
       requireAdjacent: false,
       source: 'manual',
       world: managed.world,
     });
-    managed.mind.dialogue.dispatchReservations(managed.world, totalMinutes);
+    managed.mind.dialogue.dispatchReservations(managed.world, endGameTime);
     for (let turn = 1; turn <= 16; turn += 1) {
       await managed.mind.dialogue.drain();
-      managed.mind.dialogue.tick(managed.world, 2, totalMinutes + turn * 2);
+      managed.mind.dialogue.tick(managed.world, 2, endGameTime + turn * 2);
       const conversation = managed.mind.store.conversationsFor(pair[0].id, 20)
         .find((item) => item.id === reservation.conversationId);
       if (conversation && conversation.status !== 'active') break;
@@ -118,7 +137,7 @@ export async function runCognitiveBudgetHarness(): Promise<CognitiveBudgetResult
       .filter(([template]) => DIALOGUE_TEMPLATES.has(template))
       .reduce((sum, [, calls]) => sum + calls, 0);
     const agents = managed.world.allAgents();
-    const expectedPlans = agents.flatMap((agent) => Array.from({ length: DAYS }, (_, index) => ({ agent, day: index + 1 })));
+    const expectedPlans = agents.flatMap((agent) => Array.from({ length: resolved.days }, (_, index) => ({ agent, day: index + 1 })));
     const plans = expectedPlans.map(({ agent, day }) => managed.mind.store.planFor(agent.id, day));
     const reflections = agents.flatMap((agent) => managed.mind.store.reflectionsFor(agent.id));
     const conversation = managed.mind.store.conversationsFor(pair[0].id, 20)
@@ -126,9 +145,9 @@ export async function runCognitiveBudgetHarness(): Promise<CognitiveBudgetResult
     const scheduler = gateway.schedulerSnapshot();
     return {
       schemaVersion: 1,
-      days: DAYS,
+      days: resolved.days,
       agents: agents.length,
-      tickMinutes: TICK_MINUTES,
+      tickMinutes: resolved.tickMinutes,
       callsByTemplate,
       providerCallsByTemplate,
       nonDialogueCalls,
@@ -137,8 +156,8 @@ export async function runCognitiveBudgetHarness(): Promise<CognitiveBudgetResult
       plansExpected: expectedPlans.length,
       plansPresent: plans.filter(Boolean).length,
       agendasPresent: plans.filter((plan) => (plan?.hourly.length ?? 0) > 0).length,
-      dailyReflectionsExpected: agents.length * DAYS,
-      dailyReflectionsPresent: agents.reduce((count, agent) => count + Array.from({ length: DAYS }, (_, index) => (
+      dailyReflectionsExpected: agents.length * resolved.days,
+      dailyReflectionsPresent: agents.reduce((count, agent) => count + Array.from({ length: resolved.days }, (_, index) => (
         managed.mind.store.dailyReflectionFor(agent.id, index + 1) ? 1 : 0
       )).reduce<number>((sum, value) => sum + value, 0), 0),
       persistedReflections: reflections.length,
@@ -222,13 +241,30 @@ function evidenceIdsFrom(request: LLMRequest): string[] {
   return [...ids].slice(0, 5);
 }
 
+function boundedInteger(value: number, label: string, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${label} 必须是 ${minimum}..${maximum} 的整数`);
+  }
+  return value;
+}
+
+function environmentInteger(name: string, minimum: number, maximum: number): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  if (!/^\d+$/u.test(raw)) throw new Error(`${name} 必须是 ${minimum}..${maximum} 的整数`);
+  return boundedInteger(Number(raw), name, minimum, maximum);
+}
+
 function isMainModule(): boolean {
   const entry = process.argv[1];
   return !!entry && resolve(entry) === resolve(fileURLToPath(import.meta.url));
 }
 
 if (isMainModule()) {
-  runCognitiveBudgetHarness()
+  runCognitiveBudgetHarness({
+    days: environmentInteger('COGNITIVE_BUDGET_DAYS', 1, 30),
+    tickMinutes: environmentInteger('COGNITIVE_BUDGET_TICK_MINUTES', 1, 60),
+  })
     .then((result) => process.stdout.write(`${JSON.stringify(result, null, 2)}\n`))
     .catch((error) => {
       process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);

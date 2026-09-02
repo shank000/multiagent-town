@@ -33,6 +33,8 @@ pnpm test:cognitive:budget
 node --no-warnings --import tsx --test tests/cognitive-budget.test.ts
 ```
 
+协调器在 fresh worktree 需要扩大连续运行时可设置 `COGNITIVE_BUDGET_DAYS=1..30` 与 `COGNITIVE_BUDGET_TICK_MINUTES=1..60`；缺省仍为 2 日和每 tick 5 游戏分钟。开发执行器不运行 7 日 held-out，7 日配置由协调器单独执行。
+
 M0 fixture 固定在提交 `bd6d943637b664e9349cd032625b36456ea02ef4`：非对话 2,104 次（动作 486、日计划 12、小时计划 288、重要性 1,108、反思问题 42、洞察 126、日记 42）。候选复验为 168 次（动作 123、日计划 12、反思日记 33），降幅 92.02%；对话与摘要不计入分子，但仍必须形成 4—6 轮 completed 会话。
 
 六居民每模拟日的正常上限解释如下：`importance/hour_plan/reflection_questions/reflection_insights=0`；`action_decision<=144`，另允许恢复边界每居民一次；有效日计划通常为 6 次，只有无效输出才允许每居民一次修复；`reflection_journal` 不得超过实际持久化反思数，且事件触发策略仍是每居民每日最多两次并保留一份日记。所有居民必须在日边界排空 thinking，共享 gateway 的 active/queued 必须为 0。预算门只验证调用量和工程合同，不估计、不支持、也不得解释为任何人物行为或社会科学处理效应。

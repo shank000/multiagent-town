@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { runCognitiveBudgetHarness } from '../src/cli/cognitive-budget';
+import { resolveCognitiveBudgetOptions, runCognitiveBudgetHarness } from '../src/cli/cognitive-budget';
 
 interface BaselineFixture {
   baselineCommit: string;
@@ -13,6 +13,13 @@ interface BaselineFixture {
 const baseline = JSON.parse(readFileSync(fileURLToPath(
   new URL('./fixtures/cognitive-budget-m0.json', import.meta.url),
 ), 'utf8')) as BaselineFixture;
+
+test('预算 harness 参数默认稳定并接受协调器 7 日配置', () => {
+  assert.deepEqual(resolveCognitiveBudgetOptions(), { days: 2, tickMinutes: 5 });
+  assert.deepEqual(resolveCognitiveBudgetOptions({ days: 7, tickMinutes: 10 }), { days: 7, tickMinutes: 10 });
+  assert.throws(() => resolveCognitiveBudgetOptions({ days: 0 }), /days 必须是 1\.\.30/);
+  assert.throws(() => resolveCognitiveBudgetOptions({ tickMinutes: 61 }), /tickMinutes 必须是 1\.\.60/);
+});
 
 test('2 日 6 人 custom counting harness 满足候选认知预算与落盘门', async () => {
   assert.equal(baseline.baselineCommit, 'bd6d943637b664e9349cd032625b36456ea02ef4');
