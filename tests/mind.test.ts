@@ -79,13 +79,16 @@ test('小时规划合并过期请求，只提交最新时间段', async () => {
     name: 'planning-coalescing',
     async complete(request: LLMRequest): Promise<LLMResponse> {
       const context = request.messages.find((message) => message.role === 'user')?.content.match(/<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/)?.[1];
-      const hour = Number((context ? JSON.parse(context) as { hour?: number } : {}).hour ?? -1);
+      const payload = context ? JSON.parse(context) as { hour?: number; planningOptions?: { id: string }[] } : {};
+      const hour = Number(payload.hour ?? -1);
       requestedHours.push(hour);
       if (requestedHours.length === 1) {
         firstStarted();
         await firstGate;
       }
-      const parsed = { agenda: [{ time: `${String(hour).padStart(2, '0')}:00`, action: `处理第${hour}小时事务`, location: '小镇' }] };
+      const parsed = {
+        agenda: [{ time: `${String(hour).padStart(2, '0')}:00`, option_id: payload.planningOptions?.[0]?.id }],
+      };
       return { content: JSON.stringify(parsed), parsed, usage: { inputTokens: 0, outputTokens: 0, costYuan: 0 } };
     },
   };

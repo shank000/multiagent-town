@@ -11,13 +11,6 @@ import {
 
 const CONTEXT_RE = /<M0_CONTEXT>\n([\s\S]*?)\n<\/M0_CONTEXT>/;
 
-const DAILY_PLANS: Record<string, string> = {
-  '林晚晴': '照常经营咖啡馆，午后去书店翻翻新书，傍晚到公园散步，晚上回家写小说笔记。',
-  '陈默': '整理书店的新到书目，接待常客，傍晚去广场散步透透气。',
-  '沈屿': '上午在公园写生，午后到咖啡馆喝咖啡画速写，晚上整理画稿。',
-  '周岚': '上午在邮局分拣信件，之后骑车给广场、咖啡馆、书店送信，傍晚回家。',
-};
-
 export function mockImportance(text: string): number {
   if (/派对|读书会|集市|秘密|约定|邀请|结婚|事故|宝藏/.test(text)) return 9;
   if (/计划|反思|重要|决定|喜欢|讨厌/.test(text)) return 8;
@@ -41,12 +34,19 @@ export class MockProvider implements LLMProvider {
       }
       case IMPORTANCE_TEMPLATE: out = { importance: mockImportance(String(ctx.text ?? '')) }; break;
       case DAILY_PLAN_TEMPLATE: {
-        const base = DAILY_PLANS[(ctx.persona as { name?: string } | undefined)?.name ?? ''] ?? '今天照常在小镇里度过，做点喜欢的事。';
-        const guidance = Array.isArray(ctx.guidance) ? (ctx.guidance as string[]).filter(Boolean).slice(0, 2) : [];
-        out = { broad_plan: guidance.length ? `${base} 我也会落实反思后的调整：${guidance.join('；')}` : base };
+        const options = planningOptions(ctx);
+        out = { option_ids: options.slice(0, 5).map((option) => option.id) };
         break;
       }
-      case HOUR_PLAN_TEMPLATE: out = { agenda: hourAgenda((ctx.persona as { routine?: RoutineSlot[] } | undefined)?.routine ?? [], Number(ctx.hour ?? 0)) }; break;
+      case HOUR_PLAN_TEMPLATE: {
+        const hour = Number(ctx.hour ?? 0);
+        const minute = hour * 60;
+        const options = planningOptions(ctx);
+        const selected = options.find((option) => option.fromMinute !== null && option.toMinute !== null
+          && option.fromMinute <= minute && minute < option.toMinute) ?? options[0];
+        out = { agenda: selected ? [{ time: `${String(hour).padStart(2, '0')}:00`, option_id: selected.id }] : [] };
+        break;
+      }
       case REFLECTION_QUESTIONS_TEMPLATE: out = { questions: ['我最近反复在做什么？', '我和谁走得近？', '我在为什么事分心？'] }; break;
       case REFLECTION_INSIGHTS_TEMPLATE: {
         const ev = Array.isArray(ctx.evidence) ? (ctx.evidence as string[]) : [];
@@ -82,6 +82,20 @@ function extract(messages: ChatMessage[]): Record<string, unknown> {
     if (match) return JSON.parse(match[1]) as Record<string, unknown>;
   }
   throw new Error('mock 找不到 <M0_CONTEXT>');
+}
+
+function planningOptions(ctx: Record<string, unknown>): { id: string; fromMinute: number | null; toMinute: number | null }[] {
+  if (!Array.isArray(ctx.planningOptions)) return [];
+  return (ctx.planningOptions as unknown[]).flatMap((value) => {
+    if (!value || typeof value !== 'object') return [];
+    const option = value as Record<string, unknown>;
+    if (typeof option.id !== 'string') return [];
+    return [{
+      id: option.id,
+      fromMinute: typeof option.fromMinute === 'number' ? option.fromMinute : null,
+      toMinute: typeof option.toMinute === 'number' ? option.toMinute : null,
+    }];
+  });
 }
 
 /** 确定性动作决策：玩家指令最优先；其次作息槽；否则原地小憩 */
@@ -207,13 +221,6 @@ function journalReflection(ctx: Record<string, unknown>): Record<string, unknown
     revisions,
     behavior_guidance: guidance,
   };
-}
-
-function hourAgenda(routine: RoutineSlot[], hour: number): { time: string; action: string; location: string }[] {
-  const hhmm = (t: number) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-  const hits = routine.filter((s) => s.from >= hour * 60 && s.from < (hour + 1) * 60);
-  if (!hits.length) return [{ time: `${String(hour).padStart(2, '0')}:00`, action: '自由活动', location: '小镇' }];
-  return hits.map((s) => ({ time: hhmm(s.from), action: s.verb, location: s.target ?? '小镇' }));
 }
 
 function dialogueTurn(ctx: Record<string, unknown>): { utterance: string; end_dialogue: boolean } {

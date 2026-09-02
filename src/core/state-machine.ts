@@ -15,6 +15,7 @@ import type { EventLog } from '../store/events';
 import type { MindEngine } from '../engine/mind';
 import type { PlayerDirector } from '../engine/player';
 import { initialMindStateOf } from '../engine/agent-profile';
+import { isEventAttendanceVerb } from '../llm/planning-options';
 
 export const DECISION_INTERVAL_MIN = 10; // 每 10 游戏分钟决策一次（M0 固定值）
 export const MOVE_SPEED_TILES_PER_MIN = 1;
@@ -228,7 +229,9 @@ export class AgentExecutor {
         id: object.id,
         name: object.name,
         ...(detailed && object.description ? { description: object.description } : {}),
-        ...(detailed && object.affordances?.length ? { affordances: object.affordances.map((item) => ({ ...item })) } : {}),
+        ...(detailed && object.affordances?.some((item) => !isEventAttendanceVerb(item.verb)) ? {
+          affordances: object.affordances.filter((item) => !isEventAttendanceVerb(item.verb)).map((item) => ({ ...item })),
+        } : {}),
         ...(detailed && object.sensoryCues?.length ? { sensoryCues: [...object.sensoryCues] } : {}),
         ...(canSenseState ? { state: { label: object.state!.label, detail: object.state!.detail } } : {}),
       };
@@ -323,7 +326,10 @@ export class AgentExecutor {
         ...(rejectionCodes.size ? { rejectionCodes: [...rejectionCodes] } : {}),
         ...(validation.normalization ? { normalization: { ...validation.normalization } } : {}),
       };
-      const decision = this.enforceSleepRoutine(agent, selected, now);
+      const groundedSelection = entry.context.runtimeMode === 'mock'
+        ? selected
+        : { ...selected, thought: this.groundedActionThought(agent, selected) };
+      const decision = this.enforceSleepRoutine(agent, groundedSelection, now);
       entry.resolved = { decision, quality, reasons };
     } catch (e) {
       entry.error = e instanceof Error ? e.message : String(e);
@@ -368,9 +374,11 @@ export class AgentExecutor {
   }
 
   private interactionVerbs(agent: Agent, targetId: string): string[] {
-    const declared = this.world.getObject(targetId)?.affordances?.map((item) => item.verb) ?? [];
+    const declared = this.world.getObject(targetId)?.affordances
+      ?.map((item) => item.verb)
+      .filter((verb) => !isEventAttendanceVerb(verb)) ?? [];
     const routine = agent.persona.routine
-      .filter((slot) => slot.type === 'interact' && slot.target === targetId)
+      .filter((slot) => slot.type === 'interact' && slot.target === targetId && !isEventAttendanceVerb(slot.verb))
       .map((slot) => slot.verb);
     return [...new Set([...declared, ...routine].map((item) => item.trim()).filter(Boolean))];
   }
@@ -432,6 +440,14 @@ export class AgentExecutor {
       action: { type: 'idle', target: null, verb: '整理思绪' },
       durationMinutes: Math.min(30, 10 + (streak - 1) * 5),
     };
+  }
+
+  private groundedActionThought(agent: Agent, decision: Decision): string {
+    const current = this.world.getObject(agent.locationId)?.name ?? '这里';
+    if (decision.action.type === 'idle') return `我准备在「${current}」短暂休息。`;
+    const place = this.world.getObject(decision.action.target)?.name ?? '当前地点';
+    if (decision.action.type === 'move_to') return `我准备前往「${place}」。`;
+    return `我准备到「${place}」${decision.action.verb}。`;
   }
 
   private enforceSleepRoutine(agent: Agent, decision: Decision, now: number): Decision {

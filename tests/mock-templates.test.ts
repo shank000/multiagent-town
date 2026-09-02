@@ -10,6 +10,11 @@ import {
 } from '../src/llm/prompts';
 import { mockImportance } from '../src/llm/mock';
 import { makeAgent, persona } from './helpers';
+import { buildTown } from '../src/engine/seed';
+import { planningContextFromWorld } from '../src/llm/plan-grounding';
+import {
+  buildPlanningOptions, dailyPlanningOptionPool, hourPlanningOptionPool,
+} from '../src/llm/planning-options';
 
 const g = new LLMGateway({ provider: 'mock' });
 
@@ -22,12 +27,25 @@ test('importance：mock 规则打分', async () => {
 });
 
 test('daily_plan 与 hour_plan：确定性输出', async () => {
-  const agent = makeAgent({ name: '林晚晴', persona: persona({ name: '林晚晴', routine: [{ from: 540, to: 600, type: 'interact', target: 'obj:cafe_counter', verb: '煮咖啡' }] }) });
-  const r1 = await g.complete({ tier: 'large', template: DAILY_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512, messages: dailyPlanMessages(agent, 1, [], []) });
-  assert.ok((r1.parsed as { broad_plan: string }).broad_plan.includes('咖啡馆'));
-  const r2 = await g.complete({ tier: 'large', template: HOUR_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512, messages: hourPlanMessages(agent, 9, '照常经营') });
-  const agenda = (r2.parsed as { agenda: { time: string; action: string }[] }).agenda;
-  assert.equal(agenda[0].action, '煮咖啡');
+  const world = buildTown();
+  const agent = world.allAgents().find((candidate) => candidate.name === '林晚晴') ?? world.allAgents()[0];
+  const context = planningContextFromWorld(world);
+  const options = buildPlanningOptions(agent, world);
+  const dailyPool = dailyPlanningOptionPool(options, agent);
+  const r1 = await g.complete({
+    tier: 'large', template: DAILY_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512,
+    messages: dailyPlanMessages(agent, 1, [], [], {}, context, dailyPool),
+  });
+  const selected = (r1.parsed as { option_ids: string[] }).option_ids;
+  assert.ok(selected.length >= 3 && selected.length <= 5);
+  assert.ok(selected.every((id) => dailyPool.some((option) => option.id === id)));
+  const hourPool = hourPlanningOptionPool(options, agent, 9);
+  const r2 = await g.complete({
+    tier: 'large', template: HOUR_PLAN_TEMPLATE, jsonMode: true, maxTokens: 512,
+    messages: hourPlanMessages(agent, 9, '照常经营', context, hourPool),
+  });
+  const agenda = (r2.parsed as { agenda: { time: string; option_id: string }[] }).agenda;
+  assert.ok(hourPool.some((option) => option.id === agenda[0].option_id));
   assert.equal(agenda[0].time, '09:00');
 });
 

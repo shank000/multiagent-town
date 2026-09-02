@@ -132,7 +132,7 @@ test('idle 携带目标会保留人物意图并规范化，不触发重复模型
   executor.progress(agent, 0, 10);
   assert.equal(agent.action?.action.type, 'idle');
   assert.equal(agent.action?.action.target, null);
-  assert.equal(agent.thought, '忙完后想在家里歇一会儿');
+  assert.equal(agent.thought, '我准备在「家」短暂休息。');
   assert.equal(gateway.metricSummary()[0]?.calls, 1);
   const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
   assert.equal(diagnostic?.payload?.status, 'normalized');
@@ -184,6 +184,39 @@ test('内心独白泄露程序术语时修复并记录 ungrounded_narrative', as
   assert.equal(diagnostic?.payload?.status, 'repaired');
   assert.deepEqual(diagnostic?.payload?.rejectionCodes, ['ungrounded_narrative']);
   assert.doesNotMatch(agent.thought ?? '', /available_actions|validator|必须使用该动词/i);
+  assert.equal(agent.thought, '我准备到「工作地」工作。');
+});
+
+test('模型虚构节庆动机不能进入动作状态，最终内心独白由已接受动作确定性渲染', async () => {
+  const { log, agent, executor, provider } = setup([
+    {
+      content: '',
+      parsed: {
+        thought: '为了参加小镇夏日野花日，我先去工作地工作。',
+        action: { type: 'interact', target: 'obj:work', verb: '工作' },
+        duration_minutes: 10,
+      },
+    },
+    {
+      content: '',
+      parsed: {
+        thought: '今天先把手头工作做好。',
+        action: { type: 'interact', target: 'obj:work', verb: '工作' },
+        duration_minutes: 10,
+      },
+    },
+  ]);
+  executor.progress(agent, 0, 10);
+  await flush();
+  executor.progress(agent, 0, 10);
+
+  assert.equal(provider.calls, 2);
+  assert.equal(agent.thought, '我准备到「工作地」工作。');
+  assert.doesNotMatch(agent.thought ?? '', /夏日野花日/);
+  const diagnostic = log.eventsForDay(1).find((event) => event.payload?.kind === 'action_decision_quality');
+  assert.equal(diagnostic?.payload?.status, 'repaired');
+  assert.deepEqual(diagnostic?.payload?.rejectionCodes, ['ungrounded_narrative']);
+  assert.ok(!log.eventsForDay(1).some((event) => event.description.includes('夏日野花日')));
 });
 
 test('公园画架的幻觉动词被拒绝，修复提示只允许作息声明动词', async () => {
@@ -236,6 +269,7 @@ test('当前上下文中的 affordance 动词无需修复即可执行', async ()
 
   assert.equal(provider.calls, 1);
   assert.equal(agent.action?.action.verb, '打扫');
+  assert.equal(agent.thought, '我准备到「家」打扫。');
   assert.ok(!log.eventsForDay(1).some((event) => event.payload?.status === 'stale_rejected'));
 });
 
@@ -301,14 +335,14 @@ test('跨过有效期的快速 tick 响应被丢弃，并在当前时刻重新�
   executor.progress(agent, 0, 30);
 
   assert.equal(provider.calls, 2);
-  assert.equal(agent.thought, '当前安排');
+  assert.equal(agent.thought, '我准备到「家」打扫。');
   const diagnostics = log.eventsForDay(1).filter((event) => event.payload?.kind === 'action_decision_quality');
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0].payload?.status, 'stale_rejected');
   assert.deepEqual(diagnostics[0].payload?.rejectionCodes, ['stale_context']);
   const thoughts = log.eventsForDay(1).filter((event) => event.payload?.kind === 'thought');
   assert.equal(thoughts.length, 1);
-  assert.match(thoughts[0].description, /当前安排/);
+  assert.match(thoughts[0].description, /我准备到「家」打扫/);
 });
 
 test('动作 JSON Schema 用互斥分支约束 idle 与有目标动作', () => {

@@ -26,7 +26,9 @@ export type GroundingIssueCode =
   | 'invalid_agenda'
   | 'wrong_hour'
   | 'duplicate_time'
-  | 'unknown_location';
+  | 'unknown_location'
+  | 'unverified_event'
+  | 'other_actor_assignment';
 
 export interface GroundingIssue {
   code: GroundingIssueCode;
@@ -41,6 +43,7 @@ export interface GroundingAssessment<T> {
 
 const INTERNAL_NARRATIVE = /\b(?:affordances?|available_actions?|interactionverbs?|target[_ ]?id|object[_ ]?id|validator|schema|json)\b|对象\s*ID|校验器|允许交互动词|唯一允许|必须使用该动词/iu;
 const OBJECT_ID = /obj:[\p{L}\p{N}_:-]+/giu;
+const UNVERIFIED_EVENT = /小镇[\p{Script=Han}]{2,10}日|参加[\p{Script=Han}]{2,12}日|艺术展[^，。；]{0,12}(?:征集|信息)|咖啡馆有新活动|有新(?:活动|展览)/u;
 const GENERIC_PEOPLE = new Set([
   '客人', '顾客', '老人', '年轻人', '朋友', '邻居', '居民', '同事', '路人', '学生', '孩子', '家人',
 ]);
@@ -70,6 +73,9 @@ export function assessNarrative(
   if (INTERNAL_NARRATIVE.test(value)) {
     issues.push({ code: 'internal_term', message: '内容包含面向程序的内部说明' });
   }
+  if (UNVERIFIED_EVENT.test(value)) {
+    issues.push({ code: 'unverified_event', message: '内容引用了未经公共事件引擎确认的活动' });
+  }
   const knownObjects = new Set(context.places.map((place) => place.id));
   for (const objectId of value.match(OBJECT_ID) ?? []) {
     if (!knownObjects.has(objectId)) {
@@ -83,6 +89,11 @@ export function assessNarrative(
     for (const name of socialResidentMentions(value)) {
       if (!knownResidents.has(name) && !GENERIC_PEOPLE.has(name)) {
         issues.push({ code: 'unknown_resident', message: `居民「${name}」不在当前名册中` });
+      }
+    }
+    for (const resident of context.residents) {
+      if (new RegExp(`${escapeRegExp(resident.name)}(?:是否在|正在|在)[^，。；]{0,20}`).test(value)) {
+        issues.push({ code: 'other_actor_assignment', message: `内容替居民「${resident.name}」安排或推测了行动` });
       }
     }
   }
@@ -227,4 +238,8 @@ function uniqueIssues(issues: GroundingIssue[]): GroundingIssue[] {
 
 function hhmm(minute: number): string {
   return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

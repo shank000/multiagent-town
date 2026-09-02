@@ -7,7 +7,9 @@ import { personalityOf } from '../engine/town-model';
 import { assessDialogueTurn, conservativeDialogueReply, dialogueRepairInstruction } from '../engine/dialogue-quality';
 import { validateDecision } from '../llm/action-validator';
 import { Planner } from '../llm/planner';
-import { assessDailyPlan, assessHourAgenda, planningContextFromWorld } from '../llm/plan-grounding';
+import {
+  auditRenderedDailyPlan, auditRenderedHourAgenda, buildPlanningOptions,
+} from '../llm/planning-options';
 import { LLMGateway } from '../llm/gateway';
 import {
   ACTION_DECISION_TEMPLATE,
@@ -161,37 +163,52 @@ async function checkAction(llm: LLMGateway, agent: Agent): Promise<CheckResult> 
 
 async function checkPlanning(llm: LLMGateway, agent: Agent): Promise<CheckResult> {
   const world = buildTown();
-  const context = planningContextFromWorld(world);
+  const resident = world.getAgent(agent.id);
+  const day = envInteger('REAL_AGENT_PLAN_DAY', 1, 1, 10_000);
+  const hour = envInteger('REAL_AGENT_PLAN_HOUR', 10, 0, 23);
   const db = openDb(':memory:');
   const store = new MemoryStore(db);
   const planner = new Planner(llm, store, `real-planning:${agent.id}`);
   planner.bindWorld(world);
   const started = performance.now();
   try {
-    await planner.dailyPlan(agent, 1, 300);
-    await planner.decomposeHour(agent, 1, 10, 600);
-    const plan = store.planFor(agent.id, 1);
-    const daily = assessDailyPlan(plan?.broadPlan, context);
-    const hourly = assessHourAgenda(plan?.hourly, 10, context);
-    const planMemory = store.recentMemories(agent.id, 20).find((memory) => memory.kind === 'plan');
-    const memoryGrounded = !!planMemory && assessDailyPlan(planMemory.content.replace(/^第\d+天计划：/, ''), context).ok;
+    const dayStart = (day - 1) * 1440;
+    await planner.dailyPlan(resident, day, dayStart + 300);
+    await planner.decomposeHour(resident, day, hour, dayStart + hour * 60);
+    const plan = store.planFor(resident.id, day);
+    const options = buildPlanningOptions(resident, world);
+    const daily = auditRenderedDailyPlan(plan?.broadPlan ?? '', options, world);
+    const hourly = auditRenderedHourAgenda(plan?.hourly ?? [], hour, options);
+    const planMemory = store.recentMemories(resident.id, 20).find((memory) => memory.kind === 'plan');
+    const memoryGrounded = !!planMemory
+      && auditRenderedDailyPlan(planMemory.content.replace(/^第\d+天计划：/, ''), options, world).ok;
     const ok = daily.ok && hourly.ok && memoryGrounded
-      && hourly.value.every((item) => world.hasObject(item.location));
+      && (plan?.hourly ?? []).every((item) => world.hasObject(item.location));
     const failures = [
       daily.ok ? '' : daily.issues.map((issue) => issue.message).join('；'),
       hourly.ok ? '' : hourly.issues.map((issue) => issue.message).join('；'),
       memoryGrounded ? '' : '计划记忆未通过同一现实边界检查',
     ].filter(Boolean);
-    const first = hourly.value[0];
+    const first = plan?.hourly[0];
     const place = first ? world.getObject(first.location)?.name ?? first.location : '无小时安排';
     return {
       name: '规划', ok, latencyMs: Math.round(performance.now() - started),
-      detail: failures.length ? failures.join('；') : '日计划、小时安排与计划记忆均通过当前世界边界检查',
-      sample: `${daily.value.slice(0, 150)}${first ? ` / ${first.time} ${first.action} @ ${place}` : ''}`,
+      detail: failures.length ? failures.join('；') : `第${day}天 ${hour}:00 日计划、小时安排与记忆均可还原为闭世界选项`,
+      sample: `${(plan?.broadPlan ?? '').slice(0, 150)}${first ? ` / ${first.time} ${first.action} @ ${place}` : ''}`,
     };
   } finally {
     db.raw.close();
   }
+}
+
+function envInteger(name: string, fallback: number, minimum: number, maximum: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} 必须是 ${minimum}..${maximum} 的整数`);
+  }
+  return value;
 }
 
 async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenario: AgentScenario): Promise<CheckResult> {
