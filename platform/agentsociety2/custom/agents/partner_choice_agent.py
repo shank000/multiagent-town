@@ -74,7 +74,7 @@ class PartnerChoiceAgent(AgentBase):
                 observed = self._find_observation(json.loads(observation_text))
             except (TypeError, json.JSONDecodeError):
                 observed = None
-        if not observed or not observed.get("roundOpen") or observed.get("alreadySubmitted"):
+        if not observed or not observed.get("roundOpen"):
             return "partner round is not awaiting this agent"
 
         observation = observed["observation"]
@@ -89,55 +89,109 @@ class PartnerChoiceAgent(AgentBase):
         messages = self._decision_messages(self.get_profile(), observation)
         prompt_hash = tagged_hash(messages)
         candidate_ids = {str(item["id"]) for item in observation["candidates"]}
+        chosen_id = str(observed.get("chosenId") or "")
+        choice_result: dict[str, Any] = {}
+        if not observed.get("alreadySubmitted"):
+            last_error = ""
+            for attempt in range(1, max_attempts + 1):
+                response = await self.acompletion(
+                    messages,
+                    stream=False,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                )
+                raw_response = self._response_text(response)
+                try:
+                    parsed = json.loads(raw_response)
+                    chosen_id = str(parsed["chosenId"])
+                    rationale = str(parsed.get("rationale") or "")[:1000]
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    last_error = f"invalid JSON response: {exc}"
+                    continue
+                if chosen_id not in candidate_ids:
+                    last_error = "chosenId is outside the controlled candidate set"
+                    continue
+                actual_model, request_id = self._response_identity(response, model_id)
+                usage = self._usage(response)
+                variables = {
+                    "agent_id": self.id,
+                    "chosen_id": int(chosen_id),
+                    "rationale": rationale,
+                    "raw_response": raw_response,
+                    "model_id": actual_model,
+                    "request_id": request_id,
+                    "rendered_prompt_hash": prompt_hash,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "max_tokens": max_tokens,
+                    "attempt_count": attempt,
+                    **usage,
+                }
+                result_ctx, result_text = await self.ask_env(
+                    {"variables": variables},
+                    "Call submit_partner_choice with every value from ctx['variables'] exactly once.",
+                    readonly=False,
+                    template_mode=True,
+                )
+                choice_result = {"result": result_ctx, "message": result_text}
+                break
+            else:
+                return f"choice parsing exhausted; environment fallback will apply: {last_error}"
 
+        if observed.get("interactionRequired") and not observed.get("interactionSubmitted"):
+            interaction_result = await self._submit_interaction(observation, chosen_id)
+            return canonical_json({"choice": choice_result, "interaction": interaction_result})
+        return canonical_json({"choice": choice_result})
+
+    async def _submit_interaction(self, observation: Mapping[str, Any], chosen_id: str) -> dict[str, Any]:
+        interaction = dict(self._config.get("interaction") or {})
+        model_id = str(interaction.get("modelId") or "")
+        if not model_id or model_id == "ONLINE_WORKSPACE_REQUIRED":
+            raise RuntimeError("interaction.modelId must be frozen to the actual online model")
+        max_attempts = int(interaction["maxAttempts"])
+        max_tokens = int(interaction["maxTokens"])
+        messages = self._interaction_messages(self.get_profile(), observation, chosen_id)
+        prompt_hash = tagged_hash(messages)
         last_error = ""
         for attempt in range(1, max_attempts + 1):
             response = await self.acompletion(
                 messages,
                 stream=False,
-                temperature=temperature,
-                top_p=top_p,
+                temperature=0.2,
+                top_p=1.0,
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
             raw_response = self._response_text(response)
             try:
                 parsed = json.loads(raw_response)
-                chosen_id = str(parsed["chosenId"])
-                rationale = str(parsed.get("rationale") or "")[:1000]
+                summary = str(parsed["summary"]).strip()[:1000]
+                if not summary:
+                    raise ValueError("summary is empty")
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                last_error = f"invalid JSON response: {exc}"
+                last_error = f"invalid interaction JSON: {exc}"
                 continue
-            if chosen_id not in candidate_ids:
-                last_error = "chosenId is outside the controlled candidate set"
-                continue
-            actual_model = str(getattr(response, "model", None) or self._model_name or "")
-            if actual_model != model_id:
-                raise RuntimeError(f"actual model {actual_model!r} differs from frozen modelId {model_id!r}")
-            request_id = str(getattr(response, "id", None) or "")
-            if not request_id:
-                raise RuntimeError("LLM response did not provide a request ID")
+            actual_model, request_id = self._response_identity(response, model_id)
             variables = {
                 "agent_id": self.id,
-                "chosen_id": int(chosen_id),
-                "rationale": rationale,
+                "summary": summary,
                 "raw_response": raw_response,
                 "model_id": actual_model,
                 "request_id": request_id,
                 "rendered_prompt_hash": prompt_hash,
-                "temperature": temperature,
-                "top_p": top_p,
-                "max_tokens": max_tokens,
                 "attempt_count": attempt,
+                **self._usage(response),
             }
             result_ctx, result_text = await self.ask_env(
                 {"variables": variables},
-                "Call submit_partner_choice with every value from ctx['variables'] exactly once.",
+                "Call submit_interaction_summary with every value from ctx['variables'] exactly once.",
                 readonly=False,
                 template_mode=True,
             )
-            return canonical_json({"result": result_ctx, "message": result_text})
-        return f"choice parsing exhausted; environment fallback will apply: {last_error}"
+            return {"result": result_ctx, "message": result_text}
+        return {"error": f"interaction parsing exhausted; deterministic fallback will be audited: {last_error}"}
 
     @staticmethod
     def _decision_messages(profile: Mapping[str, Any], observation: Mapping[str, Any]) -> list[dict[str, str]]:
@@ -147,6 +201,42 @@ class PartnerChoiceAgent(AgentBase):
         )
         user = canonical_json({"selfProfile": dict(profile), "observation": dict(observation)})
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    @staticmethod
+    def _interaction_messages(
+        profile: Mapping[str, Any], observation: Mapping[str, Any], chosen_id: str
+    ) -> list[dict[str, str]]:
+        candidate = next(
+            (dict(item) for item in observation.get("candidates", []) if str(item.get("id")) == chosen_id),
+            {"id": chosen_id},
+        )
+        system = (
+            "Render one short, plausible completed interaction between the chooser and selected partner. "
+            "Use only the stable chooser profile and selected candidate observation. Return JSON with summary."
+        )
+        user = canonical_json({"selfProfile": dict(profile), "selectedCandidate": candidate})
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    def _response_identity(self, response: Any, frozen_model: str) -> tuple[str, str]:
+        actual_model = str(getattr(response, "model", None) or self._model_name or "")
+        if actual_model != frozen_model:
+            raise RuntimeError(f"actual model {actual_model!r} differs from frozen modelId {frozen_model!r}")
+        request_id = str(getattr(response, "id", None) or "")
+        if not request_id:
+            raise RuntimeError("LLM response did not provide a request ID")
+        return actual_model, request_id
+
+    @staticmethod
+    def _usage(response: Any) -> dict[str, int]:
+        usage = getattr(response, "usage", None)
+        def value(name: str) -> int:
+            raw = getattr(usage, name, 0) if usage is not None else 0
+            return max(0, int(raw or 0))
+        return {
+            "input_tokens": value("prompt_tokens"),
+            "output_tokens": value("completion_tokens"),
+            "total_tokens": value("total_tokens"),
+        }
 
     @staticmethod
     def _response_text(response: Any) -> str:

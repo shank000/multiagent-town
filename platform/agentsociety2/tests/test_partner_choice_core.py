@@ -39,6 +39,39 @@ def names(p: dict) -> dict[str, str]:
     return {agent_id: f"Agent {agent_id}" for agent_id in p["agentIds"]}
 
 
+def audited_protocol(*, mode: str = "full", days: int = 2) -> dict:
+    value = protocol(mode=mode, days=days)
+    value["decision"]["modelId"] = "online/formal-model-v1"
+    value["interaction"] = {
+        "policy": "llm_audited",
+        "modelId": "online/formal-model-v1",
+        "promptVersion": "partner-choice.interaction/v1",
+        "maxTokens": 192,
+        "maxAttempts": 2,
+    }
+    return value
+
+
+def submit_audited_round(core: PartnerChoiceCore, day: int, label: str) -> None:
+    agent_ids = core.protocol["agentIds"]
+    for index, chooser_id in enumerate(agent_ids):
+        chosen_id = agent_ids[(index + 1) % len(agent_ids)]
+        core.submit(chooser_id, chosen_id)
+        raw = json.dumps({"summary": f"{label} {chooser_id}->{chosen_id}"})
+        result = core.submit_interaction(chooser_id, json.loads(raw)["summary"], {
+            "source": "llm",
+            "modelId": core.protocol["interaction"]["modelId"],
+            "requestId": f"interaction-{day}-{chooser_id}",
+            "renderedPromptHash": f"sha256:interaction-{day}-{chooser_id}",
+            "rawResponse": raw,
+            "attemptCount": 1,
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+        })
+        assert result["ok"]
+
+
 def submit_first_candidates(core: PartnerChoiceCore) -> None:
     assert core.current_round is not None
     day = core.current_round["day"]
@@ -198,6 +231,58 @@ class PartnerChoiceCoreTest(unittest.TestCase):
         event = next(event for event in core.events if event["eventType"] == "partner_choice")
         self.assertEqual(event["decision"]["source"], "llm")
         self.assertEqual(event["decision"]["requestId"], "request-1")
+
+    def test_audited_model_interaction_enters_full_history_but_none_observes_none(self) -> None:
+        start = datetime(2026, 1, 1, 19, 30, tzinfo=timezone.utc)
+        observations = {}
+        for mode in ("none", "full"):
+            p = audited_protocol(mode=mode)
+            core = PartnerChoiceCore(p, names(p))
+            core.open_round(1, 1, start)
+            submit_audited_round(core, 1, "real model result")
+            interactions = [event for event in core.drain_events() if event["eventType"] == "interaction"]
+            self.assertTrue(all(event["summaryDecision"]["source"] == "llm" for event in interactions))
+            self.assertTrue(all(event["summaryDecision"]["requestId"].startswith("interaction-1-") for event in interactions))
+            core.open_round(2, 2, start + timedelta(days=1))
+            observations[mode] = core.observe(p["agentIds"][0])["observation"]
+        self.assertTrue(all(candidate["history"] == [] for candidate in observations["none"]["candidates"]))
+        self.assertTrue(any(candidate["history"] for candidate in observations["full"]["candidates"]))
+        rendered_none = canonical_json(observations["none"])
+        self.assertNotIn("real model result", rendered_none)
+
+    def test_recent3_and_full_history_boundaries_remain_exact(self) -> None:
+        start = datetime(2026, 1, 1, 19, 30, tzinfo=timezone.utc)
+        counts = {}
+        for mode in ("recent_k", "full"):
+            p = audited_protocol(mode=mode, days=5)
+            if mode == "recent_k":
+                p["manipulation"]["recentK"] = 3
+            core = PartnerChoiceCore(p, names(p))
+            for day in range(1, 5):
+                core.open_round(day, day, start + timedelta(days=day - 1))
+                submit_audited_round(core, day, f"day-{day}")
+                core.drain_events()
+            core.open_round(5, 5, start + timedelta(days=4))
+            chooser = p["agentIds"][0]
+            chosen = p["agentIds"][1]
+            candidate = next(item for item in core.observe(chooser)["observation"]["candidates"] if item["id"] == chosen)
+            counts[mode] = len(candidate["history"])
+        self.assertEqual(counts, {"recent_k": 3, "full": 4})
+
+    def test_interaction_deadline_fallback_is_audited_and_round_terminates(self) -> None:
+        p = audited_protocol(mode="full", days=1)
+        core = PartnerChoiceCore(p, names(p), round_window_minutes=30)
+        midnight = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        core.advance(60, midnight + timedelta(minutes=1170))
+        for chooser in p["agentIds"]:
+            core.submit(chooser, candidate_order(p, 1, chooser)[0])
+        self.assertEqual(core.round_status()["status"], "open")
+        core.advance(60, midnight + timedelta(minutes=1200))
+        self.assertEqual(core.round_status()["status"], "closed")
+        interactions = [event for event in core.drain_events() if event["eventType"] == "interaction"]
+        self.assertEqual(len(interactions), len(p["agentIds"]))
+        self.assertTrue(all(event["summaryDecision"]["source"] == "deterministic_fallback" for event in interactions))
+        self.assertTrue(all(event["summaryDecision"]["fallbackReason"] == "round_deadline" for event in interactions))
 
 
 if __name__ == "__main__":

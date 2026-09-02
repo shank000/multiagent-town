@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from importlib.metadata import version
 import os
 from pathlib import Path
 import tempfile
@@ -19,6 +20,7 @@ from custom.agents.partner_choice_agent import PartnerChoiceAgent
 
 
 async def run() -> None:
+    assert version("agentsociety2") == "2.8.4"
     workspace_root = Path(__file__).resolve().parents[1]
     scan = CustomModuleScanner(str(workspace_root)).scan_all()
     assert scan["errors"] == []

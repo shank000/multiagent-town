@@ -85,6 +85,16 @@ def validate_protocol(protocol: Mapping[str, Any]) -> None:
     max_fallback_rate = decision.get("maxFallbackRate")
     if not isinstance(max_fallback_rate, (int, float)) or not 0 <= max_fallback_rate <= 1:
         raise ContractError("maxFallbackRate must be within [0, 1]")
+    interaction = protocol.get("interaction")
+    if interaction is not None:
+        if not isinstance(interaction, Mapping) or interaction.get("policy") != "llm_audited":
+            raise ContractError("interaction policy must be llm_audited when configured")
+        if interaction.get("modelId") != decision.get("modelId"):
+            raise ContractError("interaction modelId must match decision modelId")
+        if not isinstance(interaction.get("promptVersion"), str) or not interaction["promptVersion"]:
+            raise ContractError("interaction promptVersion is required")
+        if not isinstance(interaction.get("maxAttempts"), int) or interaction["maxAttempts"] <= 0:
+            raise ContractError("interaction maxAttempts must be positive")
 
 
 def protocol_hash(protocol: Mapping[str, Any]) -> str:
@@ -204,6 +214,10 @@ class PartnerChoiceCore:
         self.events: list[dict[str, Any]] = []
         self.written_event_ids: set[str] = set()
 
+    @property
+    def requires_audited_interactions(self) -> bool:
+        return self.protocol.get("interaction", {}).get("policy") == "llm_audited"
+
     @staticmethod
     def _pair_key(agent_id: str, partner_id: str) -> str:
         return f"{agent_id}\u0000{partner_id}"
@@ -321,6 +335,7 @@ class PartnerChoiceCore:
             "observations": observations,
             "audits": audits,
             "submissions": {},
+            "interactionSubmissions": {},
         }
         self.next_day += 1
         return self.round_status()
@@ -332,10 +347,14 @@ class PartnerChoiceCore:
         if not self.current_round or self.current_round["status"] != "open":
             return {"ok": True, "roundOpen": False}
         observation = deepcopy(self.current_round["observations"][agent_id])
+        submission = self.current_round["submissions"].get(agent_id)
         return {
             "ok": True,
             "roundOpen": True,
-            "alreadySubmitted": agent_id in self.current_round["submissions"],
+            "alreadySubmitted": submission is not None,
+            "chosenId": submission.get("chosenId") if submission else None,
+            "interactionRequired": self.requires_audited_interactions,
+            "interactionSubmitted": agent_id in self.current_round["interactionSubmissions"],
             "observation": observation,
         }
 
@@ -394,9 +413,74 @@ class PartnerChoiceCore:
             "eventId": event["eventId"],
             "source": source,
         }
-        if len(current["submissions"]) == len(self.protocol["agentIds"]):
+        if len(current["submissions"]) == len(self.protocol["agentIds"]) and not self.requires_audited_interactions:
             self.finalize_round(step=submitted_step, t=submitted_at)
         return {"ok": True, "duplicate": False, "eventId": event["eventId"]}
+
+    def submit_interaction(
+        self,
+        agent_id: str,
+        summary: str,
+        interaction_audit: Mapping[str, Any],
+        *,
+        submitted_step: int | None = None,
+        submitted_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record one real-model interaction result before round effects commit."""
+
+        if submitted_at is not None:
+            self.expire_at(submitted_at, step=submitted_step)
+        agent_id = str(agent_id)
+        current = self.current_round
+        if not current or current["status"] != "open":
+            return {"ok": False, "code": "round_not_open"}
+        if not self.requires_audited_interactions:
+            return {"ok": False, "code": "interaction_audit_not_required"}
+        choice = current["submissions"].get(agent_id)
+        if choice is None:
+            return {"ok": False, "code": "choice_required_first"}
+        previous = current["interactionSubmissions"].get(agent_id)
+        if previous is not None:
+            return {"ok": True, "duplicate": True, "interactionId": previous["interactionId"]}
+        cleaned = str(summary).strip()[:1000]
+        if not cleaned:
+            raise ContractError("interaction summary must be non-empty")
+        audit = dict(interaction_audit)
+        self._validate_interaction_audit(cleaned, audit)
+        interaction_id = deterministic_id(
+            self.protocol["runId"], current["roundId"], agent_id, choice["chosenId"], "interaction"
+        )
+        current["interactionSubmissions"][agent_id] = {
+            "interactionId": interaction_id,
+            "summary": cleaned,
+            "audit": audit,
+        }
+        if len(current["submissions"]) == len(self.protocol["agentIds"]) and len(current["interactionSubmissions"]) == len(self.protocol["agentIds"]):
+            self.finalize_round(step=submitted_step, t=submitted_at)
+        return {"ok": True, "duplicate": False, "interactionId": interaction_id}
+
+    def _validate_interaction_audit(self, summary: str, audit: Mapping[str, Any]) -> None:
+        interaction = self.protocol["interaction"]
+        for field in ("modelId", "requestId", "renderedPromptHash", "rawResponse"):
+            if not isinstance(audit.get(field), str) or not str(audit[field]).strip():
+                raise ContractError(f"interaction audit requires {field}")
+        if audit["modelId"] != interaction["modelId"]:
+            raise ContractError("interaction audit modelId does not match protocol")
+        if not str(audit["renderedPromptHash"]).startswith("sha256:"):
+            raise ContractError("interaction renderedPromptHash must be a SHA-256 tag")
+        attempts = audit.get("attemptCount")
+        if not isinstance(attempts, int) or not 1 <= attempts <= int(interaction["maxAttempts"]):
+            raise ContractError("interaction attemptCount is outside protocol")
+        try:
+            parsed = json.loads(str(audit["rawResponse"]))
+        except json.JSONDecodeError as exc:
+            raise ContractError("interaction rawResponse is not JSON") from exc
+        if not isinstance(parsed, Mapping) or str(parsed.get("summary") or "").strip()[:1000] != summary:
+            raise ContractError("interaction rawResponse does not match summary")
+        for field in ("inputTokens", "outputTokens", "totalTokens"):
+            value = audit.get(field)
+            if value is not None and (not isinstance(value, int) or value < 0):
+                raise ContractError(f"interaction {field} must be a non-negative integer")
 
     def _validate_llm_audit(self, chosen_id: str, audit: Mapping[str, Any]) -> None:
         decision = self.protocol["decision"]
@@ -487,6 +571,7 @@ class PartnerChoiceCore:
                 "rationale": rationale,
                 **({"requestId": str(audit["requestId"])} if audit.get("requestId") else {}),
                 **({"traceId": str(audit["traceId"])} if audit.get("traceId") else {}),
+                **({field: int(audit[field]) for field in ("inputTokens", "outputTokens", "totalTokens") if audit.get(field) is not None}),
                 **({"fallbackReason": fallback_reason} if fallback_reason else {}),
             },
         }
@@ -523,6 +608,24 @@ class PartnerChoiceCore:
                 "eventId": event["eventId"],
                 "source": "seeded_fallback",
             }
+        if self.requires_audited_interactions:
+            for chooser_id in self.protocol["agentIds"]:
+                if chooser_id in current["interactionSubmissions"]:
+                    continue
+                chosen_id = current["submissions"][chooser_id]["chosenId"]
+                sent_gift = bool(self.protocol["manipulation"]["giftExchange"])
+                summary = self._deterministic_interaction_summary(chooser_id, chosen_id, sent_gift)
+                current["interactionSubmissions"][chooser_id] = {
+                    "interactionId": deterministic_id(
+                        self.protocol["runId"], current["roundId"], chooser_id, chosen_id, "interaction"
+                    ),
+                    "summary": summary,
+                    "audit": {
+                        "source": "deterministic_fallback",
+                        "fallbackReason": fallback_reason,
+                        "attemptCount": int(self.protocol["interaction"]["maxAttempts"]),
+                    },
+                }
         self._apply_post_choice_effects(step=step, t=t)
         current["status"] = "closed"
         return self.round_status()
@@ -580,13 +683,23 @@ class PartnerChoiceCore:
                 )
                 relation["interactionCount"] += 1
                 relation["lastInteractionStep"] = effect_step
-            interaction_id = deterministic_id(
-                self.protocol["runId"], current["roundId"], chooser_id, chosen_id, "interaction"
-            )
             sent_gift = chooser_id in gifted
-            summary = f"{self.agent_names[chooser_id]} 与 {self.agent_names[chosen_id]} 完成了伙伴互动。"
-            if sent_gift:
-                summary += f"互动前，{self.agent_names[chooser_id]}赠送了一束花。"
+            recorded = current["interactionSubmissions"].get(chooser_id)
+            interaction_id = (
+                recorded["interactionId"]
+                if recorded is not None
+                else deterministic_id(self.protocol["runId"], current["roundId"], chooser_id, chosen_id, "interaction")
+            )
+            summary = (
+                str(recorded["summary"])
+                if recorded is not None
+                else self._deterministic_interaction_summary(chooser_id, chosen_id, sent_gift)
+            )
+            summary_audit = dict(recorded.get("audit", {})) if recorded is not None else {
+                "source": "deterministic_offline",
+                "attemptCount": 0,
+            }
+            summary_source = str(summary_audit.get("source") or "llm")
             self._history(chooser_id, chosen_id).append({
                 "id": interaction_id,
                 "day": current["day"],
@@ -611,6 +724,16 @@ class PartnerChoiceCore:
                     "fromId": chooser_id, "toId": chosen_id, "status": "completed",
                     "summary": summary, "giftSent": sent_gift,
                     "choiceEventId": current["submissions"][chooser_id]["eventId"],
+                    "summaryDecision": {
+                        "source": summary_source,
+                        "modelId": summary_audit.get("modelId"),
+                        "requestId": summary_audit.get("requestId"),
+                        "promptHash": summary_audit.get("renderedPromptHash"),
+                        "rawResponse": summary_audit.get("rawResponse"),
+                        "attemptCount": int(summary_audit.get("attemptCount", 0)),
+                        **({"fallbackReason": summary_audit["fallbackReason"]} if summary_audit.get("fallbackReason") else {}),
+                        **({field: int(summary_audit[field]) for field in ("inputTokens", "outputTokens", "totalTokens") if summary_audit.get(field) is not None}),
+                    },
                 },
                 chooser_id,
                 chosen_id,
@@ -632,6 +755,12 @@ class PartnerChoiceCore:
                     agent_id,
                     partner_id,
                 )
+
+    def _deterministic_interaction_summary(self, chooser_id: str, chosen_id: str, sent_gift: bool) -> str:
+        summary = f"{self.agent_names[chooser_id]} 与 {self.agent_names[chosen_id]} 完成了伙伴互动。"
+        if sent_gift:
+            summary += f"互动前，{self.agent_names[chooser_id]}赠送了一束花。"
+        return summary
 
     def _absolute_minute(self, t: datetime) -> int:
         if self.epoch_midnight is None:
@@ -695,6 +824,8 @@ class PartnerChoiceCore:
             "status": current["status"] if current else "waiting",
             "submitted": len(current["submissions"]) if current else 0,
             "expected": len(self.protocol["agentIds"]),
+            "interactionsSubmitted": len(current.get("interactionSubmissions", {})) if current else 0,
+            "interactionsExpected": len(self.protocol["agentIds"]) if self.requires_audited_interactions else 0,
             "nextDay": self.next_day,
         }
 

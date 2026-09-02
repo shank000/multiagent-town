@@ -63,6 +63,16 @@ def install_sdk_surface_stub() -> None:
         capabilities: list[str] = field(default_factory=list)
         version: int = 1
 
+    class ReplayReader:
+        def __init__(self, _path) -> None:
+            pass
+
+        def load_dataset_catalog(self):
+            return []
+
+        def close(self) -> None:
+            pass
+
     def atomic_write_text(path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -72,6 +82,7 @@ def install_sdk_surface_stub() -> None:
     storage.ColumnDef = ColumnDef
     storage.TableSchema = TableSchema
     storage.ReplayDatasetSpec = ReplayDatasetSpec
+    storage.ReplayReader = ReplayReader
     workspace_state.atomic_write_text = atomic_write_text
     sys.modules.update({
         "agentsociety2": root,
