@@ -143,9 +143,20 @@ test('涌现控制台 API：config/start/metrics 全链路', async () => {
     const nextDay = await (await fetch(`${base}/api/experiment/state`)).json() as { remainingDays: number };
     assert.equal(nextDay.remainingDays, 29, 'start 使用当前世界时刻建立日界线基准');
 
-    const met = await (await fetch(`${base}/api/experiment/metrics`)).json() as { ok: boolean; repeat: number[] };
+    const met = await (await fetch(`${base}/api/experiment/metrics`)).json() as {
+      ok: boolean;
+      repeat: number[];
+      recipRate: number[];
+      recipBaseline: number[];
+      seriesDays: { persistence: number[] };
+      availability: { persistence: { state: string; requiredConsecutiveChoiceDays: number } };
+    };
     assert.equal(met.ok, true);
     assert.ok(Array.isArray(met.repeat));
+    assert.ok(Array.isArray(met.recipRate));
+    assert.ok(Array.isArray(met.recipBaseline));
+    assert.ok(Array.isArray(met.seriesDays.persistence));
+    assert.equal(met.availability.persistence.requiredConsecutiveChoiceDays, 14);
 
     const stop = await (await fetch(`${base}/api/experiment/stop`, { method: 'POST' })).json() as { ok: boolean };
     assert.equal(stop.ok, true);

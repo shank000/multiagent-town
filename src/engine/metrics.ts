@@ -2,6 +2,40 @@
 
 export interface Choice { day: number; from: string; to: string }
 
+export type MetricSeriesKey =
+  | 'repeat'
+  | 'recipRate'
+  | 'recip'
+  | 'clus'
+  | 'div'
+  | 'hhi'
+  | 'persistence'
+  | 'hub';
+
+export type MetricAvailabilityState =
+  | 'ready'
+  | 'no_observations'
+  | 'awaiting_adjacent_days'
+  | 'awaiting_window';
+
+export interface MetricAvailability {
+  state: MetricAvailabilityState;
+  observedPoints: number;
+  observedChoiceDays: number;
+  longestConsecutiveChoiceDays: number;
+  requiredConsecutiveChoiceDays: number;
+}
+
+export type MetricSeriesDays = Record<MetricSeriesKey, number[]>;
+export type MetricAvailabilityMap = Record<MetricSeriesKey, MetricAvailability>;
+
+export interface ReciprocityObservation {
+  day: number;
+  observedRate: number;
+  equalCandidateBaseline: number;
+  baselineRatio: number;
+}
+
 export function dailyMatrix(choices: Choice[], ids: string[]): Map<number, Map<string, number>> {
   const idx = new Map(ids.map((n, i) => [n, i]));
   const byDay = new Map<number, Map<string, number>>();
@@ -39,8 +73,8 @@ export function repeatRate(byDay: Map<number, Map<string, number>>): number[] {
   return out;
 }
 
-/** 互惠性（相对基线）：A 昨日选 B，今日 B 选 A 的概率 / 当日基线概率 */
-export function reciprocity(choices: Choice[]): number[] {
+/** 跨日互惠观测：原始互惠率、等候选随机基线及机会校正倍数。 */
+export function reciprocityObservations(choices: Choice[]): ReciprocityObservation[] {
   const byDay = new Map<number, Choice[]>();
   for (const c of choices) {
     const day = byDay.get(c.day) ?? [];
@@ -48,7 +82,7 @@ export function reciprocity(choices: Choice[]): number[] {
     byDay.set(c.day, day);
   }
   const days = [...byDay.keys()].sort((a, b) => a - b);
-  const out: number[] = [];
+  const out: ReciprocityObservation[] = [];
   for (let i = 1; i < days.length; i++) {
     if (days[i] !== days[i - 1] + 1) continue;
     const prev = byDay.get(days[i - 1])!;
@@ -59,9 +93,24 @@ export function reciprocity(choices: Choice[]): number[] {
     const reciprocalCount = prev.filter((choice) => currentPairs.has(`${choice.to}\0${choice.from}`)).length;
     const observedRate = reciprocalCount / prev.length;
     const equalCandidateBaseline = 1 / (senderCount - 1);
-    out.push(observedRate / equalCandidateBaseline);
+    out.push({
+      day: days[i],
+      observedRate,
+      equalCandidateBaseline,
+      baselineRatio: observedRate / equalCandidateBaseline,
+    });
   }
   return out;
+}
+
+/** 跨日互惠率：P(B 今日选择 A | A 昨日选择 B)，取值 0..1。 */
+export function reciprocityRate(choices: Choice[]): number[] {
+  return reciprocityObservations(choices).map((observation) => observation.observedRate);
+}
+
+/** 互惠机会校正倍数：跨日互惠率 / 等候选随机基线；1 表示随机基线。 */
+export function reciprocity(choices: Choice[]): number[] {
+  return reciprocityObservations(choices).map((observation) => observation.baselineRatio);
 }
 
 /** 聚类系数（无向）：三角数 / 三元组数 */
@@ -201,6 +250,51 @@ export function matrixPersistence(byDay: Map<number, Map<string, number>>, n: nu
   return out;
 }
 
+function longestConsecutiveRun(days: number[]): number {
+  let longest = 0;
+  let current = 0;
+  for (let i = 0; i < days.length; i++) {
+    current = i > 0 && days[i] === days[i - 1] + 1 ? current + 1 : 1;
+    longest = Math.max(longest, current);
+  }
+  return longest;
+}
+
+function adjacentObservationDays(days: number[]): number[] {
+  return days.filter((day, index) => index > 0 && day === days[index - 1] + 1);
+}
+
+function persistenceObservationDays(days: number[], window = 7): number[] {
+  const width = Math.max(1, Math.floor(window));
+  const out: number[] = [];
+  for (let end = width * 2 - 1; end < days.length; end++) {
+    const segment = days.slice(end - width * 2 + 1, end + 1);
+    if (segment.every((day, index) => index === 0 || day === segment[index - 1] + 1)) out.push(days[end]);
+  }
+  return out;
+}
+
+function metricAvailability(
+  observedPoints: number,
+  choiceDays: number[],
+  requiredConsecutiveChoiceDays: number,
+): MetricAvailability {
+  const state: MetricAvailabilityState = observedPoints > 0
+    ? 'ready'
+    : choiceDays.length === 0
+      ? 'no_observations'
+      : requiredConsecutiveChoiceDays > 2
+        ? 'awaiting_window'
+        : 'awaiting_adjacent_days';
+  return {
+    state,
+    observedPoints,
+    observedChoiceDays: choiceDays.length,
+    longestConsecutiveChoiceDays: longestConsecutiveRun(choiceDays),
+    requiredConsecutiveChoiceDays,
+  };
+}
+
 /**
  * Daily normalized weighted in-degree hub concentration.
  * With incoming strengths s_i and total S, C = sum_i(s_max - s_i) / ((n-1)S).
@@ -237,25 +331,76 @@ export function hubConcentration(byDay: Map<number, Map<string, number>>, n: num
 /** 便捷汇总：由 choices 直接给出全部序列（用于 API 与 CLI） */
 export function metricsOf(choices: Choice[], ids: string[]): {
   repeat: number[];
+  recipRate: number[];
+  recipBaseline: number[];
   recip: number[];
   clus: number[];
   div: number[];
   hhi: number[];
   persistence: number[];
   hub: number[];
+  seriesDays: MetricSeriesDays;
+  availability: MetricAvailabilityMap;
   pairs: Map<string, number>;
 } {
-  const byDay = dailyMatrix(choices, ids);
+  const knownIds = new Set(ids);
+  const eligibleChoices = choices.filter((choice) => (
+    Number.isSafeInteger(choice.day)
+    && choice.day > 0
+    && choice.from !== choice.to
+    && knownIds.has(choice.from)
+    && knownIds.has(choice.to)
+  ));
+  const byDay = dailyMatrix(eligibleChoices, ids);
+  const choiceDays = [...byDay.keys()].sort((a, b) => a - b);
+  const reciprocal = reciprocityObservations(eligibleChoices);
+  const repeat = repeatRate(byDay);
+  const recipRate = reciprocal.map((observation) => observation.observedRate);
+  const recipBaseline = reciprocal.map((observation) => observation.equalCandidateBaseline);
+  const recip = reciprocal.map((observation) => observation.baselineRatio);
+  const clus = clustering(byDay, ids.length);
+  const div = diversity(byDay, ids.length);
+  const hhi = partnerHhi(byDay, ids.length);
+  const persistence = matrixPersistence(byDay, ids.length);
+  const hub = hubConcentration(byDay, ids.length);
+  const dailyDays = [...choiceDays];
+  const adjacentDays = adjacentObservationDays(choiceDays);
+  const reciprocalDays = reciprocal.map((observation) => observation.day);
+  const persistenceDays = persistenceObservationDays(choiceDays);
+  const seriesDays: MetricSeriesDays = {
+    repeat: adjacentDays,
+    recipRate: reciprocalDays,
+    recip: reciprocalDays,
+    clus: dailyDays,
+    div: dailyDays,
+    hhi: dailyDays,
+    persistence: persistenceDays,
+    hub: dailyDays,
+  };
+  const availability: MetricAvailabilityMap = {
+    repeat: metricAvailability(repeat.length, choiceDays, 2),
+    recipRate: metricAvailability(recipRate.length, choiceDays, 2),
+    recip: metricAvailability(recip.length, choiceDays, 2),
+    clus: metricAvailability(clus.length, choiceDays, 1),
+    div: metricAvailability(div.length, choiceDays, 1),
+    hhi: metricAvailability(hhi.length, choiceDays, 1),
+    persistence: metricAvailability(persistence.length, choiceDays, 14),
+    hub: metricAvailability(hub.length, choiceDays, 1),
+  };
   const pairs = new Map<string, number>();
   for (const m of byDay.values()) for (const [k, v] of m) pairs.set(k, (pairs.get(k) ?? 0) + v);
   return {
-    repeat: repeatRate(byDay),
-    recip: reciprocity(choices),
-    clus: clustering(byDay, ids.length),
-    div: diversity(byDay, ids.length),
-    hhi: partnerHhi(byDay, ids.length),
-    persistence: matrixPersistence(byDay, ids.length),
-    hub: hubConcentration(byDay, ids.length),
+    repeat,
+    recipRate,
+    recipBaseline,
+    recip,
+    clus,
+    div,
+    hhi,
+    persistence,
+    hub,
+    seriesDays,
+    availability,
     pairs,
   };
 }

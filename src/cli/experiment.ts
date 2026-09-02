@@ -1,5 +1,5 @@
 // 预实验分析 CLI：伙伴选择实验（关系记忆开/关 × N 天 × 多种子）
-// 指标：有向边重复率、互惠性、日网络聚类、伙伴多样性、集中度与双 7 日结构持续性。
+// 指标：有向边重复率、跨日互惠率、机会校正互惠倍数、日网络聚类、伙伴多样性、集中度与双 7 日结构持续性。
 // 用法：node --no-warnings --import tsx src/cli/experiment.ts --days 30 --seeds 3
 
 import { TimeEngine } from '../core/time';
@@ -70,6 +70,7 @@ async function main(): Promise<void> {
     mem: string;
     gift: string;
     repeat: number[];
+    recipRate: number[];
     recip: number[];
     clus: number[];
     div: number[];
@@ -82,6 +83,7 @@ async function main(): Promise<void> {
     for (const gift of ['off', 'on'] as const) {
       const acc = {
         repeat: [] as number[],
+        recipRate: [] as number[],
         recip: [] as number[],
         clus: [] as number[],
         div: [] as number[],
@@ -93,6 +95,7 @@ async function main(): Promise<void> {
         const choices = await runCondition(mem, gift, days, s + 1);
         const metrics = metricsOf(choices, names);
         acc.repeat.push(avg(metrics.repeat));
+        acc.recipRate.push(avg(metrics.recipRate));
         acc.recip.push(avg(metrics.recip));
         acc.clus.push(avg(metrics.clus));
         acc.div.push(avg(metrics.div));
@@ -120,7 +123,8 @@ async function main(): Promise<void> {
   console.log('  指标                记忆关/无礼      记忆关/馈礼      记忆开/无礼      记忆开/馈礼');
   const rows: [string, (c: Cell) => number[]][] = [
     ['同对重复率', (c) => c.repeat],
-    ['互惠性(相对基线)', (c) => c.recip],
+    ['跨日互惠率(0–1)', (c) => c.recipRate],
+    ['机会校正互惠倍数(1=基线)', (c) => c.recip],
     ['聚类系数', (c) => c.clus],
     ['伙伴多样性(7日窗口)', (c) => c.div],
     ['伙伴集中度 HHI(7日窗口)', (c) => c.hhi],

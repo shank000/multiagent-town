@@ -10,6 +10,8 @@ interface MetricsFixture {
   days: Array<{ day: number; choices: Array<[string, string]> }>;
   expected: {
     repeat: number[];
+    recipRate: number[];
+    recipBaseline: number[];
     recip: number[];
     clus: number[];
     div: number[];
@@ -22,7 +24,7 @@ interface MetricsFixture {
 
 const fixturePath = fileURLToPath(new URL('./fixtures/metrics-parity-v1.json', import.meta.url));
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as MetricsFixture;
-const sequenceKeys = ['repeat', 'recip', 'clus', 'div', 'hhi', 'persistence', 'hub'] as const;
+const sequenceKeys = ['repeat', 'recipRate', 'recipBaseline', 'recip', 'clus', 'div', 'hhi', 'persistence', 'hub'] as const;
 
 function assertSequenceClose(actual: number[], expected: number[], label: string): void {
   assert.equal(actual.length, expected.length, `${label} sequence length`);
@@ -42,5 +44,7 @@ test('TypeScript metrics match the shared TS-Python golden sequence', () => {
   const actual = metricsOf(choices, fixture.agentIds);
 
   for (const key of sequenceKeys) assertSequenceClose(actual[key], fixture.expected[key], key);
+  assert.deepEqual(actual.seriesDays.persistence, [14, 15, 16]);
+  assert.equal(actual.availability.persistence.state, 'ready');
   assert.deepEqual(Object.fromEntries(actual.pairs), fixture.expected.pairs);
 });

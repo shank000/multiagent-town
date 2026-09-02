@@ -1364,12 +1364,16 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
             ok: true,
             worldId: selected.meta.id,
             repeat: m.repeat,
+            recipRate: m.recipRate,
+            recipBaseline: m.recipBaseline,
             recip: m.recip,
             clus: m.clus,
             div: m.div,
             hhi: m.hhi,
             persistence: m.persistence,
             hub: m.hub,
+            seriesDays: m.seriesDays,
+            availability: m.availability,
             pairs,
           }));
           return;
