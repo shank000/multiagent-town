@@ -71,7 +71,7 @@ docs/          交接/研究文档（见下）
 - 对话入库质量门要求已完成的活动、馈礼及一般共同经历具有对应完成证据；两次修复仍不满足时使用不新增事实的保守回答
 
 ### 测量（`engine/metrics.ts`，CLI/服务端共用）
-`repeat / recip / clus / div / hhi / persistence / hub` 由 `metricsOf()` 统一汇总：有向边重复率、机会校正互惠性、无向聚类、7 日 sender 伙伴多样性/HHI、相邻非重叠双 7 日有向矩阵 Pearson 持续性、加权入度 Freeman 枢纽集中度。TypeScript/Python 由同一 16 日 fixture 校验完整序列。
+`repeat / recipRate / recip / clus / div / hhi / persistence / hub` 由 `metricsOf()` 统一汇总：有向边重复率、0–1 跨日互惠率、机会校正互惠倍数（1=等候选随机基线）、无向聚类、7 日 sender 伙伴多样性/HHI、相邻非重叠双 7 日有向矩阵 Pearson 持续性、加权入度 Freeman 枢纽集中度。API 同时提供 `recipBaseline`、真实实验日坐标与逐指标可估计性状态；TypeScript/Python 正式指标由同一 16 日 fixture 校验完整序列。
 CLI 输出 2×2 四格表；`/api/experiment/metrics` 输出逐日序列+配对计数；前台按各指标量纲绘制小多图。
 
 ### 本地机制正控（20 天 × 3 种子，mock）

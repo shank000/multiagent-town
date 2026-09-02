@@ -170,7 +170,8 @@
         <div class="canvas-zone metrics-zone">
           <div class="zone-label">结构指标 · 时间序列</div>
           <div id="metric-tabs" role="tablist" aria-label="选择结构指标"></div>
-          <canvas id="metrics-canvas" aria-label="社会结构指标"></canvas>
+          <div id="metric-status" class="metric-status" aria-live="polite">结构指标正在同步</div>
+          <canvas id="metrics-canvas" aria-label="社会结构指标" aria-describedby="metric-status"></canvas>
         </div>
       </div>
     </section>

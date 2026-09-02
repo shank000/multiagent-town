@@ -53,6 +53,10 @@ test('research console exposes readable controls and keyboard-accessible semanti
   assert.match(css, /font-size:\s*14px/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /image-rendering:\s*pixelated/);
+  assert.match(html, /id="metric-status"[^>]*aria-live="polite"/);
+  assert.match(html, /id="metrics-canvas"[^>]*aria-describedby="metric-status"/);
+  assert.match(consoleClient, /机会校正互惠倍数/);
+  assert.match(consoleClient, /两个完整 7 日窗口/);
 });
 
 test('wrapped two-plus-one layout exposes direct, focusable viewport navigation', () => {

@@ -4,6 +4,7 @@ import {
   distanceToSegment,
   drawMetrics,
   drawNetwork,
+  emptyMetricsPayload,
   hitTestNetwork,
   hitTestNetworkEdge,
   networkDyadEdgeId,
@@ -12,6 +13,7 @@ import {
   networkLensValue,
   resetNetworkLayout,
   METRIC_DEFINITIONS,
+  metricStatusText,
   type MetricsPayload,
   type SocialNetworkEdge,
   type SocialNetworkPayload,
@@ -57,7 +59,10 @@ function canvasRecorder(): { ctx: CanvasRenderingContext2D; points: Array<[numbe
 test('指标主图支持比例、多样性和负持续性三种量纲', () => {
   const { ctx, points } = canvasRecorder();
   const metrics: MetricsPayload = {
+    ...emptyMetricsPayload(),
     repeat: [0.2, 0.8],
+    recipRate: [0.2, 0.6],
+    recipBaseline: [0.2, 0.2],
     recip: [0.5, 1.4],
     clus: [0.1, 0.3],
     div: [2, 4.5],
@@ -71,6 +76,32 @@ test('指标主图支持比例、多样性和负持续性三种量纲', () => {
   assert.ok(points.length >= 12);
   assert.ok(points.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y)));
   assert.ok(points.every(([, y]) => y >= 0 && y <= 720));
+});
+
+test('metric labels separate raw reciprocity from the chance-corrected ratio', () => {
+  const raw = METRIC_DEFINITIONS.find((metric) => metric.key === 'recipRate');
+  const ratio = METRIC_DEFINITIONS.find((metric) => metric.key === 'recip');
+  assert.equal(raw?.label, '跨日互惠率');
+  assert.equal(raw?.fixedMax, 1);
+  assert.equal(raw?.reference?.series, 'recipBaseline');
+  assert.equal(ratio?.label, '机会校正互惠倍数');
+  assert.equal(ratio?.reference?.value, 1);
+});
+
+test('persistence empty state names the complete fourteen-day estimation window', () => {
+  const metrics = emptyMetricsPayload();
+  assert.match(metricStatusText(metrics, 'persistence'), /连续 14 个选择日/);
+  assert.match(metricStatusText(metrics, 'persistence'), /两个完整 7 日窗口/);
+  metrics.availability.persistence = {
+    state: 'awaiting_window',
+    observedPoints: 0,
+    observedChoiceDays: 9,
+    longestConsecutiveChoiceDays: 9,
+    requiredConsecutiveChoiceDays: 14,
+  };
+  assert.match(metricStatusText(metrics, 'persistence'), /连续 14 个选择日/);
+  assert.match(metricStatusText(metrics, 'persistence'), /两个完整 7 日窗口/);
+  assert.doesNotThrow(() => drawMetrics(canvasContext(), metrics, 700, 360, 'persistence'));
 });
 
 test('网络节点命中使用 CSS 坐标和可操作半径', () => {

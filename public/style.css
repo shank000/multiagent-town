@@ -592,7 +592,33 @@ body[data-workbench-explorer="closed"] #research-workspace { left: 56px; }
 }
 .metric-tab:hover { color: var(--ink); border-color: rgba(98, 218, 203, .65); }
 .metric-tab.active { color: #101820; border-color: var(--teal); background: var(--teal); }
+.metric-status {
+  position: absolute;
+  z-index: 3;
+  top: 55px;
+  right: 16px;
+  width: min(48%, 430px);
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: right;
+  pointer-events: none;
+}
 .metrics-zone > .zone-label { display: none; }
+
+@media (max-width: 620px) {
+  .metric-status {
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}
 
 #world-select, .days-field input {
   border: 1px solid var(--edge);

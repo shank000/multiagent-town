@@ -7,15 +7,25 @@ import type {
   RelationalMeasureDefinition,
   RelationalMeasureKey,
 } from '../../engine/social-relations';
+import type {
+  MetricAvailability,
+  MetricAvailabilityMap,
+  MetricSeriesDays,
+  MetricSeriesKey,
+} from '../../engine/metrics';
 
 export interface MetricsPayload {
   repeat: number[];
+  recipRate: number[];
+  recipBaseline: number[];
   recip: number[];
   clus: number[];
   div: number[];
   hhi: number[];
   persistence: number[];
   hub: number[];
+  seriesDays: MetricSeriesDays;
+  availability: MetricAvailabilityMap;
   pairs: { pair: string; count: number }[];
 }
 
@@ -83,23 +93,26 @@ export function networkLensLevel(lens: NetworkLens): NetworkLensLevel {
   return NETWORK_LENSES.find((item) => item.key === lens)?.level ?? 'directed';
 }
 
-export type MetricKey = Exclude<keyof MetricsPayload, 'pairs'>;
+export type MetricKey = MetricSeriesKey;
 
 export const METRIC_DEFINITIONS: ReadonlyArray<{
   key: MetricKey;
   label: string;
   shortLabel: string;
+  description: string;
   min: number;
   fixedMax?: number;
   color: string;
+  reference?: { value?: number; series?: 'recipBaseline'; label: string };
 }> = [
-  { key: 'repeat', label: '同对重复率', shortLabel: '重复', min: 0, fixedMax: 1, color: '#f2c66d' },
-  { key: 'recip', label: '互惠性（相对基线）', shortLabel: '互惠', min: 0, color: '#77b8ff' },
-  { key: 'clus', label: '聚类系数', shortLabel: '聚类', min: 0, fixedMax: 1, color: '#7dd7a0' },
-  { key: 'div', label: '伙伴多样性（7日）', shortLabel: '多样性', min: 0, color: '#f58fa6' },
-  { key: 'hhi', label: '伙伴集中度 HHI（7日）', shortLabel: '集中度', min: 0, fixedMax: 1, color: '#c39cff' },
-  { key: 'persistence', label: '双 7 日关系矩阵持续性', shortLabel: '持续性', min: -1, fixedMax: 1, color: '#62dacb' },
-  { key: 'hub', label: '加权入度枢纽集中度', shortLabel: '枢纽', min: 0, fixedMax: 1, color: '#ff9d70' },
+  { key: 'repeat', label: '同对重复率', shortLabel: '重复', description: '昨日 A→B 在今日仍出现 A→B 的比例 · 0–1', min: 0, fixedMax: 1, color: '#f2c66d' },
+  { key: 'recipRate', label: '跨日互惠率', shortLabel: '互惠率', description: 'P(B 今日选择 A｜A 昨日选择 B) · 0–1', min: 0, fixedMax: 1, color: '#77b8ff', reference: { series: 'recipBaseline', label: '等候选随机基线' } },
+  { key: 'recip', label: '机会校正互惠倍数', shortLabel: '互惠倍数', description: '跨日互惠率 ÷ 等候选随机基线 · 1=随机基线', min: 0, color: '#9a9dff', reference: { value: 1, label: '随机基线 1.0' } },
+  { key: 'clus', label: '聚类系数', shortLabel: '聚类', description: '无向选择网络中的闭合三元组比例 · 0–1', min: 0, fixedMax: 1, color: '#7dd7a0' },
+  { key: 'div', label: '伙伴多样性（7日）', shortLabel: '多样性', description: '滚动 7 日内活跃行动者的平均独立伙伴数', min: 0, color: '#f58fa6' },
+  { key: 'hhi', label: '伙伴集中度 HHI（7日）', shortLabel: '集中度', description: '滚动 7 日有向选择份额平方和 · 0–1', min: 0, fixedMax: 1, color: '#c39cff' },
+  { key: 'persistence', label: '双 7 日关系矩阵持续性', shortLabel: '持续性', description: '相邻非重叠双 7 日有向矩阵 Pearson r · −1–1', min: -1, fixedMax: 1, color: '#62dacb' },
+  { key: 'hub', label: '加权入度枢纽集中度', shortLabel: '枢纽', description: '接收选择权重的 Freeman 式集中度 · 0–1', min: 0, fixedMax: 1, color: '#ff9d70' },
 ];
 
 export interface NetworkNodeLayout {
@@ -665,10 +678,43 @@ export function drawNetwork(
     : { nodes, edges: edgeLayouts, totalEdges, missingEdges, countUnit: 'edge' };
 }
 
+function metricAvailabilityText(availability: MetricAvailability): string {
+  if (availability.state === 'no_observations') {
+    return availability.requiredConsecutiveChoiceDays > 2
+      ? `尚无伙伴选择观测；需要连续 ${availability.requiredConsecutiveChoiceDays} 个选择日（两个完整 7 日窗口）后开始估计。`
+      : availability.requiredConsecutiveChoiceDays === 2
+        ? '尚无伙伴选择观测；需要连续 2 个选择日后开始估计。'
+        : '尚无伙伴选择观测；完成首轮选择后开始估计。';
+  }
+  if (availability.state === 'awaiting_adjacent_days') {
+    return `需要连续 2 个选择日；目前最长连续 ${availability.longestConsecutiveChoiceDays} 日。`;
+  }
+  if (availability.state === 'awaiting_window') {
+    return `需要连续 ${availability.requiredConsecutiveChoiceDays} 个选择日（两个完整 7 日窗口）；目前最长连续 ${availability.longestConsecutiveChoiceDays} 日，累计记录 ${availability.observedChoiceDays} 个选择日。`;
+  }
+  return `共 ${availability.observedPoints} 个有效观测点。`;
+}
+
+/** 当前指标的文本等价描述，供 canvas 辅助说明和研究者核对。 */
+export function metricStatusText(metrics: MetricsPayload, key: MetricKey): string {
+  const spec = METRIC_DEFINITIONS.find((item) => item.key === key) ?? METRIC_DEFINITIONS[0];
+  const data = metrics[spec.key];
+  const latest = data.at(-1);
+  const value = latest === undefined ? '' : ` 当前值 ${latest.toFixed(3)}。`;
+  return `${spec.label}。${spec.description}。${value}${metricAvailabilityText(metrics.availability[spec.key])}`;
+}
+
 /** 单指标主图；指标切换由 DOM tabs 驱动，保证在窄视窗中仍可阅读。 */
 export function drawMetrics(ctx: CanvasRenderingContext2D, metrics: MetricsPayload, w: number, h: number, key: MetricKey = 'repeat'): void {
   const spec = METRIC_DEFINITIONS.find((item) => item.key === key) ?? METRIC_DEFINITIONS[0];
   const data = metrics[spec.key];
+  const dataDays = metrics.seriesDays[spec.key]?.length === data.length
+    ? metrics.seriesDays[spec.key]
+    : data.map((_, index) => index + 1);
+  const referenceData = spec.reference?.series ? metrics[spec.reference.series] : [];
+  const referenceDays = spec.reference?.series === 'recipBaseline'
+    ? metrics.seriesDays.recipRate
+    : [];
   ctx.fillStyle = '#09111d';
   ctx.fillRect(0, 0, w, h);
 
@@ -678,17 +724,26 @@ export function drawMetrics(ctx: CanvasRenderingContext2D, metrics: MetricsPaylo
   ctx.fillText(spec.label, 18, 72);
   ctx.font = '700 24px ui-monospace, monospace';
   ctx.fillText(latest === undefined ? '—' : latest.toFixed(3), 18, 101);
+  ctx.fillStyle = '#9cafc4';
+  ctx.font = '12px "Microsoft YaHei UI", sans-serif';
+  ctx.fillText(spec.description, 18, 122, Math.max(80, w - 36));
 
   const left = 54;
   const right = 24;
-  const top = 116;
+  const top = 142;
   const bottom = 31;
   const chartW = Math.max(20, w - left - right);
   const chartH = Math.max(20, h - top - bottom);
-  const observedMax = data.length ? Math.max(...data) : 0;
+  const observedMax = Math.max(0, ...data, ...referenceData, spec.reference?.value ?? 0);
   const max = spec.fixedMax ?? Math.max(1, Math.ceil(observedMax * 10) / 10);
   const span = Math.max(Number.EPSILON, max - spec.min);
   const scaleY = (value: number) => top + chartH - ((Math.max(spec.min, Math.min(max, value)) - spec.min) / span) * chartH;
+  const allDays = [...dataDays, ...referenceDays];
+  const firstDay = allDays.length ? Math.min(...allDays) : 1;
+  const lastDay = allDays.length ? Math.max(...allDays) : firstDay;
+  const scaleX = (day: number) => firstDay === lastDay
+    ? left + chartW / 2
+    : left + (chartW * (day - firstDay)) / (lastDay - firstDay);
 
   ctx.fillStyle = 'rgba(255,255,255,.025)';
   ctx.fillRect(left, top, chartW, chartH);
@@ -712,27 +767,131 @@ export function drawMetrics(ctx: CanvasRenderingContext2D, metrics: MetricsPaylo
     ctx.fillStyle = '#8fa1b7';
     ctx.font = '13px "Microsoft YaHei UI", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('运行实验后在此显示日序列', left + chartW / 2, top + chartH / 2);
+    const availability = metrics.availability[spec.key];
+    const primary = availability.requiredConsecutiveChoiceDays > 2
+      ? `需连续 ${availability.requiredConsecutiveChoiceDays} 个选择日后估计`
+      : availability.requiredConsecutiveChoiceDays === 2
+        ? '需连续 2 个选择日后估计'
+        : '完成伙伴选择后开始估计';
+    ctx.fillText(primary, left + chartW / 2, top + chartH / 2 - 8);
+    ctx.font = '12px "Microsoft YaHei UI", sans-serif';
+    ctx.fillText(
+      `已记录 ${availability.observedChoiceDays} 日 · 最长连续 ${availability.longestConsecutiveChoiceDays} 日`,
+      left + chartW / 2,
+      top + chartH / 2 + 16,
+    );
     ctx.textAlign = 'left';
     return;
   }
 
-  ctx.strokeStyle = spec.color;
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  data.forEach((value, index) => {
-    const x = left + (chartW * index) / Math.max(1, data.length - 1);
-    const y = scaleY(value);
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+  const drawSeries = (values: number[], days: number[], color: string, width: number, dashed: boolean): void => {
+    if (!values.length || values.length !== days.length) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash?.(dashed ? [6, 5] : []);
+    ctx.beginPath();
+    values.forEach((value, index) => {
+      const x = scaleX(days[index]);
+      const y = scaleY(value);
+      if (index === 0 || days[index] !== days[index - 1] + 1) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.setLineDash?.([]);
+  };
+
+  if (spec.reference?.value !== undefined && spec.reference.value >= spec.min && spec.reference.value <= max) {
+    ctx.strokeStyle = 'rgba(183,201,221,.55)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash?.([6, 5]);
+    ctx.beginPath();
+    ctx.moveTo(left, scaleY(spec.reference.value));
+    ctx.lineTo(left + chartW, scaleY(spec.reference.value));
+    ctx.stroke();
+    ctx.setLineDash?.([]);
+  } else if (referenceData.length === referenceDays.length) {
+    drawSeries(referenceData, referenceDays, 'rgba(183,201,221,.62)', 1.5, true);
+  }
+
+  drawSeries(data, dataDays, spec.color, 2.5, false);
+  if (typeof ctx.arc === 'function') {
+    ctx.fillStyle = spec.color;
+    data.forEach((value, index) => {
+      ctx.beginPath();
+      ctx.arc(scaleX(dataDays[index]), scaleY(value), 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+  if (spec.reference) {
+    ctx.fillStyle = '#a8b8ca';
+    ctx.font = '11px "Microsoft YaHei UI", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`虚线：${spec.reference.label}`, left + chartW, top + 14);
+  }
   ctx.fillStyle = '#9cafc4';
   ctx.font = '11px "Microsoft YaHei UI", sans-serif';
-  ctx.fillText('第 1 个日点', left, h - 9);
-  ctx.textAlign = 'right';
-  ctx.fillText(`第 ${data.length} 个日点`, left + chartW, h - 9);
+  if (firstDay === lastDay) {
+    ctx.textAlign = 'center';
+    ctx.fillText(`第 ${firstDay} 天 · ${data.length} 个有效点`, left + chartW / 2, h - 9);
+  } else {
+    ctx.textAlign = 'left';
+    ctx.fillText(`第 ${firstDay} 天`, left, h - 9);
+    ctx.textAlign = 'right';
+    ctx.fillText(`第 ${lastDay} 天 · ${data.length} 个有效点`, left + chartW, h - 9);
+  }
   ctx.textAlign = 'left';
+}
+
+const METRIC_KEYS = METRIC_DEFINITIONS.map((definition) => definition.key);
+
+function normalizeMetricPayload(result: Partial<MetricsPayload>): MetricsPayload {
+  const series = (key: MetricKey): number[] => {
+    const value = result[key];
+    return Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item)) : [];
+  };
+  const repeat = series('repeat');
+  const recipRate = series('recipRate');
+  const recip = series('recip');
+  const clus = series('clus');
+  const div = series('div');
+  const hhi = series('hhi');
+  const persistence = series('persistence');
+  const hub = series('hub');
+  const values: Record<MetricKey, number[]> = { repeat, recipRate, recip, clus, div, hhi, persistence, hub };
+  const seriesDays = {} as MetricSeriesDays;
+  for (const key of METRIC_KEYS) {
+    const candidate = result.seriesDays?.[key];
+    seriesDays[key] = Array.isArray(candidate) && candidate.length === values[key].length
+      ? candidate.map((day) => Number(day)).filter((day) => Number.isFinite(day))
+      : values[key].map((_, index) => index + 1);
+    if (seriesDays[key].length !== values[key].length) seriesDays[key] = values[key].map((_, index) => index + 1);
+  }
+  const observedChoiceDays = Math.max(0, ...METRIC_KEYS.map((key) => result.availability?.[key]?.observedChoiceDays ?? seriesDays[key].length));
+  const availability = {} as MetricAvailabilityMap;
+  for (const key of METRIC_KEYS) {
+    const supplied = result.availability?.[key];
+    const required = key === 'persistence' ? 14 : key === 'repeat' || key === 'recipRate' || key === 'recip' ? 2 : 1;
+    availability[key] = supplied ?? {
+      state: values[key].length > 0 ? 'ready' : observedChoiceDays === 0 ? 'no_observations' : required > 2 ? 'awaiting_window' : 'awaiting_adjacent_days',
+      observedPoints: values[key].length,
+      observedChoiceDays,
+      longestConsecutiveChoiceDays: observedChoiceDays,
+      requiredConsecutiveChoiceDays: required,
+    };
+  }
+  const recipBaseline = Array.isArray(result.recipBaseline)
+    ? result.recipBaseline.filter((item): item is number => typeof item === 'number' && Number.isFinite(item))
+    : [];
+  const pairs = Array.isArray(result.pairs)
+    ? result.pairs.filter((item): item is { pair: string; count: number } => (
+      typeof item?.pair === 'string' && typeof item.count === 'number' && Number.isFinite(item.count)
+    ))
+    : [];
+  return { ...values, recipBaseline, seriesDays, availability, pairs };
+}
+
+export function emptyMetricsPayload(): MetricsPayload {
+  return normalizeMetricPayload({});
 }
 
 /** 拉取当前平行世界的实验指标。 */
@@ -740,12 +899,9 @@ export async function fetchMetrics(worldId?: string, signal?: AbortSignal): Prom
   const query = worldId ? `?worldId=${encodeURIComponent(worldId)}` : '';
   const res = await fetch(`/api/experiment/metrics${query}`, { signal });
   if (!res.ok) throw new Error(`metrics unavailable (${res.status})`);
-  const result = (await res.json()) as MetricsPayload & { worldId?: string };
+  const result = (await res.json()) as Partial<MetricsPayload> & { worldId?: string };
   if (worldId && result.worldId && result.worldId !== worldId) throw new Error('metrics world mismatch');
-  return {
-    repeat: result.repeat ?? [], recip: result.recip ?? [], clus: result.clus ?? [], div: result.div ?? [],
-    hhi: result.hhi ?? [], persistence: result.persistence ?? [], hub: result.hub ?? [], pairs: result.pairs ?? [],
-  };
+  return normalizeMetricPayload(result);
 }
 
 /** 拉取只读社会关系投影；该结果不参与实验处理或 agent 决策。 */

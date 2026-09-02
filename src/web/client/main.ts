@@ -13,7 +13,8 @@ import {
 } from './panel';
 import {
   drawNetwork, drawMetrics, fetchMetrics, fetchSocialNetwork, controlExperiment, exportMetrics,
-  hitTestNetwork, hitTestNetworkEdge, networkLensLevel, resetNetworkLayout, METRIC_DEFINITIONS, NETWORK_LENSES,
+  emptyMetricsPayload, hitTestNetwork, hitTestNetworkEdge, metricStatusText, networkLensLevel,
+  resetNetworkLayout, METRIC_DEFINITIONS, NETWORK_LENSES,
   type MetricsPayload, type MetricKey, type NetworkNodeLayout, type NetworkEdgeLayout,
   type NetworkMode, type NetworkLens, type NetworkRenderResult, type SocialNetworkPayload,
 } from './console';
@@ -182,9 +183,7 @@ let pendingCameraTarget: { x: number; y: number } | null = null;
 let dragState: { pointerId: number; startX: number; startY: number; offX: number; offY: number; moved: boolean } | null = null;
 let suppressMapClick = false;
 let activeWorldId = 'w1';
-const emptyMetrics = (): MetricsPayload => ({
-  repeat: [], recip: [], clus: [], div: [], hhi: [], persistence: [], hub: [], pairs: [],
-});
+const emptyMetrics = emptyMetricsPayload;
 let metricsCache: MetricsPayload = emptyMetrics();
 const metricsByWorld = new Map<string, MetricsPayload>();
 let lastMetricsAt = 0;
@@ -2191,6 +2190,12 @@ function renderNetworkModeMeta(): void {
   }
 }
 
+function renderMetricStatus(): void {
+  const status = document.getElementById('metric-status');
+  if (!status) return;
+  status.textContent = metricStatusText(metricsCache, activeMetric);
+}
+
 function bindMetricTabs(): void {
   const tabs = document.getElementById('metric-tabs')!;
   tabs.replaceChildren(...METRIC_DEFINITIONS.map((definition) => {
@@ -2208,9 +2213,11 @@ function bindMetricTabs(): void {
         item.classList.toggle('active', active);
         item.setAttribute('aria-selected', String(active));
       });
+      renderMetricStatus();
     });
     return button;
   }));
+  renderMetricStatus();
 }
 
 function bindNarrativeFollow(): void {
@@ -2338,6 +2345,7 @@ function bindControls(): void {
       if (selectedWorld) renderWorldMeta(selectedWorld);
       metricsCache = metricsByWorld.get(worldId) ?? emptyMetrics();
       metricsStatus = metricsByWorld.has(worldId) ? 'ready' : 'loading';
+      renderMetricStatus();
       invalidateMetricsRequest();
       const relationCacheKey = socialNetworkCacheKey(worldId, activeSocialNetworkWindow());
       socialNetworkCache = socialNetworkByWorld.get(relationCacheKey) ?? emptySocialNetwork(worldId);
@@ -2803,6 +2811,7 @@ function loop(): void {
       metricsByWorld.set(requestedWorld, metrics);
       metricsCache = metrics;
       metricsStatus = 'ready';
+      renderMetricStatus();
       if (networkMode === 'choice') renderNetworkModeMeta();
       if (selectedNetworkEdge?.mode === 'choice') maybeRefreshSelectedDyadPanel();
     }).catch((error: unknown) => {
