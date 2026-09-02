@@ -362,7 +362,13 @@ class PartnerChoiceEnv(EnvBase):
             self._workspace_root / _STATE_REL,
             json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2),
         )
-        self._maybe_fail("after_checkpoint_write")
+        has_replay_activity = bool(
+            self._core.written_event_ids
+            or self._pending_replay
+            or self._core.events
+        )
+        if has_replay_activity:
+            self._maybe_fail("after_checkpoint_write")
 
     async def restore(self, workspace_path: Path | str) -> bool:
         self._bind_workspace(workspace_path)

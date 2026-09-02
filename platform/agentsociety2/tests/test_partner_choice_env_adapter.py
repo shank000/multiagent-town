@@ -4,11 +4,13 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import importlib
+import os
 from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 
 def install_sdk_surface_stub() -> None:
@@ -169,6 +171,33 @@ class PartnerChoiceEnvAdapterTest(unittest.TestCase):
                 self.assertTrue(await restored.restore(tmp))
                 self.assertEqual(await restored.get_round_status(), await env.get_round_status())
                 self.assertEqual(restored._core.written_event_ids, env._core.written_event_ids)
+
+        asyncio.run(run())
+
+    def test_checkpoint_fault_waits_until_first_replay_event(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp, patch.dict(
+                os.environ, {"AGENTSOCIETY_ALLOW_FAULT_INJECTION": "1"}
+            ):
+                workspace = Path(tmp) / "workspace"
+                env = self.module.PartnerChoiceEnv(
+                    fault_injection="after_checkpoint_write",
+                    execution_stage="test",
+                )
+                env._bind_workspace(workspace)
+                env._replay_writer = FakeReplayWriter()
+
+                await env.to_workspace()
+                marker = workspace / "state" / "FAULT-after_checkpoint_write.triggered"
+                self.assertFalse(marker.exists())
+
+                await env.step(60, datetime(2026, 1, 1, 19, 30, tzinfo=timezone.utc))
+                observation = await env.observe_partner_round(1)
+                chosen_id = int(observation["observation"]["candidates"][0]["id"])
+                await env.submit_partner_choice(1, chosen_id)
+                with self.assertRaises(self.module.InjectedCrash):
+                    await env.to_workspace()
+                self.assertTrue(marker.is_file())
 
         asyncio.run(run())
 

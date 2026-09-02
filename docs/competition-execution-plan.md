@@ -10,7 +10,7 @@
 
 独立重复单位是一次 condition×seed 世界运行。日、agent 与 dyad 是运行内重复测量，不作为独立处理重复。
 
-正式执行使用 `platform/agentsociety2/execution/stage_bundle.py` 从已提交 manifest/run-matrix/profile cohort 只读派生 bundle；实际模型 ID、源哈希、staged protocol 哈希与 seed-block 顺序在运行前冻结。`online-smoke/capacity/preflight` 的缩短天数只存在于派生 bundle，绝不回写冻结协议。`execution.run_formal` 逐日调用真实 `AgentSociety.init/step/close` 并写 Replay/checkpoint/quality report；非空 fresh run 目录或不匹配的 resume fail-closed。
+正式执行使用 `platform/agentsociety2/execution/stage_bundle.py` 从已提交 manifest/run-matrix/profile cohort 只读派生 bundle；实际模型 ID、源哈希、staged protocol 哈希与 seed-block 顺序在运行前冻结。冻结源在派生前后保持字节级不变，`online-smoke/capacity/preflight` 的缩短天数只存在于 bundle。`execution.run_formal` 逐日调用真实 `AgentSociety.init/step/close` 并写 Replay/checkpoint/quality report；fresh 与 resume 路径均执行 fail-closed 一致性预检。
 
 ## 第一阶段：本周平台移植准备（8/23—8/30）
 
@@ -25,7 +25,7 @@
 
 本阶段的硬性 go/no-go：在线互动摘要没有进入下一轮 dyadic history、none 组出现上下文泄漏、真实 `AgentSociety.init/step/close` 链路未完成、实际模型与请求 ID 不可审计、append 后崩溃恢复不能证明无重复，或任一轮 choice 数不等于 N 时，正式采集不启动。
 
-本地 OpenAI-compatible fixture、Ollama smoke、固定值 Replay smoke 只验证机制与工程路径，不是正式比赛证据；正式证据必须来自在线工作区实际模型 ID/request ID 和正式 Replay。SDK wheel 缺 Ray 时报告 `SDK_RAY_UNAVAILABLE` 并停止，不用本地 double 代替正式生命周期。
+本地 OpenAI-compatible fixture、Ollama smoke、固定值 Replay smoke 标记为机制与工程门；正式比赛证据来源为在线工作区实际模型 ID/request ID 和正式 Replay。Windows 预检返回 `SDK_RAY_UNAVAILABLE`，Linux/在线工作区执行正式 lifecycle；锁定 Linux venv 的 2-agent fixture 构成实际 SDK 开发门证据。
 
 ## 第二阶段：实验与稳健性（8/31—9/6）
 

@@ -139,8 +139,10 @@ async def main() -> None:
             assert report["storageBytes"]["replay"] > 0
             assert (run_dir / "SOCIETY.json").is_file()
             assert (run_dir / "quality-report.json").is_file()
-            serialized = (run_dir / "quality-report.json").read_text(encoding="utf-8")
-            assert "fixture-key-not-persisted" not in serialized
+            for artifact in run_dir.rglob("*"):
+                if not artifact.is_file():
+                    continue
+                assert b"fixture-key-not-persisted" not in artifact.read_bytes(), artifact
             print(json.dumps({
                 "formalGatePassed": report["formalGatePassed"],
                 "choices": report["completion"]["completedChoices"],

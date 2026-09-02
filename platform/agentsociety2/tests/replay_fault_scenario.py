@@ -23,12 +23,17 @@ async def scenario(point: str) -> dict[str, int | str]:
         replay = root / "replay"
         workspace = root / "workspace"
         writer = ReplayWriter(replay)
-        env = PartnerChoiceEnv(replay_dir=str(replay), execution_stage="test")
+        env = PartnerChoiceEnv(
+            replay_dir=str(replay),
+            fault_injection=point,
+            execution_stage="test",
+        )
         env._bind_workspace(workspace)
         env.set_replay_writer(writer)
+        # A configured checkpoint fault waits for actual event activity.
+        await env.to_workspace()
         await env.step(60, datetime(2026, 1, 1, 19, 30, tzinfo=timezone.utc))
         await env.to_workspace()
-        env._fault_injection = point
         observed = await env.observe_partner_round(1)
         chosen = int(observed["observation"]["candidates"][0]["id"])
         crashed = False

@@ -22,7 +22,7 @@ python -m pip install -r requirements.txt
 
 `agentsociety2==2.8.4` 使用 FastMCP 1.x 模块布局，因此 requirements 同时固定 `mcp>=1.13.1,<2`。平台导入时需要工作区提供 `AGENTSOCIETY_LLM_API_KEY`；离线 smoke 可使用非联网占位值，因为该门只验证模块、Replay 和恢复，不调用模型。
 
-AgentSociety 2.8.4 的 wheel 元数据没有声明其生命周期实际导入的 Ray，本工作区因此在 requirements 中显式补充 `ray>=2.9,<3`。正式 runner 在创建 run 目录前检查包元数据版本（不用包内残留的 `__version__`）、Python 范围、Ray、模型与 API 环境；缺 Ray 会以 `SDK_RAY_UNAVAILABLE` 失败，不会退回替代 runner。
+AgentSociety 2.8.4 的 wheel 元数据声明 `ray>=2.0.0; sys_platform != 'win32'`；本工作区在同一平台条件下收窄为 `ray>=2.9,<3`。正式 lifecycle 在 Linux 或在线工作区执行。Windows 预检返回 `SDK_RAY_UNAVAILABLE`，Linux 预检同时验证包元数据版本、Python 范围、Ray、模型与 API 环境。
 
 ## 工作区内容
 
@@ -41,7 +41,7 @@ AgentSociety 2.8.4 的 wheel 元数据没有声明其生命周期实际导入的
 
 ## 执行 bundle 与正式入口
 
-五个 stage 均为确定性派生且不改写 `experiment-manifest.v1.json` 或 `protocol/run-matrix.v1.json`：`online-smoke` 为 2 人×1 日×1 run；`capacity` 为 24 人×2 日×4 核心条件；`preflight` 为 24 人×5 日×4 核心条件（首个 seed）；`main` 为 4 条件×5 seed×60 日；`robustness` 为 2 条 recent-3 条件×5 seed×60 日。bundle 冻结实际模型 ID、三个源文件的内容/文件哈希、每个 staged protocol 哈希、seed-block 顺序和统计单位。
+五个 stage 均为确定性派生，冻结的 `experiment-manifest.v1.json`、`protocol/run-matrix.v1.json` 与 profile cohort 保持字节级不变：`online-smoke` 为 2 人×1 日×1 run；`capacity` 为 24 人×2 日×4 核心条件；`preflight` 为 24 人×5 日×4 核心条件（首个 seed）；`main` 为 4 条件×5 seed×60 日；`robustness` 为 2 条 recent-3 条件×5 seed×60 日。bundle 冻结实际模型 ID、三个源文件的内容/文件哈希、每个 staged protocol 哈希、seed-block 顺序和统计单位。
 
 ```bash
 export AGENTSOCIETY_LLM_API_KEY='...'
@@ -60,11 +60,11 @@ PYTHONPATH=. python -m execution.run_formal \
   --run-dir /new/empty/path/run-001
 ```
 
-正式入口拒绝 placeholder model、SDK/Python/Ray 不符、关键环境缺失、已存在的非空 fresh run 目录和与 bundle 不一致的 resume。API key 只由 SDK 从环境读取，不进入 bundle、run metadata 或质量报告。恢复使用同一 `--bundle/--run-id/--run-dir --resume`；`formal-run.json` 的 bundle hash 必须匹配。
+正式入口对 placeholder model、SDK/Python/Ray、关键环境、fresh run 目录与 resume bundle 一致性执行 fail-closed 预检。API key 由 SDK 从环境读取；bundle、run metadata 与质量报告保持 credential-free。恢复使用同一 `--bundle/--run-id/--run-dir --resume`，并匹配 `formal-run.json` 的 bundle hash。
 
-故障注入仅允许 `test/preflight/online-smoke`，且必须显式设置 `AGENTSOCIETY_ALLOW_FAULT_INJECTION=1`。三个点分别为 `after_replay_append`、`after_written_set`、`after_checkpoint_write`；marker 为持久化 fail-once，恢复时先用真实 ReplayReader 对账 event ID。不要在 main/robustness 启用。
+故障注入范围固定为 `test/preflight/online-smoke`，并由 `AGENTSOCIETY_ALLOW_FAULT_INJECTION=1` 显式开启。三个点分别为 `after_replay_append`、`after_written_set`、`after_checkpoint_write`；marker 为持久化 fail-once，恢复时先用真实 ReplayReader 对账 event ID。`main/robustness` 始终运行无故障注入路径。
 
-`quality-report.json` 的 `formalGatePassed` 是进入分析的必要条件：迟到/跳过、重复 event ID、缺 choice/interaction、事件序列不完整、真实模型审计字段缺失或 choice+interaction 合计 fallback>5% 均失败。报告只存数值容量信息和错误类别，不存 key；raw model response 只在正式 Replay 的受控事件审计字段中保存。
+`quality-report.json` 的 `formalGatePassed` 是进入分析的必要条件：迟到/跳过、重复 event ID、缺 choice/interaction、事件序列不完整、真实模型审计字段缺失或 choice+interaction 合计 fallback>5% 均失败。报告内容限定为数值容量信息和错误类别；raw model response 位于正式 Replay 的受控事件审计字段，credential 由环境边界管理。
 
 ## 验证
 
@@ -94,7 +94,7 @@ python tests/real_sdk_smoke.py
 
 该门验证 `PartnerChoiceAgent`/`PartnerChoiceEnv` 扫描、`@tool` 注册、净化提示、四个 Replay dataset 的 schema/写入/DuckDB 读取，以及受控 checkpoint/restore。固定值提交在此门中明确记录为 `tool_submission`，不冒充 LLM 决策。
 
-`tests/sdk_lifecycle_fixture.py` 使用随机 localhost 端口的受控 OpenAI-compatible server 尝试真实 SDK lifecycle；它不会访问 Ollama 或 8898。它只属于工程门：若 Ray 可用则必须形成 2-agent×1-day 的真实 AgentSociety/Replay 闭环；若 Ray 缺失则只接受明确 `SDK_RAY_UNAVAILABLE` 硬失败。此 fixture、离线 smoke 和本地 Ollama 均不是正式比赛证据。正式证据只能来自在线工作区冻结的真实模型 ID、真实 request ID 与正式 Replay。
+`tests/sdk_lifecycle_fixture.py` 使用随机 localhost 端口的受控 OpenAI-compatible server 验证真实 SDK lifecycle，并标记为工程门。Linux/Ray 路径形成 2-agent×1-day 的真实 AgentSociety/Replay 闭环；Windows 路径验证明确的 `SDK_RAY_UNAVAILABLE` 预检结果。正式比赛证据来源为在线工作区冻结的真实模型 ID、真实 request ID 与正式 Replay；fixture、离线 smoke 和本地 Ollama 提供机制与工程证据。
 
 正式独立分析单位始终是 condition×seed world-run；day、agent、dyad 都是 run 内嵌套重复测量。确认性主估计量是 day 31–60 的 directed-edge repeat。5 个 paired seeds 的双侧精确检验最小 p=.0625，不能宣称达到 alpha=.05 显著；若扩至 8 seed，必须在查看任何正式结果方向前冻结。
 
