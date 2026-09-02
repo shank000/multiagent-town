@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import { buildTown } from '../engine/seed';
@@ -50,6 +51,7 @@ interface PhaseTeardown {
 }
 
 interface NormalPhaseResult {
+  durationMs: number;
   error: string | null;
   expectedIds: string[];
   conversations: ConversationEvidence[];
@@ -62,6 +64,7 @@ interface NormalPhaseResult {
 }
 
 interface TimeoutPhaseResult {
+  durationMs: number;
   error: string | null;
   provider: string;
   conversation: ConversationEvidence | null;
@@ -76,6 +79,7 @@ interface TimeoutPhaseResult {
 interface RuntimeSoakReport {
   schemaVersion: 1;
   generatedAt: string;
+  durationMs: number;
   options: {
     worlds: number;
     waves: number;
@@ -187,6 +191,7 @@ class SchedulerCollector {
 }
 
 async function main(): Promise<void> {
+  const runStartedAt = performance.now();
   const options = parseArgs(process.argv.slice(2));
   if (existsSync(options.outputPath) || existsSync(options.runDirectory)) {
     throw new Error(`runtime soak 只写入新路径，请更换 --output：${options.outputPath}`);
@@ -261,6 +266,7 @@ async function main(): Promise<void> {
   const report: RuntimeSoakReport = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
+    durationMs: elapsedMs(runStartedAt),
     options: {
       worlds: options.worlds,
       waves: options.waves,
@@ -275,6 +281,7 @@ async function main(): Promise<void> {
       gcAvailable: memory.gcAvailable,
     },
     normal: {
+      durationMs: normal.durationMs,
       error: normal.error,
       expectedIds: normal.expectedIds,
       conversations: normal.conversations,
@@ -284,6 +291,7 @@ async function main(): Promise<void> {
       diagnostics: normal.diagnostics,
     },
     timeout: {
+      durationMs: timeout.durationMs,
       error: timeout.error,
       provider: timeout.provider,
       conversation: timeout.conversation,
@@ -311,6 +319,7 @@ async function runNormalPhase(
   baseConfig: GatewayConfig,
   memorySamples: MemorySample[],
 ): Promise<NormalPhaseResult> {
+  const phaseStartedAt = performance.now();
   const diagnostics = new DiagnosticCollector();
   const scheduler = new SchedulerCollector();
   const scopes = Array.from({ length: options.worlds }, (_, index) => `runtime-soak-normal-w${index + 1}`);
@@ -426,6 +435,7 @@ async function runNormalPhase(
   }
   const auditedConversations = audits.flatMap((audit) => auditConversationSnapshot(audit));
   return {
+    durationMs: elapsedMs(phaseStartedAt),
     error,
     expectedIds,
     conversations: auditedConversations,
@@ -439,6 +449,7 @@ async function runNormalPhase(
 }
 
 async function runTimeoutPhase(options: RuntimeSoakOptions, baseConfig: GatewayConfig): Promise<TimeoutPhaseResult> {
+  const phaseStartedAt = performance.now();
   const diagnostics = new DiagnosticCollector();
   const gateway = new LLMGateway({
     ...baseConfig,
@@ -540,6 +551,7 @@ async function runTimeoutPhase(options: RuntimeSoakOptions, baseConfig: GatewayC
     }
   }
   return {
+    durationMs: elapsedMs(phaseStartedAt),
     error,
     provider: gateway.runtimeSnapshot().provider,
     conversation,
@@ -814,6 +826,7 @@ function emptyDiagnosticEvidence(): DiagnosticEvidence {
 
 function emptyNormal(error: string | null): NormalPhaseResult {
   return {
+    durationMs: 0,
     error,
     expectedIds: [],
     conversations: [],
@@ -828,6 +841,7 @@ function emptyNormal(error: string | null): NormalPhaseResult {
 
 function emptyTimeout(error: string | null): TimeoutPhaseResult {
   return {
+    durationMs: 0,
     error,
     provider: 'invalid',
     conversation: null,
@@ -845,6 +859,7 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function entrypoint(): Promise<void> {
+  const entrypointStartedAt = performance.now();
   try {
     await main();
   } catch (error) {
@@ -853,7 +868,10 @@ async function entrypoint(): Promise<void> {
     atomicWriteReport(outputPath, serializeRuntimeSoakReport({
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
+      durationMs: elapsedMs(entrypointStartedAt),
       error: safeError(error),
+      normal: { durationMs: 0 },
+      timeout: { durationMs: 0 },
       contracts,
       passedContracts: 0,
       totalContracts: 10,
@@ -863,6 +881,10 @@ async function entrypoint(): Promise<void> {
     console.log(`RUNTIME_SOAK_REPORT ${outputPath}`);
     process.exitCode = 1;
   }
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAt));
 }
 
 function fallbackFailureOutput(args: readonly string[]): string {

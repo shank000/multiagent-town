@@ -13,12 +13,12 @@ import {
 
 const MiB = 1024 * 1024;
 
-function memory(label: string, wave: number | null, heapUsed: number): MemorySample {
+function memory(label: string, wave: number | null, heapUsed: number, rss = 100 * MiB + heapUsed): MemorySample {
   return {
     label,
     wave,
     postGc: true,
-    rss: 100 * MiB + heapUsed,
+    rss,
     heapUsed,
     heapTotal: 128 * MiB,
     external: MiB,
@@ -169,12 +169,17 @@ test('memory assessment distinguishes one-wave smoke, stable multi-wave, and sus
   assert.equal(oneWave.passed, false);
 
   const stable = assessMemoryStability([
-    memory('wave1', 1, 40 * MiB),
+    memory('wave1', 1, 400 * MiB, 700 * MiB),
     memory('wave2', 2, 44 * MiB),
     memory('wave3', 3, 45 * MiB),
   ], 3, true);
   assert.equal(stable.status, 'stabilized');
   assert.equal(stable.passed, true);
+  assert.equal(stable.postWarmupWaveSamples, 2);
+  assert.equal(stable.postWarmupHeapGrowth, MiB, 'wave 1 必须完全排除，wave 2 才是稳定区间基线');
+  assert.equal(stable.postWarmupRssGrowth, MiB);
+  assert.equal(typeof stable.heapGrowthThresholdBytes, 'number');
+  assert.equal(typeof stable.rssGrowthThresholdBytes, 'number');
 
   const growing = assessMemoryStability([
     memory('wave1', 1, 40 * MiB),
@@ -183,11 +188,22 @@ test('memory assessment distinguishes one-wave smoke, stable multi-wave, and sus
   ], 3, true);
   assert.equal(growing.status, 'growing');
   assert.equal(growing.passed, false);
+
+  const rssOnlyGrowth = assessMemoryStability([
+    memory('wave1', 1, 50 * MiB, 160 * MiB),
+    memory('wave2', 2, 50 * MiB, 200 * MiB),
+    memory('wave3', 3, 50 * MiB, 280 * MiB),
+  ], 3, true);
+  assert.equal(rssOnlyGrowth.postWarmupHeapGrowth, 0);
+  assert.equal(rssOnlyGrowth.postWarmupRssGrowth, 80 * MiB);
+  assert.equal(rssOnlyGrowth.status, 'growing');
+  assert.equal(rssOnlyGrowth.passed, false, 'SQLite/native/buffer RSS 单独持续增长也必须失败');
 });
 
 test('report serialization strips prompt bodies and credentials without deleting token counts', () => {
   const serialized = serializeRuntimeSoakReport({
     provider: 'ollama',
+    durationMs: 1234,
     prompt: 'private prompt body',
     messages: [{ content: 'private user text' }],
     apiKey: 'secret-key',
@@ -197,6 +213,7 @@ test('report serialization strips prompt bodies and credentials without deleting
   });
   assert.doesNotMatch(serialized, /private prompt body|private user text|secret-key|top\.secret|alice:password|token=secret/);
   assert.match(serialized, /"inputTokens": 42/);
+  assert.match(serialized, /"durationMs": 1234/);
   assert.match(serialized, /\[REDACTED\]/);
   assert.doesNotThrow(() => JSON.parse(serialized));
 });

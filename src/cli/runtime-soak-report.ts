@@ -91,16 +91,21 @@ export interface MemoryAssessment {
   gcAvailable: boolean;
   waves: number;
   waveSamples: number;
+  postWarmupWaveSamples: number;
   firstRss: number | null;
   lastRss: number | null;
   maxRss: number | null;
   firstHeapUsed: number | null;
   lastHeapUsed: number | null;
   maxHeapUsed: number | null;
+  postWarmupRssGrowth: number | null;
+  postWarmupRssSlopeBytesPerWave: number | null;
   postWarmupHeapGrowth: number | null;
   postWarmupHeapSlopeBytesPerWave: number | null;
-  growthThresholdBytes: number | null;
-  slopeThresholdBytesPerWave: number | null;
+  rssGrowthThresholdBytes: number | null;
+  rssSlopeThresholdBytesPerWave: number | null;
+  heapGrowthThresholdBytes: number | null;
+  heapSlopeThresholdBytesPerWave: number | null;
   rationale: string;
 }
 
@@ -149,12 +154,21 @@ export function assessMemoryStability(
   const waveSamples = postGc
     .filter((sample) => sample.wave !== null)
     .sort((left, right) => (left.wave ?? 0) - (right.wave ?? 0));
+  const samplesByWave = new Map<number, MemorySample>();
+  for (const sample of waveSamples) {
+    if (sample.wave !== null && !samplesByWave.has(sample.wave)) samplesByWave.set(sample.wave, sample);
+  }
+  const completeWaveSequence = Array.from({ length: waves }, (_, index) => index + 1)
+    .every((wave) => samplesByWave.has(wave));
+  const postWarmup = Array.from({ length: Math.max(0, waves - 1) }, (_, index) => samplesByWave.get(index + 2))
+    .filter((sample): sample is MemorySample => sample !== undefined);
   const rss = postGc.map((sample) => sample.rss);
   const heaps = postGc.map((sample) => sample.heapUsed);
   const base = {
     gcAvailable,
     waves,
     waveSamples: waveSamples.length,
+    postWarmupWaveSamples: postWarmup.length,
     firstRss: rss[0] ?? null,
     lastRss: rss.at(-1) ?? null,
     maxRss: rss.length ? Math.max(...rss) : null,
@@ -165,41 +179,59 @@ export function assessMemoryStability(
   if (!gcAvailable) {
     return {
       ...base, status: 'gc_unavailable', passed: false,
+      postWarmupRssGrowth: null, postWarmupRssSlopeBytesPerWave: null,
       postWarmupHeapGrowth: null, postWarmupHeapSlopeBytesPerWave: null,
-      growthThresholdBytes: null, slopeThresholdBytesPerWave: null,
+      rssGrowthThresholdBytes: null, rssSlopeThresholdBytesPerWave: null,
+      heapGrowthThresholdBytes: null, heapSlopeThresholdBytesPerWave: null,
       rationale: 'global.gc 不可用，不能把普通堆波动解释为稳定性证据；请使用 --expose-gc。',
     };
   }
-  if (waves < 3 || waveSamples.length < waves) {
+  if (waves < 3 || !completeWaveSequence) {
     return {
       ...base, status: 'insufficient', passed: false,
+      postWarmupRssGrowth: null, postWarmupRssSlopeBytesPerWave: null,
       postWarmupHeapGrowth: null, postWarmupHeapSlopeBytesPerWave: null,
-      growthThresholdBytes: null, slopeThresholdBytesPerWave: null,
-      rationale: '少于 3 个完整波次只能作为开发冒烟，不能声称长运行内存稳定。',
+      rssGrowthThresholdBytes: null, rssSlopeThresholdBytesPerWave: null,
+      heapGrowthThresholdBytes: null, heapSlopeThresholdBytesPerWave: null,
+      rationale: '少于 3 个波次或逐波次 post-GC 检查点不完整时只能作为开发冒烟，不能声称长运行内存稳定。',
     };
   }
-  const postWarmup = waveSamples.slice(0, waves);
   const first = postWarmup[0];
   const last = postWarmup.at(-1)!;
-  const growth = last.heapUsed - first.heapUsed;
-  const slope = linearSlope(postWarmup.map((sample) => ({
+  const rssGrowth = last.rss - first.rss;
+  const rssSlope = linearSlope(postWarmup.map((sample) => ({
+    x: sample.wave ?? 0,
+    y: sample.rss,
+  })));
+  const heapGrowth = last.heapUsed - first.heapUsed;
+  const heapSlope = linearSlope(postWarmup.map((sample) => ({
     x: sample.wave ?? 0,
     y: sample.heapUsed,
   })));
-  // Node/V8 的 JIT、字符串驻留和 SQLite 页缓存会在首波后继续温和升温。
-  // 因而允许至少 32 MiB 的净堆增长或首波堆的 25%，以及每波至少 16 MiB 的斜率。
-  const growthThreshold = Math.max(32 * 1024 * 1024, Math.round(first.heapUsed * 0.25));
-  const slopeThreshold = Math.max(16 * 1024 * 1024, Math.round(first.heapUsed * 0.12));
-  const passed = growth <= growthThreshold && slope <= slopeThreshold;
+  // wave 1 完全排除为热身；wave 2 是稳定区间基线。V8 对象堆允许至少 32 MiB
+  // 净增长和 16 MiB/波；包含 SQLite、native 与缓冲区的 RSS 使用加倍的绝对余量。
+  // 百分比余量同时照顾较大但稳定的进程，并仍会拒绝持续的原生或 JS 堆增长。
+  const heapGrowthThreshold = Math.max(32 * 1024 * 1024, Math.round(first.heapUsed * 0.25));
+  const heapSlopeThreshold = Math.max(16 * 1024 * 1024, Math.round(first.heapUsed * 0.12));
+  const rssGrowthThreshold = Math.max(64 * 1024 * 1024, Math.round(first.rss * 0.25));
+  const rssSlopeThreshold = Math.max(32 * 1024 * 1024, Math.round(first.rss * 0.12));
+  const passed = heapGrowth <= heapGrowthThreshold
+    && heapSlope <= heapSlopeThreshold
+    && rssGrowth <= rssGrowthThreshold
+    && rssSlope <= rssSlopeThreshold;
   return {
     ...base,
     status: passed ? 'stabilized' : 'growing',
     passed,
-    postWarmupHeapGrowth: growth,
-    postWarmupHeapSlopeBytesPerWave: slope,
-    growthThresholdBytes: growthThreshold,
-    slopeThresholdBytesPerWave: slopeThreshold,
-    rationale: '首波视为热身；从首波后 GC 检查点计算净增长和线性斜率，门限吸收 V8/SQLite 的正常升温。',
+    postWarmupRssGrowth: rssGrowth,
+    postWarmupRssSlopeBytesPerWave: rssSlope,
+    postWarmupHeapGrowth: heapGrowth,
+    postWarmupHeapSlopeBytesPerWave: heapSlope,
+    rssGrowthThresholdBytes: rssGrowthThreshold,
+    rssSlopeThresholdBytesPerWave: rssSlopeThreshold,
+    heapGrowthThresholdBytes: heapGrowthThreshold,
+    heapSlopeThresholdBytesPerWave: heapSlopeThreshold,
+    rationale: 'wave 1 完全排除为热身；以 wave 2 为基线，对 RSS 与 heap 的净增长和线性斜率分别设保守门限并共同判定。',
   };
 }
 
