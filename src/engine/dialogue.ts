@@ -8,6 +8,8 @@ import { keywordSimilarity, type MemoryStore } from '../store/memory';
 import type { RelationshipStore } from '../store/relationships';
 import type { RumorTracker } from './rumors';
 import type { LLMGateway } from '../llm/gateway';
+import type { LLMRequest } from '../llm/types';
+import { reviewDialogueTurn, DIALOGUE_REVIEW_TEMPLATE, type DialogueReviewContext, type DialogueReviewResult } from './dialogue-review';
 import { DIALOGUE_TEMPLATE, DIALOGUE_SUMMARY_TEMPLATE, dialogueMessages, dialogueSummaryMessages } from '../llm/prompts';
 import { personalityOf } from './town-model';
 import {
@@ -15,6 +17,7 @@ import {
   conservativeDialogueReply,
   dialogueRepairInstruction,
   selectDialogueAnswerEvidence,
+  isConversationalEvidence,
 } from './dialogue-quality';
 
 const MIN_NATURAL_TURNS = 4;
@@ -74,13 +77,22 @@ interface Pending {
   queuedAtMs: number;
   dispatchedAtMs: number | null;
   lastQueueWaitMs: number;
+  stage: 'generate' | 'review';
 }
 
-interface DialogueQualityResult {
+interface DialogueReviewAudit {
+  candidateKind: 'model' | 'fallback';
+  attempt: number;
+  utterance: string;
+  result: DialogueReviewResult;
+}
+
+export interface DialogueQualityResult {
   status: 'validated' | 'safe_fallback';
   attempts: number;
   rejectedReasons: string[];
-  validator: 'dialogue-turn/v2';
+  validator: 'dialogue-turn/v5';
+  semanticReview: { status: 'accepted' | 'not_required'; sourceMemoryIds: string[]; reviews: DialogueReviewAudit[] };
 }
 
 export interface ActiveConversation {
@@ -92,6 +104,7 @@ export interface ActiveConversation {
   waitMs?: number;
   queueWaitMs?: number;
   generationMs?: number;
+  stage?: 'generate' | 'review';
 }
 
 export interface DialogueStartOptions {
@@ -120,6 +133,8 @@ export interface DialogueEngineOptions {
   turnQueueTimeoutMs?: number;
   summaryTimeoutMs?: number;
   summaryQueueTimeoutMs?: number;
+  /** 自定义工程 provider 可显式演练审校链路；Ollama/API 始终启用。 */
+  reviewCustomProvider?: boolean;
 }
 
 function pairKey(a: string, b: string): string {
@@ -195,6 +210,7 @@ export class DialogueEngine {
           bId: session.b,
           speakerId: phase === 'ready' ? (session.turns.length % 2 === 0 ? session.a : session.b) : null,
           phase,
+          stage: pending?.stage,
           waitMs: pending ? Math.max(0, now - pending.queuedAtMs) : 0,
           queueWaitMs: pending
             ? pending.dispatchedAtMs === null ? Math.max(0, now - pending.queuedAtMs) : pending.lastQueueWaitMs
@@ -423,21 +439,100 @@ export class DialogueEngine {
       queuedAtMs: Date.now(),
       dispatchedAtMs: null,
       lastQueueWaitMs: 0,
+      stage: 'generate',
     };
     this.pending.set(key, entry);
     const task = (async () => {
       const latestPrompt = s.turns.at(-1)?.content ?? '';
+      const priorTurns = s.turns.map((turn) => turn.content);
+      const minuteOfDay = ((now % 1440) + 1440) % 1440;
+      let qualityEvidence: string[] = [];
+      let eventEvidence: string[] = [];
+      let recentSpeakerUtterances: string[] = [];
+      const mode = this.llm.runtimeSnapshot().mode;
+      const reviewRequired = mode === 'ollama' || mode === 'api' || (mode === 'custom' && this.options.reviewCustomProvider === true);
+      const reviews: DialogueReviewAudit[] = [];
+      let sourceMemoryIds: string[] = [];
+      let reviewContext: Omit<DialogueReviewContext, 'utterance'> | null = null;
+      let executionRemainingMs = this.turnTimeoutMs;
+      let queueRemainingMs = this.turnQueueTimeoutMs;
+      const completeWithinTurn = async (request: LLMRequest) => {
+        if (this.closed) throw new Error('世界正在安全关闭');
+        if (reviewRequired && (executionRemainingMs <= 0 || queueRemainingMs <= 0)) throw new Error('本轮生成与审校共用预算已用尽');
+        entry.stage = request.template === DIALOGUE_REVIEW_TEMPLATE ? 'review' : 'generate';
+        entry.queuedAtMs = Date.now();
+        entry.dispatchedAtMs = null;
+        entry.lastQueueWaitMs = 0;
+        let dispatchedAt: number | null = null;
+        try {
+          return await this.llm.complete({
+            ...request, priority: 'dialogue', scopeId: this.scopeId,
+            timeoutMs: reviewRequired ? Math.max(1, Math.floor(executionRemainingMs)) : this.turnTimeoutMs,
+            queueTimeoutMs: reviewRequired ? Math.max(1, Math.floor(queueRemainingMs)) : this.turnQueueTimeoutMs,
+            onDispatch: (queueWaitMs) => {
+              dispatchedAt = Date.now();
+              entry.dispatchedAtMs = dispatchedAt;
+              entry.lastQueueWaitMs = queueWaitMs;
+            },
+          });
+        } finally {
+          const finishedAt = Date.now();
+          queueRemainingMs -= (dispatchedAt ?? finishedAt) - entry.queuedAtMs;
+          if (dispatchedAt !== null) executionRemainingMs -= finishedAt - dispatchedAt;
+        }
+      };
+      const semanticQuality = (): DialogueQualityResult['semanticReview'] => ({
+        status: reviewRequired ? 'accepted' : 'not_required', sourceMemoryIds: [...sourceMemoryIds], reviews: [...reviews],
+      });
+      const reviewCandidate = async (utterance: string, candidateKind: 'model' | 'fallback', attempt: number): Promise<string[]> => {
+        if (!reviewRequired) return [];
+        if (!reviewContext) throw new Error('本轮审校上下文未就绪');
+        const result = await reviewDialogueTurn({ complete: completeWithinTurn }, { ...reviewContext, utterance }, { agentId: speaker.id, scopeId: this.scopeId });
+        const audit = { candidateKind, attempt, utterance, result };
+        reviews.push(audit);
+        console.info(`[dialogue-review] ${JSON.stringify({ scopeId: this.scopeId, conversationId: s.conversationId, turnIndex: s.turns.length, speakerId: speaker.id, sourceMemoryIds, ...audit })}`);
+        if (result.status === 'unavailable') throw new Error(`语义审校未完成：${result.error}`);
+        return result.issues.map((issue) => `语义审校 ${issue.kind}：「${issue.quote}」${issue.reason}`);
+      };
+      const resolveFallback = async (evidence: string[], attempts: number, rejectedReasons: string[], rumorEvidence: string[] = []) => {
+        const utterance = conservativeDialogueReply(latestPrompt, evidence, {
+          priorTurns, recentSpeakerUtterances, rumorEvidence, speakerName: speaker.name, otherName: other.name,
+        });
+        const end = s.turns.length + 1 >= MIN_NATURAL_TURNS;
+        const assessment = assessDialogueTurn({
+          utterance, latestPrompt, priorTurns, minuteOfDay,
+          evidence: qualityEvidence, eventEvidence, answerEvidence: selectDialogueAnswerEvidence(latestPrompt, qualityEvidence, priorTurns),
+          speakerName: speaker.name, otherName: other.name, endDialogue: end,
+          knownResidentNames: [...this.knownResidentNames],
+        });
+        if (!assessment.ok) {
+          entry.error = `对话质量检查未通过：${assessment.reasons.join('；')}`;
+          console.warn(`[dialogue-quality] conversation=${s.conversationId} speaker=${speaker.id} reason=${entry.error}`);
+          return;
+        }
+        const semanticReasons = await reviewCandidate(utterance, 'fallback', attempts);
+        if (semanticReasons.length) {
+          entry.error = `对话兜底未通过语义审校：${semanticReasons.join('；')}`;
+          return;
+        }
+        entry.resolved = { utterance, end, quality: { status: 'safe_fallback', attempts, rejectedReasons, validator: 'dialogue-turn/v5', semanticReview: semanticQuality() } };
+      };
       try {
         const carried = this.rumors ? this.rumors.carriedBy(speaker.id).map((r) => ({ id: r.id, content: r.content })) : [];
         const relationship = this.rels ? this.rels.getOrCreate(speaker.id, other.id) : null;
         const affection = relationship?.affection ?? 0;
         const honesty = personalityOf(speaker.persona).honesty;
-        const retrievedMemories = latestPrompt
-          ? this.store.retrieve(speaker.id, latestPrompt, now, 12)
-            .filter((item) => keywordSimilarity(latestPrompt, item.content) > 0)
-            .slice(0, 8)
-          : this.store.recentMemories(speaker.id, 8);
-        const speakerMemories = retrievedMemories.map((item) => item.content);
+        const retrievalTopic = priorTurns.slice(-4).join(' ');
+        const retrievedMemories = retrievalTopic
+          ? this.store.retrieve(speaker.id, retrievalTopic, now, 24)
+            .filter((item) => keywordSimilarity(retrievalTopic, item.content) > 0)
+          : this.store.recentMemories(speaker.id, 24);
+        const observations = retrievedMemories.filter((item) => item.kind === 'observation' && isConversationalEvidence(item.content)).slice(0, 4);
+        sourceMemoryIds = observations.map((item) => item.id);
+        const speakerMemories = observations.map((item) => item.content);
+        recentSpeakerUtterances = this.store.messagesFor(speaker.id, 48)
+          .filter((message) => message.fromAgent === speaker.id && message.conversationId !== s.conversationId)
+          .slice(0, 6).map((message) => message.content);
         const relationshipHistory = relationship?.knowledge ?? [];
         const worldFacts = world ? dialogueWorldFacts(world, speaker) : [];
         const ctx = {
@@ -455,7 +550,10 @@ export class DialogueEngine {
           relationshipHistory: relationshipHistory.slice(-3),
           speakerMemories,
           worldFacts,
-          openingEvidence: s.openingEvidence,
+          openingEvidence: s.openingEvidence.filter(isConversationalEvidence),
+          minuteOfDay,
+          recentSpeakerUtterances,
+          includeMockContext: this.llm.runtimeSnapshot().mode === 'mock',
           conversationId: s.conversationId,
           participants: [s.a, s.b] as [string, string],
           history: s.turns.map((turn, turnIndex) => {
@@ -465,93 +563,77 @@ export class DialogueEngine {
           }),
         };
         const baseMessages = dialogueMessages(ctx);
+        reviewContext = {
+          speaker: { name: speaker.name, occupation: speaker.persona.occupation, background: speaker.persona.background },
+          listener: { name: other.name, occupation: other.persona.occupation },
+          history: ctx.history.map((turn) => ({ speaker: turn.speakerName, listener: turn.listenerName, content: turn.content })),
+          observations: speakerMemories, scene: [...ctx.openingEvidence, ...worldFacts.slice(0, 6)],
+          rumors: carried.map((item) => item.content), locationId: speaker.locationId, minuteOfDay,
+        };
         const conversationalEvidence = [
-          ...retrievedMemories
-            .filter((item) => item.kind === 'observation')
-            .map((item) => item.content),
+          ...speakerMemories,
           ...carried.map((item) => item.content),
           ...worldFacts,
-          ...s.openingEvidence,
+          ...ctx.openingEvidence,
         ];
-        const qualityEvidence = [
-          ...speakerMemories, ...relationshipHistory, ...carried.map((item) => item.content), speaker.persona.background,
-          ...worldFacts, ...s.openingEvidence,
+        qualityEvidence = [
+          ...speakerMemories, ...carried.map((item) => item.content), speaker.persona.background,
+          ...worldFacts, ...ctx.openingEvidence,
         ];
-        const answerEvidence = selectDialogueAnswerEvidence(latestPrompt, qualityEvidence);
+        eventEvidence = [...speakerMemories, ...ctx.openingEvidence];
+        const answerEvidence = selectDialogueAnswerEvidence(latestPrompt, qualityEvidence, priorTurns);
         let rejectedReasons: string[] = [];
+        let rejectedUtterance = '';
         for (let attempt = 1; attempt <= 2; attempt += 1) {
-          entry.queuedAtMs = Date.now();
-          entry.dispatchedAtMs = null;
-          entry.lastQueueWaitMs = 0;
           const messages = baseMessages.map((message) => ({ ...message }));
-          if (attempt > 1) messages[messages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
-          const res = await this.llm.complete({
+          if (attempt > 1) messages[messages.length - 1].content += dialogueRepairInstruction(rejectedReasons, rejectedUtterance);
+          const res = await completeWithinTurn({
             tier: 'small', template: DIALOGUE_TEMPLATE, jsonMode: true, jsonSchema: DIALOGUE_JSON_SCHEMA,
             maxTokens: 192, temperature: attempt === 1 ? 0.3 : 0.1,
             messages, agentId: speaker.id, reasoning: false,
-            priority: 'dialogue', scopeId: this.scopeId,
-            timeoutMs: this.turnTimeoutMs, queueTimeoutMs: this.turnQueueTimeoutMs,
-            onDispatch: (queueWaitMs) => {
-              entry.dispatchedAtMs = Date.now();
-              entry.lastQueueWaitMs = queueWaitMs;
-            },
           });
           const parsed = res.parsed as { utterance?: string; end_dialogue?: boolean } | null;
-          const utterance = (parsed?.utterance ?? '').trim().slice(0, 120);
+          const utterance = typeof parsed?.utterance === 'string' ? parsed.utterance.trim() : '';
           const assessment = assessDialogueTurn({
             utterance,
             latestPrompt,
             priorTurns: s.turns.map((turn) => turn.content),
+            recentSpeakerUtterances,
+            minuteOfDay,
             evidence: qualityEvidence,
+            eventEvidence,
             answerEvidence,
             speakerName: speaker.name,
             otherName: other.name,
             knownResidentNames: [...this.knownResidentNames],
             endDialogue: !!parsed?.end_dialogue,
           });
-          if (assessment.ok) {
+          if (typeof parsed?.end_dialogue !== 'boolean') assessment.reasons.push('会话结束标记必须为布尔值');
+          if (assessment.ok && assessment.reasons.length === 0) {
+            assessment.reasons.push(...await reviewCandidate(utterance, 'model', attempt));
+          }
+          if (assessment.ok && assessment.reasons.length === 0) {
             const nextTurnCount = s.turns.length + 1;
             entry.resolved = {
               utterance,
               end: nextTurnCount >= this.naturalTurnLimit
                 || (!!parsed?.end_dialogue && nextTurnCount >= MIN_NATURAL_TURNS),
-              quality: { status: 'validated', attempts: attempt, rejectedReasons, validator: 'dialogue-turn/v2' },
+              quality: { status: 'validated', attempts: attempt, rejectedReasons, validator: 'dialogue-turn/v5', semanticReview: semanticQuality() },
             };
             return;
           }
           rejectedReasons = assessment.reasons;
+          rejectedUtterance = utterance;
         }
-        entry.resolved = {
-          utterance: conservativeDialogueReply(latestPrompt, conversationalEvidence, {
-            priorTurns: s.turns.map((turn) => turn.content),
-            rumorEvidence: carried.map((item) => item.content),
-            speakerName: speaker.name,
-            otherName: other.name,
-          }),
-          end: s.turns.length + 1 >= MIN_NATURAL_TURNS,
-          quality: { status: 'safe_fallback', attempts: 2, rejectedReasons, validator: 'dialogue-turn/v2' },
-        };
+        await resolveFallback(conversationalEvidence, 2, rejectedReasons, carried.map((item) => item.content));
       } catch (err) {
         const failure = dialogueFailureReason(err);
-        entry.resolved = {
-          utterance: conservativeDialogueReply(latestPrompt, [
-            ...this.store.recentMemories(speaker.id, 8)
-              .filter((item) => item.kind === 'observation')
-              .map((item) => item.content),
-            ...s.openingEvidence,
-          ], {
-            priorTurns: s.turns.map((turn) => turn.content),
-            speakerName: speaker.name,
-            otherName: other.name,
-          }),
-          end: s.turns.length + 1 >= MIN_NATURAL_TURNS,
-          quality: {
-            status: 'safe_fallback',
-            attempts: 1,
-            rejectedReasons: [failure],
-            validator: 'dialogue-turn/v2',
-          },
-        };
+        if (reviewRequired) {
+          entry.error = `对话生成或语义审校未完成：${failure}`;
+          console.warn(`[dialogue-review-unavailable] conversation=${s.conversationId} speaker=${speaker.id} reason=${failure}`);
+          return;
+        }
+        await resolveFallback(qualityEvidence.filter(isConversationalEvidence), 1, [failure]);
         console.warn(`[dialogue-fallback] conversation=${s.conversationId} speaker=${speaker.id} reason=${failure}`);
       }
     })();
@@ -726,6 +808,8 @@ export class DialogueEngine {
 
 function dialogueFailureReason(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
+  if (text.startsWith('语义审校未完成：')) return text.slice(0, 180);
+  if (text === '本轮生成与审校共用预算已用尽' || text === '世界正在安全关闭') return text;
   if (/context|上下文|exceeds the available context size|exceed_context_size/iu.test(text)) return '模型上下文不足';
   if (/queue|排队|执行槽/iu.test(text) && /timeout|期限|未完成|超时/iu.test(text)) return '模型排队或生成超时';
   if (/timeout|期限|未完成|超时/iu.test(text)) return '模型生成超时';

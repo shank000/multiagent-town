@@ -328,9 +328,15 @@ interface ConversationRuntimeView {
   waitMs: number;
   queueWaitMs?: number;
   generationMs?: number;
+  stage?: 'generate' | 'review';
 }
 
 function conversationWaitingLabel(runtime: ConversationRuntimeView | null | undefined): string {
+  if (runtime?.stage === 'review') {
+    const queued = runtime.phase === 'queued_model';
+    const seconds = Math.max(1, Math.ceil((queued ? runtime.queueWaitMs ?? runtime.waitMs : runtime.generationMs ?? runtime.waitMs) / 1000));
+    return `${queued ? '等待语义审校' : '正在核对这句话的语义与事实'} · ${seconds} 秒`;
+  }
   if (runtime?.phase === 'summarizing') return '正在形成会话摘要与关系证据';
   if (runtime?.phase === 'waiting_model') {
     const seconds = Math.max(1, Math.ceil((runtime.waitMs || 0) / 1000));
@@ -530,7 +536,7 @@ function renderDyadConversations(response: RelationshipDyadResponse): string {
     return `<details class="conversation-card" ${index === 0 || status === 'active' ? 'open' : ''}>
       <summary><span>会话 ${escapeHtml(conversation.id.slice(0, 12))}</span><b data-status="${status}">${statusLabels[status]}</b><small>${safeCount(conversation.turnCount)} 轮</small></summary>
       <div class="conversation-meta">${safeGameTimeLabel(conversation.startedGameTime)}${conversation.endedGameTime === null ? '' : ` — ${safeGameTimeLabel(conversation.endedGameTime)}`}</div>
-      <div class="conversation-transcript">${transcript || `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>`}</div>
+      <div class="conversation-transcript">${transcript || `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>`}${transcript && status === 'active' && conversation.runtime?.stage === 'review' ? `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>` : ''}</div>
       ${conversation.summary ? `<div class="conversation-summary"><span>会话摘要</span>${escapeHtml(conversation.summary)}</div>` : ''}
       ${conversation.errorText ? `<div class="${status === 'interrupted' ? 'conversation-interruption' : 'conversation-error'}">${escapeHtml(conversation.errorText)}</div>` : ''}
     </details>`;
@@ -735,7 +741,7 @@ export async function renderMind(body: HTMLElement, agentId: string, tab: string
             return `<details class="conversation-card" ${conversation.status === 'active' || index === 0 ? 'open' : ''}>
               <summary><span>${escapeHtml(people)}</span><b data-status="${conversation.status}">${statusLabel[conversation.status]}</b><small>${conversation.turnCount} 轮</small></summary>
               <div class="conversation-meta">会话 ${escapeHtml(conversation.id.slice(0, 8))} · ${gameTimeLabel(conversation.startedGameTime)}${conversation.endedGameTime === null ? '' : ` — ${gameTimeLabel(conversation.endedGameTime)}`}</div>
-              <div class="conversation-transcript">${transcript || `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>`}</div>
+              <div class="conversation-transcript">${transcript || `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>`}${transcript && conversation.status === 'active' && conversation.runtime?.stage === 'review' ? `<p class="label">${conversationWaitingLabel(conversation.runtime)}</p>` : ''}</div>
               ${conversation.summary ? `<div class="conversation-summary"><span>会话摘要</span>${escapeHtml(conversation.summary)}</div>` : ''}
               ${conversation.errorText ? `<div class="${conversation.status === 'interrupted' ? 'conversation-interruption' : 'conversation-error'}">${escapeHtml(conversation.errorText)}</div>` : ''}
             </details>`;

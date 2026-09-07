@@ -341,7 +341,7 @@ test('会话前文逐轮传给下一位说话者，消息与事件共享会话�
         const utterances = [
           '你今天好吗？',
           '我今天很好，也想知道你过得怎样？',
-          '我也很好，刚处理完手头的事情。',
+          '我也很好，这会儿能跟你聊聊。',
           '那就好，我们改天再聊。',
         ];
         const parsed = { utterance: utterances[history.length], end_dialogue: history.length >= 3 };

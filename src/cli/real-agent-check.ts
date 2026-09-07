@@ -4,7 +4,7 @@ import { actionDecisionJsonSchema } from '../core/state-machine';
 import { buildTown } from '../engine/seed';
 import { reflectionDiaryOf } from '../engine/reflection';
 import { personalityOf } from '../engine/town-model';
-import { assessDialogueTurn, conservativeDialogueReply, dialogueRepairInstruction } from '../engine/dialogue-quality';
+import { assessDialogueTurn, dialogueRepairInstruction } from '../engine/dialogue-quality';
 import { validateDecision } from '../llm/action-validator';
 import { Planner } from '../llm/planner';
 import {
@@ -33,7 +33,7 @@ interface AgentScenario {
 }
 
 interface CheckResult {
-  name: '规划' | '行动' | '对话' | '世界事实' | '反思';
+  name: '规划' | '行动' | '对话' | '邀请回应' | '世界事实' | '反思';
   ok: boolean;
   latencyMs: number;
   detail: string;
@@ -247,7 +247,7 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
   let attempts = 0;
   for (attempts = 1; attempts <= 2; attempts += 1) {
     const candidateMessages = messages.map((message) => ({ ...message }));
-    if (attempts > 1) candidateMessages[candidateMessages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
+    if (attempts > 1) candidateMessages[candidateMessages.length - 1].content += dialogueRepairInstruction(rejectedReasons, utterance);
     const response = await llm.complete({
       tier: 'small', template: DIALOGUE_TEMPLATE, messages: candidateMessages, jsonMode: true,
       jsonSchema: schema, maxTokens: 192, temperature: attempts === 1 ? 0.25 : 0.1,
@@ -269,7 +269,6 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
     if (assessment.ok) break;
     rejectedReasons = assessment.reasons;
   }
-  if (rejectedReasons.length && attempts > 2) utterance = conservativeDialogueReply(scenario.question, scenario.dialogueFacts);
   const latencyMs = Math.round(performance.now() - started);
   const finalAssessment = assessDialogueTurn({
     utterance,
@@ -281,11 +280,12 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
     otherName: other.name,
     knownResidentNames: buildTown().allAgents().map((resident) => resident.name),
   });
-  const schemaOk = utterance.length > 0 && utterance.length <= 120 && (typeof endDialogue === 'boolean' || attempts > 2);
+  const schemaOk = utterance.length > 0 && utterance.length <= 120 && typeof endDialogue === 'boolean';
   const personalized = scenario.personaSignal.test(utterance);
   const natural = !FORBIDDEN_FORMULAS.test(utterance) && utterance !== scenario.question;
-  const ok = schemaOk && personalized && natural && finalAssessment.ok;
+  const ok = attempts <= 2 && schemaOk && personalized && natural && finalAssessment.ok;
   const failures = [
+    attempts <= 2 ? '' : '两次真实生成均未通过，验收仅接受模型原生回答',
     schemaOk ? '' : '结构或长度非法',
     personalized ? '' : '人物信号不足',
     natural ? '' : '出现机械复述',
@@ -293,7 +293,7 @@ async function checkDialogue(llm: LLMGateway, agent: Agent, other: Agent, scenar
   ].filter(Boolean);
   return {
     name: '对话', ok, latencyMs,
-    detail: failures.length ? failures.join('；') : `承接前文、事实有据且符合人设（${Math.min(attempts, 2)} 次生成）`,
+    detail: failures.length ? failures.join('；') : `结构、承接与事实规则检查通过，语义仍需复核（${Math.min(attempts, 2)} 次生成）`,
     sample: utterance,
   };
 }
@@ -333,7 +333,7 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
   let attempts = 0;
   for (attempts = 1; attempts <= 2; attempts += 1) {
     const candidateMessages = messages.map((message) => ({ ...message }));
-    if (attempts > 1) candidateMessages[candidateMessages.length - 1].content += dialogueRepairInstruction(rejectedReasons);
+    if (attempts > 1) candidateMessages[candidateMessages.length - 1].content += dialogueRepairInstruction(rejectedReasons, utterance);
     const response = await llm.complete({
       tier: 'small', template: DIALOGUE_TEMPLATE, messages: candidateMessages, jsonMode: true,
       jsonSchema: schema, maxTokens: 192, temperature: attempts === 1 ? 0.25 : 0.1,
@@ -354,7 +354,6 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
     if (assessment.ok) break;
     rejectedReasons = assessment.reasons;
   }
-  if (rejectedReasons.length && attempts > 2) utterance = conservativeDialogueReply(prompt, evidence);
   const finalAssessment = assessDialogueTurn({
     utterance,
     latestPrompt: prompt,
@@ -367,11 +366,11 @@ async function checkWorldFacts(llm: LLMGateway, agent: Agent, other: Agent): Pro
   });
   return {
     name: '世界事实',
-    ok: finalAssessment.ok,
+    ok: attempts <= 2 && finalAssessment.ok,
     latencyMs: Math.round(performance.now() - started),
-    detail: finalAssessment.ok
+    detail: attempts <= 2 && finalAssessment.ok
       ? `拒绝把预告、取消和馈礼意向写成已发生（${Math.min(attempts, 2)} 次生成）`
-      : finalAssessment.reasons.join('；'),
+      : `真实模型回答未通过：${finalAssessment.reasons.join('；')}`,
     sample: utterance,
   };
 }
@@ -464,9 +463,9 @@ async function main(): Promise<void> {
     .split(',')
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean));
-  const validChecks = new Set(['planning', 'action', 'dialogue', 'world', 'reflection']);
+  const validChecks = new Set(['planning', 'action', 'dialogue', 'invitation', 'world', 'reflection']);
   if ([...requestedChecks].some((name) => !validChecks.has(name))) {
-    throw new Error(`REAL_AGENT_CHECKS 仅支持 planning,action,dialogue,world,reflection：${[...requestedChecks].join(', ')}`);
+    throw new Error(`REAL_AGENT_CHECKS 仅支持 planning,action,dialogue,invitation,world,reflection：${[...requestedChecks].join(', ')}`);
   }
   const results: AgentResult[] = [];
 
@@ -484,6 +483,15 @@ async function main(): Promise<void> {
       { key: 'planning', name: '规划', run: () => checkPlanning(llm, agent) },
       { key: 'action', name: '行动', run: () => checkAction(llm, agent) },
       { key: 'dialogue', name: '对话', run: () => checkDialogue(llm, agent, other, scenario) },
+      { key: 'invitation', name: '邀请回应', run: async () => ({
+        ...await checkDialogue(llm, agent, other, {
+          ...scenario,
+          question: '今天的咖啡特别香，要来一杯吗？',
+          dialogueFacts: ['当前在咖啡馆，与对方当面交谈。'],
+          personaSignal: /好|谢谢|不用|不了|想|愿意|咖啡|杯|来|喝|考虑|口味/,
+        }),
+        name: '邀请回应',
+      }) },
       { key: 'world', name: '世界事实', run: () => checkWorldFacts(llm, agent, other) },
       { key: 'reflection', name: '反思', run: () => checkReflection(llm, agent, scenario) },
     ];

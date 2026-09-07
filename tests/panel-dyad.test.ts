@@ -137,6 +137,17 @@ test('choice-only 方向不会被显示为已观察的关系状态画像', () =>
   assert.ok(html.includes('缺少持久化关系状态；当前方向仅有行为观察'));
 });
 
+test('会话已有台词时仍区分下一轮审校的排队与执行状态', () => {
+  const sample = payload();
+  sample.conversations[0].status = 'active';
+  sample.conversations[0].runtime = { phase: 'queued_model', stage: 'review', waitMs: 3000, queueWaitMs: 3000 };
+  assert.match(renderRelationshipDyadInspector(sample), /等待语义审校 · 3 秒/);
+  sample.conversations[0].runtime = { phase: 'generating_model', stage: 'review', waitMs: 5000, generationMs: 2000 };
+  assert.match(renderRelationshipDyadInspector(sample), /正在核对这句话的语义与事实 · 2 秒/);
+  sample.conversations[0].status = 'completed';
+  assert.doesNotMatch(renderRelationshipDyadInspector(sample), /正在核对这句话/);
+});
+
 test('dyad focus API 校验居民、钳制窗口并返回只读副本', () => {
   clearRelationshipDyadFocus();
   assert.throws(() => setRelationshipDyadFocus('agent:a', 'agent:a'));

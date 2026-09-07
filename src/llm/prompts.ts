@@ -6,6 +6,7 @@ import type { ChatMessage } from './types';
 import { TimeEngine, MINUTES_PER_DAY } from '../core/time';
 import type { PlanningWorldContext } from './plan-grounding';
 import type { PlanningOption } from './planning-options';
+import { dialogueResponseHint, selectDialogueAnswerEvidence } from '../engine/dialogue-quality';
 
 export const ACTION_DECISION_TEMPLATE = 'action_decision';
 export const IMPORTANCE_TEMPLATE = 'importance';
@@ -267,6 +268,9 @@ export function dialogueMessages(ctx: {
   conversationId?: string;
   participants?: [string, string];
   history?: { turnIndex: number; speakerName: string; listenerName: string; content: string }[];
+  minuteOfDay?: number;
+  recentSpeakerUtterances?: string[];
+  includeMockContext?: boolean;
 }): ChatMessage[] {
   const rumors = ctx.rumors.slice(0, 2).map((rumor) => ({ ...rumor, content: compactDialogueText(rumor.content) }));
   const history = ctx.history?.slice(-6).map((turn) => ({ ...turn, content: compactDialogueText(turn.content) })) ?? [];
@@ -282,13 +286,13 @@ export function dialogueMessages(ctx: {
     ? dialoguePersonaText(ctx.speakerPersona, true)
     : `小镇居民「${ctx.speakerName}」`;
   const otherProfile = ctx.otherPersona
-    ? `\n对话对象背景（只用于理解对方，不要替对方发言）：${dialoguePersonaText(ctx.otherPersona, false)}`
+    ? `\n对话对象公开身份：${boundedDialogueText(ctx.otherPersona.name, 16)}，${boundedDialogueText(ctx.otherPersona.occupation, 32)}。对方的私人经历只能从本次说法了解。`
     : '';
   const relationshipHistory = ctx.relationshipHistory?.length
     ? `\n你们过去互动的内部摘要（只用于理解关系，不得照读或用研究总结口吻说出）：\n${ctx.relationshipHistory.slice(-2).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n你们没有可用的既往互动摘要，不要虚构共同经历。';
   const speakerMemories = ctx.speakerMemories?.length
-    ? `\n你的内部记忆材料（只能自然转述其中事实，不得朗读日期、记录标签或原始转录）：\n${ctx.speakerMemories.slice(-4).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
+    ? `\n你的个人观察（相关性从高到低；只能自然转述其中事实，不得朗读日期、记录标签或原始转录）：\n${ctx.speakerMemories.slice(0, 4).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n没有可用的近期个人记忆。';
   const worldFacts = ctx.worldFacts?.length
     ? `\n当前场景与世界功能（功能存在不等于事件已发生）：\n${ctx.worldFacts.slice(0, 6).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
@@ -297,21 +301,24 @@ export function dialogueMessages(ctx: {
     ? `\n这次交谈为什么自然发生（现场观察，只用于开题，不得扩大为共同经历）：\n${ctx.openingEvidence.slice(0, 3).map((item) => `- ${compactDialogueText(item)}`).join('\n')}`
     : '\n这次交谈没有额外的现场观察线索，可从当面问候开始。';
   const location = ctx.locationId ? `\n当前会话地点：${ctx.locationId}。` : '';
-  return simpleMessages(
-    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${compactDialogueText(ctx.goal)}${otherProfile}${location}${worldFacts}${openingEvidence}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}\n` +
+  const time = ctx.minuteOfDay === undefined ? '' : `\n当前世界时间 ${String(Math.floor(ctx.minuteOfDay / 60)).padStart(2, '0')}:${String(Math.floor(ctx.minuteOfDay % 60)).padStart(2, '0')}，问候应符合当前时段。`;
+  const recent = ctx.recentSpeakerUtterances?.length
+    ? `\n自己近期说过的句子（仅用于避免照搬，不是事实证据）：\n${ctx.recentSpeakerUtterances.slice(0, 6).map(compactDialogueText).join('\n')}` : '';
+  const result = simpleMessages(
+    `你是 ${identity}\n你正在和「${ctx.otherName}」聊天，这是第 ${ctx.turns + 1} 句。你当前的目标：${compactDialogueText(ctx.goal)}${otherProfile}${location}${time}${worldFacts}${openingEvidence}${relationshipHistory}${speakerMemories}${rumorLines}${transcript}${recent}\n` +
     '规则：\n' +
-    '1. 非首句必须直接回应对方最后一句的信息、问题、情绪或邀请，然后贡献一项新的相关信息、追问、建议或决定。对方提出明确问题时，第一句必须先给出答案；不知道或没有相关经历也要直说，回答之前不得转向别的话题。\n' +
+    '1. 非首句必须直接回应对方最后一句的信息、问题、情绪或邀请，必要时再补充相关信息或追问。简短回应本身就足够，不必每句都引入新话题。对方提出明确问题时，第一句必须先给出答案；不知道或没有相关经历也要直说，回答之前不得转向别的话题。对邀请只需表达自己的意愿，不要反过来替邀请者安排服务。\n' +
     '2. 不要用「你刚才提到」「围绕我们的话题」「我认真想了想」等套话复述前文，也不要回避一个明确问题。\n' +
-    '3. 保持人物的知识边界和说话风格，但不要为了显示职业或爱好而硬转话题。\n' +
+    '3. 使用直白的日常口语，保持人物的知识边界和说话风格。职业、爱好和比喻只在与当前问题相关时提及，不为展示人设而添加故事，不复读人物的标志性词语。\n' +
     '4. 既往摘要只是回忆；已经说过的内容只有在追问、修正或兑现约定时才重提。不得只替换名词来改写上一句，也不得连续复用同一隐喻或意象。\n' +
-    '5. 每次只说 1~3 句，不要替对方说话；自然会话总共保持 4~6 句：前 3 句不要结束，第 4 句起话头已尽可把 end_dialogue 设为 true，第 6 句必须结束。\n' +
-    '6. 关于“最近做了什么、读了什么、谁说了什么”等事实，只能使用人物背景、近期记忆、既往摘要或本次前文中明确给出的内容；听到对方提起一本书，或记忆里只记录了整理、看到这本书，都不代表自己读过或知道书中内容。记忆里没有时自然说明不知道、没印象或最近没有，禁止编造书名、作品内容、引语和共同经历。\n' +
+    '5. 每次用 1~2 句、尽量不超过 60 字，先回答，再决定是否有必要追问；不要额外补写往事或重复职业介绍。不要替对方说话；自然会话总共保持 4~6 句：前 3 句不要结束，第 4 句起话头已尽可把 end_dialogue 设为 true，第 6 句必须结束。\n' +
+    '6. 关于“最近做了什么、读了什么、谁说了什么”等事实，只使用自己的明确观察。人物背景用于身份、兴趣和口吻，不证明刚刚完成了某个动作；对方的叙述是对方的说法，关系摘要是主观理解，都不能充当自己的经历。听到对方提起一本书，或只记录了整理、看到这本书，不代表自己读过或知道书中内容。没有相关观察时自然说明不清楚，禁止编造书名、作品内容、引语和共同经历。\n' +
     '7. 世界事件有明确状态边界：「活动预告（尚未发生）」只表示计划，不能说自己已经参加；只有「活动现场（已核验）」且名单包含自己时才能声称参加。只有「花店订单（已履约）」或明确的赠送/收到证据才能声称鲜花已经送达。场景功能清单只说明可执行条件；清单外活动只能作为愿望或提议，任何已经发生的共同经历都必须有完成证据。\n' +
     '8. utterance 必须是居民当面对另一位居民说的口语。不得说出“我能确认的是”“依据/证据/记录显示”“第几天几点”等审计语言，也不得使用“双方”“情感升温”“关系变化”等旁观者摘要；不清楚时只需自然说想不起来、没听说或不太清楚。\n' +
     '只输出 JSON：{"utterance": "...", "end_dialogue": <true|false>}',
     {
       speakerName: ctx.speakerName,
-      speakerPool: ctx.speakerPool.slice(0, 6).map(compactDialogueText),
+      speakerPool: ctx.includeMockContext ? ctx.speakerPool.slice(0, 6).map(compactDialogueText) : undefined,
       otherName: ctx.otherName,
       turns: ctx.turns,
       rumors,
@@ -322,6 +329,13 @@ export function dialogueMessages(ctx: {
       history,
     }
   );
+  if (!ctx.includeMockContext) {
+    const last = history.at(-1);
+      const priorTurns = history.map((turn) => turn.content);
+      const answerFacts = selectDialogueAnswerEvidence(last?.content ?? '', ctx.speakerMemories ?? [], priorTurns);
+      result[1].content += `\n${last ? `对方刚对你说：${last.content}` : '现在轮到你开口。'}\n${dialogueResponseHint(last?.content ?? '', ctx.speakerMemories ?? [], priorTurns)}${answerFacts.length ? `\n本题相关个人观察：${answerFacts.slice(0, 2).map(compactDialogueText).join('；')}` : ''}\n只输出本轮 JSON，不输出总结。`;
+  }
+  return result;
 }
 
 /**
@@ -336,7 +350,7 @@ function dialoguePersonaText(persona: Persona, speaker: boolean): string {
     .join('、');
   const common = [
     `${boundedDialogueText(persona.name, 16)}，${persona.age} 岁，${persona.gender}，${boundedDialogueText(persona.occupation, 32)}`,
-    `背景：${boundedDialogueText(persona.background, speaker ? 280 : 180)}`,
+    `长期背景（不是当天事件）：${boundedDialogueText(persona.background, speaker ? 120 : 80)}`,
     `性格：${list(persona.traits, 4, 24) || '未注明'}`,
     `价值观：${list(persona.values, 3, 40) || '未注明'}`,
     `说话风格：${boundedDialogueText(persona.speechStyle, 100)}`,
