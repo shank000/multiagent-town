@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { escapeHtml } from '../src/web/client/panel';
+import { WEB_BUNDLES } from '../src/runtime/web-build';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const html = readFileSync(`${root}/public/index.html`, 'utf8');
@@ -336,7 +337,16 @@ test('deep statistics escapes dynamic markup and keeps readable targets', () => 
 });
 
 test('web build emits both research console and statistics clients', () => {
-  assert.match(packageJson, /src\/web\/client\/main\.ts[^\n]+public\/client\.js/);
-  assert.match(packageJson, /src\/web\/client\/stats\.ts[^\n]+public\/stats\.js/);
-  assert.match(packageJson, /src\/web\/client\/logs\.ts[^\n]+public\/logs\.js/);
+  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
+  assert.equal(scripts['build:web'], 'node --no-warnings --import tsx scripts/build-web.ts');
+  assert.equal(scripts['check:web'], `${scripts['build:web']} --check`);
+  assert.deepEqual(WEB_BUNDLES, {
+    'client.js': 'src/web/client/main.ts',
+    'stats.js': 'src/web/client/stats.ts',
+    'logs.js': 'src/web/client/logs.ts',
+  });
+  const buildScript = readFileSync(`${root}/scripts/build-web.ts`, 'utf8');
+  assert.match(buildScript, /entryPoints: \[WEB_BUNDLES\[name\]\]/);
+  assert.match(buildScript, /write: false/);
+  assert.match(buildScript, /publishWebBuild\(root, bundles, inputs\)/);
 });

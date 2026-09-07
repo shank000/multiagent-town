@@ -8,12 +8,16 @@ import { parseArgs } from './town-web-config';
 import { loadAgentProfileConfig } from '../store/agent-profile-config';
 import { BackendRuntimeLog, runtimeLogPathForDatabase } from '../runtime/backend-log';
 import { ExperimentWorkspaceRuntime, nextWorkspaceDatabasePath } from '../engine/workspace';
+import { resolve } from 'node:path';
+import { assertWebBuildCurrent } from '../runtime/web-build';
 
 let runtimeLog: BackendRuntimeLog | null = null;
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const webBuildId = assertWebBuildCurrent(resolve(process.cwd(), 'public'), process.cwd());
   runtimeLog = new BackendRuntimeLog(runtimeLogPathForDatabase(args.dbPath));
+  runtimeLog.info('web-build', `前端版本校验通过 build=${webBuildId}`);
   const provider = providerNameFromEnv();
   const gateway = new LLMGateway({
     ...gatewayConfigFromEnv(),

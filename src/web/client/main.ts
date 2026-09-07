@@ -33,6 +33,7 @@ interface ActiveConversationView {
   waitMs?: number;
   queueWaitMs?: number;
   generationMs?: number;
+  stage?: 'generate' | 'review';
 }
 interface WorldSnapshot {
   clock: ClockState; speedPerRealSecond: number; paused: boolean;

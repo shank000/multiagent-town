@@ -3,9 +3,11 @@ import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   mkdirSync,
+  mkdtempSync,
+  existsSync,
   readFileSync,
   readdirSync,
-  rmSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -18,10 +20,9 @@ const require = createRequire(import.meta.url);
 const { inject } = require('postject');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = join(root, 'dist');
-const workDir = join(distDir, '.windows-build');
-const outputDir = join(distDir, 'MultiagentTown-Windows-x64');
-const executablePath = join(outputDir, 'MultiagentTown.exe');
-const archivePath = join(distDir, 'MultiagentTown-Windows-x64.zip');
+const packageVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+if (!/^[0-9A-Za-z.-]+$/.test(packageVersion)) throw new Error('发布版本号格式无效');
+const releaseDir = join(distDir, 'releases', packageVersion);
 const publicDir = join(root, 'public');
 
 if (process.platform !== 'win32') {
@@ -30,38 +31,31 @@ if (process.platform !== 'win32') {
 if (process.arch !== 'x64') {
   throw new Error(`当前主机架构为 ${process.arch}，此任务仅生成 Windows x64 可执行文件`);
 }
+if (Number(process.versions.node.split('.')[0]) !== 22) throw new Error('Windows 发布构建使用 Node.js 22');
+if (existsSync(releaseDir)) throw new Error(`此版本已有发布包，请使用新的版本号：${releaseDir}`);
+const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
+const revision = git('rev-parse', 'HEAD');
+const status = git('status', '--porcelain');
+if (revision.status !== 0 || status.status !== 0) throw new Error('构建需要可验证的 Git 源码版本');
+const dirty = Boolean(status.stdout.trim());
+if (process.argv.includes('--release') && dirty) throw new Error('发布构建要求先提交全部源码与说明文件');
+const buildInfo = { version: packageVersion, channel: 'collaboration-preview', sourceCommit: revision.stdout.trim(), dirty, builtAt: new Date().toISOString(), node: process.versions.node, platform: 'win32-x64' };
 
-rmSync(workDir, { recursive: true, force: true });
-rmSync(outputDir, { recursive: true, force: true });
-rmSync(archivePath, { force: true });
-rmSync(`${archivePath}.sha256`, { force: true });
-mkdirSync(workDir, { recursive: true });
+mkdirSync(distDir, { recursive: true });
+const workDir = mkdtempSync(join(distDir, '.windows-build-'));
+const stagedRelease = join(workDir, 'release');
+const outputDir = join(stagedRelease, 'MultiagentTown-Windows-x64');
+const executablePath = join(outputDir, 'MultiagentTown.exe');
+const archivePath = join(stagedRelease, 'MultiagentTown-Windows-x64.zip');
 mkdirSync(outputDir, { recursive: true });
 
-await build({
-  entryPoints: [join(root, 'src', 'web', 'client', 'main.ts')],
-  bundle: true,
-  format: 'iife',
-  target: 'chrome100',
-  outfile: join(publicDir, 'client.js'),
-  logLevel: 'info',
+const webBuild = spawnSync(process.execPath, ['--no-warnings', '--import', 'tsx', 'scripts/build-web.ts'], {
+  cwd: root,
+  encoding: 'utf8',
+  windowsHide: true,
 });
-await build({
-  entryPoints: [join(root, 'src', 'web', 'client', 'stats.ts')],
-  bundle: true,
-  format: 'iife',
-  target: 'chrome100',
-  outfile: join(publicDir, 'stats.js'),
-  logLevel: 'info',
-});
-await build({
-  entryPoints: [join(root, 'src', 'web', 'client', 'logs.ts')],
-  bundle: true,
-  format: 'iife',
-  target: 'chrome100',
-  outfile: join(publicDir, 'logs.js'),
-  logLevel: 'info',
-});
+if (webBuild.status !== 0) throw new Error(`前端构建失败：\n${webBuild.stdout}\n${webBuild.stderr}`);
+console.log(webBuild.stdout);
 
 const bundlePath = join(workDir, 'desktop.cjs');
 await build({
@@ -93,8 +87,10 @@ for (const file of publicFiles) {
 }
 const manifestPath = join(workDir, 'public-manifest.json');
 writeFileSync(manifestPath, JSON.stringify({ files: relativeFiles, version: versionHash.digest('hex').slice(0, 16) }));
+const buildInfoPath = join(outputDir, 'build-info.json');
+writeFileSync(buildInfoPath, JSON.stringify(buildInfo, null, 2) + '\n');
 
-const assets = { 'public-manifest.json': manifestPath };
+const assets = { 'public-manifest.json': manifestPath, 'build-info.json': buildInfoPath };
 for (const [index, file] of publicFiles.entries()) assets[`public/${relativeFiles[index]}`] = file;
 const seaBlobPath = join(workDir, 'sea-prep.blob');
 const seaConfigPath = join(workDir, 'sea-config.json');
@@ -126,7 +122,9 @@ await inject(
 
 const guideSource = join(root, 'packaging', 'windows', '使用说明.txt');
 copyFileSync(guideSource, join(outputDir, 'README.txt'));
-rmSync(workDir, { recursive: true, force: true });
+copyFileSync(join(root, 'ATTRIBUTION.md'), join(outputDir, 'ATTRIBUTION.md'));
+copyFileSync(join(dirname(process.execPath), 'LICENSE'), join(outputDir, 'NODE-LICENSE.txt'));
+copyFileSync(join(root, 'docs', 'dialogue-continuity-validation.md'), join(outputDir, 'dialogue-validation.md'));
 const sizeMiB = statSync(executablePath).size / 1024 / 1024;
 const executableHash = createHash('sha256').update(readFileSync(executablePath)).digest('hex');
 writeFileSync(join(outputDir, 'MultiagentTown.exe.sha256'), `${executableHash}  MultiagentTown.exe\n`);
@@ -135,13 +133,16 @@ const archive = spawnSync('tar.exe', [
   '-cf',
   archivePath,
   '-C',
-  distDir,
+  stagedRelease,
   basename(outputDir),
 ], { encoding: 'utf8', windowsHide: true });
 if (archive.status !== 0) throw new Error(`发布压缩包生成失败：\n${archive.stdout}\n${archive.stderr}`);
 const archiveHash = createHash('sha256').update(readFileSync(archivePath)).digest('hex');
 writeFileSync(`${archivePath}.sha256`, `${archiveHash}  ${basename(archivePath)}\n`);
-console.log(`\nWindows 可执行文件：${executablePath}`);
+mkdirSync(dirname(releaseDir), { recursive: true });
+renameSync(stagedRelease, releaseDir);
+console.log(`\n版本：${packageVersion}（协作测试版）源码：${buildInfo.sourceCommit}${dirty ? ' + 未提交修改' : ''}`);
+console.log(`Windows 可执行文件：${join(releaseDir, basename(outputDir), 'MultiagentTown.exe')}`);
 console.log(`文件大小：${sizeMiB.toFixed(1)} MiB`);
 console.log(`SHA-256：${executableHash}`);
-console.log(`协作发布包：${archivePath}`);
+console.log(`协作发布包：${join(releaseDir, basename(archivePath))}`);

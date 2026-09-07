@@ -1,6 +1,6 @@
 {
   "name": "multiagent-town",
-  "version": "0.1.0",
+  "version": "0.1.1-preview.20260907",
   "private": true,
   "type": "module",
   "description": "多智能体社会涌现实验与可视化研究平台",
@@ -10,6 +10,8 @@
   "scripts": {
     "test": "node --no-warnings --import tsx --test \"tests/*.test.ts\"",
     "test:agents:real": "node --no-warnings --import tsx src/cli/real-agent-check.ts",
+    "test:dialogue:real": "node --no-warnings --import tsx src/cli/real-dialogue-check.ts",
+    "test:dialogue:review": "node --no-warnings --import tsx src/cli/real-dialogue-review-check.ts",
     "test:runtime:real": "node --expose-gc --no-warnings --import tsx src/cli/runtime-soak.ts",
     "test:cognitive:budget": "node --no-warnings --import tsx src/cli/cognitive-budget.ts",
     "typecheck": "tsc --noEmit",
@@ -17,9 +19,10 @@
     "replay": "node --no-warnings --import tsx src/cli/replay.ts",
     "interview": "node --no-warnings --import tsx src/cli/interview.ts",
     "acceptance": "node --no-warnings --import tsx --test tests/acceptance.test.ts",
-    "build:web": "esbuild src/web/client/main.ts --bundle --format=iife --target=chrome100 --outfile=public/client.js && esbuild src/web/client/stats.ts --bundle --format=iife --target=chrome100 --outfile=public/stats.js && esbuild src/web/client/logs.ts --bundle --format=iife --target=chrome100 --outfile=public/logs.js",
+    "build:web": "node --no-warnings --import tsx scripts/build-web.ts",
+    "check:web": "node --no-warnings --import tsx scripts/build-web.ts --check",
     "build:windows": "node scripts/build-windows-exe.mjs",
-    "desktop": "node --no-warnings --import tsx src/desktop/main.ts",
+    "desktop": "pnpm build:web && node --no-warnings --import tsx src/desktop/main.ts",
     "town-web": "pnpm build:web && node --no-warnings --import tsx src/cli/town-web.ts",
     "experiment": "node --no-warnings --import tsx src/cli/experiment.ts",
     "town-agent": "node --no-warnings --import tsx src/cli/town-agent.ts"

@@ -1642,7 +1642,10 @@ export async function createTownServer(opts: TownWebOptions): Promise<TownWebSer
   async function file(res: ServerResponse, path: string): Promise<void> {
     const content = await readFile(path);
     const ext = path.slice(path.lastIndexOf('.'));
-    res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] ?? 'application/octet-stream',
+      ...(['.html', '.js', '.css'].includes(ext) ? { 'Cache-Control': 'no-cache' } : {}),
+    });
     res.end(content);
   }
   async function readBody(req: IncomingMessage): Promise<unknown> {

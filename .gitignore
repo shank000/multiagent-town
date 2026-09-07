@@ -4,6 +4,7 @@ data/
 public/client.js
 public/stats.js
 public/logs.js
+public/web-build.json
 __pycache__/
 *.py[cod]
 .venv/

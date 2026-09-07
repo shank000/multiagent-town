@@ -52,10 +52,15 @@ async function setup(enableRuntimeLog = false, gateway = new LLMGateway({ provid
 test('静态页与快照接口', async () => {
   const { server, base, world } = await setup();
   try {
-    const page = await (await fetch(`${base}/`)).text();
+    const pageResponse = await fetch(`${base}/`);
+    assert.equal(pageResponse.headers.get('cache-control'), 'no-cache');
+    const page = await pageResponse.text();
     assert.ok(page.includes('fixture'));
     const js = await fetch(`${base}/client.js`);
     assert.equal(js.status, 200);
+    assert.equal(js.headers.get('cache-control'), 'no-cache');
+    const css = await fetch(`${base}/style.css`);
+    assert.equal(css.headers.get('cache-control'), 'no-cache');
     const snap = (await (await fetch(`${base}/api/state`)).json()) as { agents: unknown[]; clock: { day: number }; seq: number };
     assert.equal(snap.agents.length, 2);
     assert.equal(snap.clock.day, 1);

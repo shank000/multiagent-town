@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { isSea, getAsset } from 'node:sea';
@@ -7,13 +7,14 @@ import { createServer as createNetServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { LLMGateway } from '../llm/gateway';
 import { gatewayConfigFromEnv } from '../llm/provider-config';
-import { resolveOllamaProfile } from '../llm/model-profiles';
+import { extractDesktopAssets, type EmbeddedManifest } from './assets';
 import { startAllWorlds } from '../engine/world-factory';
 import { MAX_WORLD_SPEED } from '../engine/runtime-limits';
 import { createTownServer, type TownWebServer } from '../web/server';
 import { loadAgentProfileConfig } from '../store/agent-profile-config';
 import { BackendRuntimeLog, runtimeLogPathForDatabase } from '../runtime/backend-log';
 import { ExperimentWorkspaceRuntime } from '../engine/workspace';
+import { assertWebBuildCurrent } from '../runtime/web-build';
 
 const APP_NAME = 'MultiagentTown';
 const DEFAULT_PORT = 8898;
@@ -22,15 +23,12 @@ const OLLAMA_URL = 'http://127.0.0.1:11434';
 let runtimeLog: BackendRuntimeLog | null = null;
 
 interface DesktopArgs {
+  noDownload: boolean;
+  dataDir?: string;
   noBrowser: boolean;
   port: number;
   smoke: boolean;
   speed: number;
-}
-
-interface EmbeddedManifest {
-  files: string[];
-  version: string;
 }
 
 interface OllamaTag {
@@ -44,6 +42,7 @@ interface OllamaTagsResponse {
 
 function parseDesktopArgs(argv: string[]): DesktopArgs {
   const args: DesktopArgs = {
+    noDownload: false,
     noBrowser: false,
     port: DEFAULT_PORT,
     smoke: false,
@@ -52,6 +51,12 @@ function parseDesktopArgs(argv: string[]): DesktopArgs {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--no-browser') args.noBrowser = true;
+    else if (argument === '--no-download') args.noDownload = true;
+    else if (argument === '--data-dir') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('--data-dir 需要有效目录');
+      args.dataDir = resolve(value);
+    }
     else if (argument === '--smoke') args.smoke = true;
     else if (argument === '--port') args.port = Number(argv[++index]);
     else if (argument === '--speed') args.speed = Number(argv[++index]);
@@ -74,20 +79,7 @@ function localDataRoot(): string {
 function runtimePublicDir(appRoot: string): string {
   if (!isSea()) return resolve(process.cwd(), 'public');
   const manifest = JSON.parse(getAsset('public-manifest.json', 'utf8')) as EmbeddedManifest;
-  if (!manifest.version || !Array.isArray(manifest.files)) {
-    throw new Error('可执行文件中的界面资源清单无效');
-  }
-  const publicDir = join(appRoot, 'runtime', manifest.version, 'public');
-  for (const relativePath of manifest.files) {
-    if (!relativePath || relativePath.includes('..') || relativePath.startsWith('/') || relativePath.startsWith('\\')) {
-      throw new Error(`界面资源路径无效：${relativePath}`);
-    }
-    const outputPath = join(publicDir, ...relativePath.split('/'));
-    if (existsSync(outputPath)) continue;
-    mkdirSync(dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, Buffer.from(getAsset(`public/${relativePath}`)));
-  }
-  return publicDir;
+  return extractDesktopAssets(appRoot, manifest, (key) => Buffer.from(getAsset(key)));
 }
 
 function uniqueDatabasePath(appRoot: string): string {
@@ -168,6 +160,7 @@ async function pullModel(model: string): Promise<void> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: model, stream: true }),
+    signal: AbortSignal.timeout(60 * 60 * 1000),
   });
   if (!response.ok || !response.body) {
     throw new Error(`模型 ${model} 下载请求失败（HTTP ${response.status}）`);
@@ -176,11 +169,13 @@ async function pullModel(model: string): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = '';
   let lastPercent = -1;
+  let success = false;
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
+    if (done && buffer.trim()) lines.push(buffer);
     for (const line of lines) {
       if (!line.trim()) continue;
       const update = JSON.parse(line) as { completed?: number; error?: string; status?: string; total?: number };
@@ -192,14 +187,16 @@ async function pullModel(model: string): Promise<void> {
           lastPercent = percent;
         }
       } else if (update.status === 'success') {
+        success = true;
         console.log(`  ${model}：准备完成`);
       }
     }
     if (done) break;
   }
+  if (!success) throw new Error(`模型 ${model} 下载中断，请检查网络并重新启动`);
 }
 
-async function ensureLocalOllama(): Promise<string[]> {
+async function ensureLocalOllama(noDownload: boolean): Promise<string[]> {
   let tags = await ollamaTags();
   if (!tags) {
     const executable = findOllamaExecutable();
@@ -219,13 +216,16 @@ async function ensureLocalOllama(): Promise<string[]> {
     if (!tags) throw new Error('Ollama 已启动，但本地推理接口在 20 秒内没有就绪');
   }
 
-  const profile = resolveOllamaProfile(process.env.OLLAMA_PROFILE);
-  const required = [...new Set([profile.model, profile.smallModel])];
+  const config = gatewayConfigFromEnv().ollama;
+  if (!config?.model || !config.smallModel) throw new Error('本地模型配置不完整');
+  const required = [...new Set([config.model, config.smallModel, ...Object.values(config.agentModels ?? {})])];
   const installed = new Set(
     (tags.models ?? []).flatMap((entry) => [entry.name, entry.model]).filter((name): name is string => Boolean(name)),
   );
   for (const model of required) {
-    if (!installed.has(model)) await pullModel(model);
+    if (installed.has(model)) continue;
+    if (noDownload) throw new Error(`本机缺少模型 ${model}；--no-download 模式需要已安装的模型`);
+    await pullModel(model);
   }
   return required;
 }
@@ -257,13 +257,22 @@ async function verifyRealModel(gateway: LLMGateway): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes('--version')) {
+    console.log(isSea() ? getAsset('build-info.json', 'utf8') : 'MultiagentTown source development');
+    return;
+  }
   const args = parseDesktopArgs(process.argv.slice(2));
-  const appRoot = localDataRoot();
+  if (!isSea()) assertWebBuildCurrent(resolve(process.cwd(), 'public'), process.cwd());
+  const appRoot = args.dataDir ?? localDataRoot();
   mkdirSync(appRoot, { recursive: true });
   const publicDir = runtimePublicDir(appRoot);
+  const webBuildId = assertWebBuildCurrent(publicDir);
   const dbPath = uniqueDatabasePath(appRoot);
   runtimeLog = new BackendRuntimeLog(runtimeLogPathForDatabase(dbPath));
+  runtimeLog.info('web-build', `前端版本校验通过 build=${webBuildId}`);
   console.log('MultiAgent Town · 多智能体社会涌现实验平台');
+  if (isSea()) console.log(getAsset('build-info.json', 'utf8'));
+  console.log('协作测试版：对话可能误判或中断，当前数据不用于正式研究结论。');
   console.log('数据与实验记录保存在当前 Windows 用户的本地应用数据目录。\n');
   process.env.LLM_PROVIDER = 'ollama';
   process.env.OLLAMA_PROFILE ||= 'qwen3-balanced';
@@ -272,7 +281,7 @@ async function main(): Promise<void> {
   process.env.LLM_MAX_CONCURRENCY ||= '1';
   process.env.LLM_MAX_QUEUE ||= '96';
 
-  const models = await ensureLocalOllama();
+  const models = await ensureLocalOllama(args.noDownload);
   const profileStorePath = join(appRoot, 'agent-profiles.json');
   const port = await availablePort(args.port);
   const gateway = new LLMGateway({
@@ -336,7 +345,7 @@ async function main(): Promise<void> {
     console.log(`实验数据库：${dirname(dbPath)}`);
     console.log(`后端日志：${runtimeLog.filePath}`);
     console.log(`研究控制台：${url}`);
-    console.log('保持此窗口运行；关闭窗口即可结束本次实验。\n');
+    console.log('保持此窗口运行；结束前请导出重要数据，在此窗口按 Ctrl+C 安全退出。\n');
     if (!args.noBrowser) openExternal(url);
     if (args.smoke) {
       const state = await fetch(`${url}api/state`, { signal: AbortSignal.timeout(10_000) });

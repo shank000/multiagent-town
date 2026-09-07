@@ -1,10 +1,18 @@
-<img width="2682" height="1893" alt="image" src="https://github.com/user-attachments/assets/66d63404-709b-4b34-9551-9050b84a7b3d" />
-
 # MultiAgent Town
+
+## 下载 Windows 版
+
+**[⬇ 下载 Windows x64 一键启动包 · v0.1.1-preview.20260907](https://github.com/shank000/multiagent-town/releases/download/v0.1.1-preview.20260907/MultiagentTown-Windows-x64.zip)**
+
+[版本说明与校验文件](https://github.com/shank000/multiagent-town/releases/tag/v0.1.1-preview.20260907) · [安装与使用指南](docs/windows-executable.md)
+
+解压后双击 `MultiagentTown.exe`，无需安装 Node.js 或 pnpm。需要本地版 Ollama；已安装所需模型时直接启动，缺少模型时首次运行会下载约 5 GB。此包是**协作测试版**：对话仍可能误判、生成不自然内容或异常结束，尚未通过完整语义验收，不用于正式社会科学研究结论。每次启动创建新实验，旧数据保留但不会自动续跑。
 
 面向计算社会科学实验的多智能体社会涌现平台。系统以中文像素小镇为可观察环境，持续记录居民的互动、记忆、关系与伙伴选择，并提供平行世界对照、结构化 Replay、社会网络指标和可插拔分析层。
 
 当前研究问题是：在候选伙伴数量相等时，关系历史的可访问性是否会让原本离散的互动形成依赖历史的伙伴选择，并随时间产生重复互动对、枢纽与低传递性的持久关系结构。
+
+<img width="2682" height="1893" alt="研究控制台三视窗" src="https://github.com/user-attachments/assets/66d63404-709b-4b34-9551-9050b84a7b3d" />
 
 ## 系统能力
 
@@ -53,6 +61,8 @@ pnpm town-web --port 8787 --db :memory:
 人物互动、记忆、反思、关系证据等研究记录只写入本次加载世界对应的 `data/runs/town-…-w1.sqlite`、`-w2.sqlite` 或 `-w3.sqlite`。新建小镇使用新的数据库前缀和独立 `*.runtime.jsonl`；旧工作空间完整封存。安全删除把文件型数据库、日志和 `workspace-deletion.json` 恢复清单迁入数据目录下的 `.multiagent-town-trash/`；内存实验在界面明确提示导出边界。后端日志与研究事件库分离，API Key、Authorization、密码和令牌在写入前会被脱敏。
 
 ## LLM 配置
+
+当前对话语义审校候选版本的真实会话验收尚未通过，启用前请阅读[对话连续性与语义审校验收](docs/dialogue-continuity-validation.md)。
 
 默认 `LLM_PROVIDER=mock`，可离线运行和测试。
 
@@ -123,7 +133,10 @@ pnpm experiment --days 60 --seeds 5 --format json
 pnpm typecheck
 pnpm test
 pnpm build:web
+pnpm check:web
 ```
+
+前端构建为主界面、深度统计和后端日志生成配套资源清单与内容指纹。`pnpm town-web` 和 `pnpm desktop` 在启动前完成构建；直接运行源码入口时，程序在打开实验数据库前核对源码、页面与脚本版本，并在需要构建时给出明确提示。`pnpm check:web` 可独立检查版本一致性。正在运行的服务可以通过 `pnpm build:web` 更新静态界面，随后刷新浏览器；后端逻辑的生效使用单独的安全重启流程。
 
 当前工程基线为 401 项 `node:test`；AgentSociety² 工作区另有 22 项 Python 协议测试，并通过 2.8.4 SDK/Replay/checkpoint 冒烟。
 
